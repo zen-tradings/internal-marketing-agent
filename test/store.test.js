@@ -17,6 +17,17 @@ test('createRun / getRun / setStatus 流转', () => {
   assert.equal(r.title, 'T');
 });
 
+test('setMediaId 只写 media_id/title,不改变 status(支撑发布幂等判断)', () => {
+  const s = openStore(':memory:');
+  s.createRun({ id: 'r2', workflowId: 'wechat', source: 'slack', input: '写茅台', notify: { channel: 'C1', ts: '2.2' } });
+  s.setStatus('r2', 'running', { startedAt: 111 });
+  s.setMediaId('r2', 'M2', 'T2');
+  const r = s.getRun('r2');
+  assert.equal(r.media_id, 'M2');
+  assert.equal(r.title, 'T2');
+  assert.equal(r.status, 'running', 'setMediaId 不应改变 status(早写落库,收尾状态由 setStatus 负责)');
+});
+
 test('markInterrupted 把 running 置 interrupted', () => {
   const s = openStore(':memory:');
   s.createRun({ id: 'a', workflowId: 'w', source: 'slack', input: 'x', notify: {} });
