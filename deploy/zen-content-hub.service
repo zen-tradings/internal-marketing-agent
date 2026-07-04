@@ -1,0 +1,18 @@
+[Unit]
+Description=Zen Content Hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/zen/app
+EnvironmentFile=/srv/zen/app/.env
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=5
+# 输出并入 journal，用 journalctl -u zen-content-hub -f 查看
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
