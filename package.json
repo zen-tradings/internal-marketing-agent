@@ -1,13 +1,17 @@
 {
-  "name": "zen-slack-bot",
-  "version": "1.0.0",
-  "description": "Zen Trading 公众号自动化写作机器人",
-  "main": "bot.js",
+  "name": "zen-content-hub",
+  "version": "2.0.0",
+  "type": "module",
+  "main": "src/index.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node src/index.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@slack/bolt": "^3.17.0",
-    "dotenv": "^16.3.1"
+    "@wenyan-md/core": "3.0.10",
+    "better-sqlite3": "^11.0.0",
+    "dotenv": "^16.3.1",
+    "node-cron": "^3.0.3"
   }
 }
