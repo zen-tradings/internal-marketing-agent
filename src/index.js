@@ -7,9 +7,10 @@ import { createNotifier } from './core/notifier.js';
 import { registerSlack } from './triggers/slack.js';
 import wechatWorkflow from './workflows/wechat.js';
 import mockChannel from './channels/mock.js';
+import wechatDraft from './channels/wechat-draft.js';
 
 const WORKFLOWS = { wechat: wechatWorkflow };
-const CHANNELS = { mock: mockChannel };
+const CHANNELS = { mock: mockChannel, 'wechat-draft': wechatDraft };
 
 export async function start() {
   const config = loadConfig();
