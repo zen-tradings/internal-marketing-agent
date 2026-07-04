@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import { renderAndPublish as coreRenderAndPublish } from '@wenyan-md/core/wrapper';
 import { getInputContent as defaultGetInputContent } from '../lib/getInputContent.js';
+import { injectFollowCard as defaultInjectFollowCard } from '../lib/wechatApi.js';
 
 // 与 wenyan-mcp dist/publish.js 完全一致的渲染参数(parity 硬要求)
 export const RENDER_OPTS = { theme: 'zen-trading', highlight: 'solarized-light', macStyle: true, footnote: true };
@@ -13,10 +14,10 @@ async function defaultReadArticle(articlePath) {
 }
 
 // 依赖注入版,便于测试
-export function makeChannel({ renderAndPublish = coreRenderAndPublish, readArticle = defaultReadArticle, getInputContent = defaultGetInputContent } = {}) {
+export function makeChannel({ renderAndPublish = coreRenderAndPublish, readArticle = defaultReadArticle, getInputContent = defaultGetInputContent, injectFollowCard = defaultInjectFollowCard } = {}) {
   return {
     id: 'wechat-draft',
-    async publish({ articlePath, config }) {
+    async publish({ articlePath, config, notify, notifier }) {
       let title;
       try { ({ title } = await readArticle(articlePath)); }
       catch (e) { const err = new Error(`读取文章失败:${e.message}`); err.stage = 'render'; throw err; }
@@ -36,6 +37,9 @@ export function makeChannel({ renderAndPublish = coreRenderAndPublish, readArtic
       process.env.WECHAT_APP_SECRET = appSecret;
       try {
         const mediaId = await renderAndPublish(undefined, { ...RENDER_OPTS, file: articlePath }, getInputContent);
+        // 名片注入:失败不阻断出草稿,只告警
+        try { await injectFollowCard({ config, mediaId }); }
+        catch (e) { if (notifier && notify) await notifier.warn(notify, `名片注入失败(草稿已出):${e.message}`); }
         return { mediaId, title };
       } catch (e) { const err = new Error(`发布失败:${e.message}`); err.stage = 'publish'; throw err; }
       finally {

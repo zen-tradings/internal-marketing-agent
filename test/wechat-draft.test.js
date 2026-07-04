@@ -51,6 +51,47 @@ test('缺失微信凭据 → stage=publish 且不调用 renderAndPublish', async
   assert.equal(called, false);
 });
 
+test('publish 成功后调用 injectFollowCard(传 config/mediaId)', async () => {
+  let calledWith;
+  const channel = makeChannel({
+    renderAndPublish: async () => 'MEDIA-9',
+    readArticle: async () => ({ markdown: 'x', title: 't' }),
+    injectFollowCard: async (args) => { calledWith = args; },
+  });
+  const config = { wechat: { appId: 'wx', appSecret: 's' } };
+  const out = await channel.publish({ articlePath: '/x/a.md', config });
+  assert.equal(out.mediaId, 'MEDIA-9');
+  assert.equal(calledWith.mediaId, 'MEDIA-9');
+  assert.equal(calledWith.config, config);
+});
+
+test('injectFollowCard 失败 → 不阻断发布,调用 notifier.warn 告警', async () => {
+  const warned = [];
+  const notifier = { warn: async (notify, msg) => warned.push({ notify, msg }) };
+  const notify = { channel: 'C', ts: '1' };
+  const channel = makeChannel({
+    renderAndPublish: async () => 'MEDIA-9',
+    readArticle: async () => ({ markdown: 'x', title: 't' }),
+    injectFollowCard: async () => { const e = new Error('40001'); e.stage = 'card'; throw e; },
+  });
+  const out = await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } }, notify, notifier });
+  assert.equal(out.mediaId, 'MEDIA-9');
+  assert.equal(warned.length, 1);
+  assert.equal(warned[0].notify, notify);
+  assert.match(warned[0].msg, /名片注入失败/);
+  assert.match(warned[0].msg, /40001/);
+});
+
+test('injectFollowCard 失败但未传 notifier/notify → 静默继续,不抛错', async () => {
+  const channel = makeChannel({
+    renderAndPublish: async () => 'MEDIA-9',
+    readArticle: async () => ({ markdown: 'x', title: 't' }),
+    injectFollowCard: async () => { throw new Error('网络错误'); },
+  });
+  const out = await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
+  assert.equal(out.mediaId, 'MEDIA-9');
+});
+
 test('publish 成功后恢复 process.env 的原值', async () => {
   const prevAppId = process.env.WECHAT_APP_ID;
   const prevAppSecret = process.env.WECHAT_APP_SECRET;
