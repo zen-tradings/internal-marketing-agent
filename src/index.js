@@ -48,19 +48,23 @@ export function makeHandler(deps) {
         if (!res.ok) { const err = new Error(res.stderr); err.stage = 'generate'; throw err; }
 
         // dry-run:HUB_DRY_RUN 置位时,不管 workflow 声明的是哪个渠道,一律强制走 mock,
-        // 用于本地/CI 演练全流程而不触碰真实微信 API。
-        const channelId = process.env.HUB_DRY_RUN ? 'mock' : wf.channel;
+        // 用于本地/CI 演练全流程而不触碰真实微信 API。严格真值判断,避免 "0"/"false"/空串
+        // 被当成开启(例如 shell 里误写 HUB_DRY_RUN=0 却仍然触发 dry-run)。
+        const DRY = /^(1|true|yes|on)$/i.test(process.env.HUB_DRY_RUN || '');
+        const channelId = DRY ? 'mock' : wf.channel;
         const channel = channels[channelId];
         const { mediaId, title } = await channel.publish({ articlePath: res.articlePath, config, workflow: wf, notify, notifier: deps.notifier });
         store.setMediaId(run.id, mediaId, title); // 早写,发布成功后立刻落库,支撑上面的幂等判断
         return { mediaId, title };
       }, wf.retries);
       store.setStatus(run.id, 'done', { title, mediaId, finishedAt: Date.now() });
-      await deps.notifier.success(notify, { title, mediaId });
+      if (deps.notifier) await deps.notifier.success(notify, { title, mediaId });
+      else console.error('[hub] notifier 未就绪,跳过 success 通知(启动窗口期竞态)', { runId: run.id, title, mediaId });
     } catch (e) {
       const stage = e.stage || 'publish';
       store.setStatus(run.id, 'failed', { stage, error: e.message, finishedAt: Date.now() });
-      await deps.notifier.failure(notify, { stage, error: e.message });
+      if (deps.notifier) await deps.notifier.failure(notify, { stage, error: e.message });
+      else console.error('[hub] notifier 未就绪,跳过 failure 通知(启动窗口期竞态)', { runId: run.id, stage, error: e.message });
     }
   };
 }
@@ -76,7 +80,19 @@ export async function start() {
   const handler = makeHandler(deps);
 
   const queue = createQueue({ store, maxConcurrency: config.maxConcurrency, handler });
-  const enqueue = (t) => queue.enqueue({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, ...t });
+  const enqueue = (t) => {
+    const result = queue.enqueue({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, ...t });
+    // 收到即回执:不等待任务真正被处理(那要等到出队),用户提交后立刻有反馈。
+    // 守卫住 notifier 可能还没就绪(启动窗口期竞态)以及 ack 本身可能抛错,两者都不能拖垮入队。
+    try {
+      Promise.resolve(deps.notifier?.ack?.(t.notify, t.input)).catch((e) => {
+        console.error('[hub] notifier.ack 失败(已忽略)', e.message);
+      });
+    } catch (e) {
+      console.error('[hub] notifier.ack 失败(已忽略)', e.message);
+    }
+    return result;
+  };
   const app = await registerSlack({ config, enqueue });
   registerCron({ workflows: WORKFLOWS, enqueue });
   deps.notifier = createNotifier((m) => app.client.chat.postMessage(m));

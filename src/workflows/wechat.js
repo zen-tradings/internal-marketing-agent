@@ -3,7 +3,7 @@ export default {
   triggers: ['slack'],
   workDir: process.env.WORK_DIR || '/srv/zen/wechat',
   allowedTools: ['mcp__exa__web_search_exa', 'mcp__exa__web_fetch_exa'],
-  channel: process.env.WECHAT_CHANNEL || 'mock',   // M2 改为 'wechat-draft'
+  channel: process.env.WECHAT_CHANNEL || 'wechat-draft',   // 默认真实渠道;本地演练用 HUB_DRY_RUN=1 或设 WECHAT_CHANNEL=mock
   timeoutMs: Number(process.env.DEFAULT_TIMEOUT_MS || 600000),
   retries: 0,
   promptTemplate: (task) => `你是 Zen Trading 公众号分析师。完成以下写作任务。
