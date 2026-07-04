@@ -47,7 +47,10 @@ export function makeHandler(deps) {
         const res = await runClaude({ workflow: wf, input: run.input, config });
         if (!res.ok) { const err = new Error(res.stderr); err.stage = 'generate'; throw err; }
 
-        const channel = channels[wf.channel];
+        // dry-run:HUB_DRY_RUN 置位时,不管 workflow 声明的是哪个渠道,一律强制走 mock,
+        // 用于本地/CI 演练全流程而不触碰真实微信 API。
+        const channelId = process.env.HUB_DRY_RUN ? 'mock' : wf.channel;
+        const channel = channels[channelId];
         const { mediaId, title } = await channel.publish({ articlePath: res.articlePath, config, workflow: wf, notify, notifier: deps.notifier });
         store.setMediaId(run.id, mediaId, title); // 早写,发布成功后立刻落库,支撑上面的幂等判断
         return { mediaId, title };
