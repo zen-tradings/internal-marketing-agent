@@ -37,9 +37,11 @@ export function makeChannel({ renderAndPublish = coreRenderAndPublish, readArtic
       process.env.WECHAT_APP_SECRET = appSecret;
       try {
         const mediaId = await renderAndPublish(undefined, { ...RENDER_OPTS, file: articlePath }, getInputContent);
-        // 名片注入:失败不阻断出草稿,只告警
-        try { await injectFollowCard({ config, mediaId }); }
-        catch (e) { if (notifier && notify) await notifier.warn(notify, `名片注入失败(草稿已出):${e.message}`); }
+        // 名片注入:失败不阻断出草稿,只告警;告警本身失败也绝不能影响已成功的发布结果
+        try {
+          try { await injectFollowCard({ config, mediaId }); }
+          catch (e) { if (notifier && notify) await notifier.warn(notify, `名片注入失败(草稿已出):${e.message}`); }
+        } catch (warnErr) { console.error('名片告警失败(不影响发布结果):', warnErr); }
         return { mediaId, title };
       } catch (e) { const err = new Error(`发布失败:${e.message}`); err.stage = 'publish'; throw err; }
       finally {

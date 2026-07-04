@@ -38,6 +38,7 @@ export async function injectFollowCard({ config, mediaId }) {
   try {
     const token = await getToken(config.wechat.appId, config.wechat.appSecret);
     const [acc, draft] = await Promise.all([getAccountBasicInfo(token), getDraft(token, mediaId)]);
+    if (acc.errcode) throw new Error(`获取公众号信息失败: ${acc.errmsg}`);
     if (draft.errcode) throw new Error(`获取草稿失败: ${draft.errmsg}`);
     const article = draft.news_item[0];
     const card = buildFollowCard({ appId: config.wechat.appId, ...acc });

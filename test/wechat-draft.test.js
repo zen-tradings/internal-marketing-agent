@@ -11,6 +11,7 @@ test('publish 调 renderAndPublish 并返回 mediaId/title', async () => {
   const channel = makeChannel({
     renderAndPublish: async (content, opts) => { calledWith = { content, opts }; return 'MEDIA-9'; },
     readArticle: async () => ({ markdown: '---\ntitle: 英伟达\n---\n正文', title: '英伟达' }),
+    injectFollowCard: async () => {},
   });
   const out = await channel.publish({ articlePath: '/x/article.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
   assert.equal(out.mediaId, 'MEDIA-9');
@@ -98,8 +99,22 @@ test('publish 成功后恢复 process.env 的原值', async () => {
   const channel = makeChannel({
     renderAndPublish: async () => 'MEDIA-9',
     readArticle: async () => ({ markdown: 'x', title: 't' }),
+    injectFollowCard: async () => {},
   });
   await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
   assert.equal(process.env.WECHAT_APP_ID, prevAppId);
   assert.equal(process.env.WECHAT_APP_SECRET, prevAppSecret);
+});
+
+test('injectFollowCard 和 notifier.warn 都抛错 → publish 仍返回 mediaId/title,不标记 stage=publish', async () => {
+  const notifier = { warn: async () => { throw new Error('Slack 网络错误'); } };
+  const notify = { channel: 'C', ts: '1' };
+  const channel = makeChannel({
+    renderAndPublish: async () => 'MEDIA-9',
+    readArticle: async () => ({ markdown: 'x', title: 't' }),
+    injectFollowCard: async () => { throw new Error('40001'); },
+  });
+  const out = await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } }, notify, notifier });
+  assert.equal(out.mediaId, 'MEDIA-9');
+  assert.equal(out.title, 't');
 });
