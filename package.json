@@ -1,0 +1,13 @@
+{
+  "name": "zen-slack-bot",
+  "version": "1.0.0",
+  "description": "Zen Trading 公众号自动化写作机器人",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "@slack/bolt": "^3.17.0",
+    "dotenv": "^16.3.1"
+  }
+}
