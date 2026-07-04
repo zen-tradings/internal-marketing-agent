@@ -11,9 +11,9 @@ export function loadConfig(env = process.env) {
     maxConcurrency: Number(env.MAX_CONCURRENCY || 1),
     defaultTimeoutMs: Number(env.DEFAULT_TIMEOUT_MS || 10 * 60 * 1000),
     proxy: {
-      https: env.HTTPS_PROXY || '',
-      http: env.HTTP_PROXY || '',
-      all: env.ALL_PROXY || '',
+      https: env.CHILD_HTTPS_PROXY || '',
+      http: env.CHILD_HTTP_PROXY || '',
+      all: env.CHILD_ALL_PROXY || '',
       noProxy: env.NO_PROXY || 'api.weixin.qq.com,mp.weixin.qq.com',
     },
     slack: {

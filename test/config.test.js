@@ -7,7 +7,7 @@ test('loadConfig 读取 env 并给出默认值', () => {
     WORK_DIR: '/srv/zen',
     SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x', NOTIFY_CHANNEL_ID: 'C1',
     WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec',
-    HTTPS_PROXY: 'http://127.0.0.1:7897',
+    CHILD_HTTPS_PROXY: 'http://127.0.0.1:7897',
   };
   const c = loadConfig(env);
   assert.equal(c.workDir, '/srv/zen');

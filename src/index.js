@@ -12,7 +12,14 @@ import wechatDraft from './channels/wechat-draft.js';
 const WORKFLOWS = { wechat: wechatWorkflow };
 const CHANNELS = { mock: mockChannel, 'wechat-draft': wechatDraft };
 
+export function assertMainProcessDirect(env = process.env) {
+  for (const k of ['https_proxy', 'http_proxy', 'all_proxy', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY']) {
+    if (env[k]) throw new Error(`主进程不得设置代理(${k});代理只允许注入 Claude 子进程。把代理配置放到 CHILD_HTTPS_PROXY 等专用变量。`);
+  }
+}
+
 export async function start() {
+  assertMainProcessDirect();
   const config = loadConfig();
   const store = openStore(config.dbPath);
   const interrupted = store.markInterrupted();
