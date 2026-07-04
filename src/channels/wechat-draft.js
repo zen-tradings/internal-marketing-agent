@@ -20,13 +20,28 @@ export function makeChannel({ renderAndPublish = coreRenderAndPublish, readArtic
       let title;
       try { ({ title } = await readArticle(articlePath)); }
       catch (e) { const err = new Error(`读取文章失败:${e.message}`); err.stage = 'render'; throw err; }
+
+      const appId = config.wechat && config.wechat.appId;
+      const appSecret = config.wechat && config.wechat.appSecret;
+      if (!appId || !appSecret) {
+        const err = new Error('微信凭据缺失(WECHAT_APP_ID/WECHAT_APP_SECRET)');
+        err.stage = 'publish';
+        throw err;
+      }
+
       // 本地模式:凭据走 env(renderAndPublish 内部读 WECHAT_APP_ID/SECRET),不传 appId
-      process.env.WECHAT_APP_ID = config.wechat.appId;
-      process.env.WECHAT_APP_SECRET = config.wechat.appSecret;
+      const prevAppId = process.env.WECHAT_APP_ID;
+      const prevAppSecret = process.env.WECHAT_APP_SECRET;
+      process.env.WECHAT_APP_ID = appId;
+      process.env.WECHAT_APP_SECRET = appSecret;
       try {
         const mediaId = await renderAndPublish(undefined, { ...RENDER_OPTS, file: articlePath }, getInputContent);
         return { mediaId, title };
       } catch (e) { const err = new Error(`发布失败:${e.message}`); err.stage = 'publish'; throw err; }
+      finally {
+        if (prevAppId === undefined) delete process.env.WECHAT_APP_ID; else process.env.WECHAT_APP_ID = prevAppId;
+        if (prevAppSecret === undefined) delete process.env.WECHAT_APP_SECRET; else process.env.WECHAT_APP_SECRET = prevAppSecret;
+      }
     },
   };
 }
