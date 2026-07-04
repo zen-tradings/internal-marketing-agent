@@ -5,6 +5,7 @@ import { createQueue } from './core/queue.js';
 import { runClaude } from './core/runner.js';
 import { createNotifier } from './core/notifier.js';
 import { registerSlack } from './triggers/slack.js';
+import { registerCron } from './triggers/cron.js';
 import wechatWorkflow from './workflows/wechat.js';
 import mockChannel from './channels/mock.js';
 import wechatDraft from './channels/wechat-draft.js';
@@ -46,7 +47,9 @@ export async function start() {
   };
 
   const queue = createQueue({ store, maxConcurrency: config.maxConcurrency, handler });
-  const app = await registerSlack({ config, enqueue: (t) => queue.enqueue({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, ...t }) });
+  const enqueue = (t) => queue.enqueue({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, ...t });
+  const app = await registerSlack({ config, enqueue });
+  registerCron({ workflows: WORKFLOWS, enqueue });
   notifier = createNotifier((m) => app.client.chat.postMessage(m));
   console.log('⚡ Zen Content Hub 已启动');
 }
