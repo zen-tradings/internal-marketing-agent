@@ -43,6 +43,11 @@ export function openStore(dbPath) {
       db.prepare(`UPDATE runs SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
     },
     getRun(id) { return db.prepare('SELECT * FROM runs WHERE id = ?').get(id); },
+    setMediaId(id, mediaId, title) {
+      // 早写:发布成功后立刻落库 media_id(不等整条 run 收尾),供重试/重启幂等判断
+      db.prepare(`UPDATE runs SET media_id = ?, title = COALESCE(?, title) WHERE id = ?`)
+        .run(mediaId, title ?? null, id);
+    },
     listByStatus(status) { return db.prepare('SELECT * FROM runs WHERE status = ? ORDER BY created_at').all(status); },
     markInterrupted() {
       return db.prepare(`UPDATE runs SET status = 'interrupted' WHERE status = 'running'`).run().changes;
