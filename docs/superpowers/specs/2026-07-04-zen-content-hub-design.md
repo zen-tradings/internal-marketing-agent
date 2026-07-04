@@ -127,6 +127,13 @@ const styled = await core.applyStylesWithTheme(el, { themeId: 'zen-trading' });
 
 **名片注入**(postProcess `inject-follow-card`):在 styled HTML 上做,而非现在的「发布后 draft/get + draft/update」两次往返。定位现有蓝色结尾板块 marker(`background:#0E2138;border-radius:.6em;padding:1.4em`)前插入 `mp-common-profile` section。账号基本信息(head_img/nickname/alias/signature)仍走 `getaccountbasicinfo`。
 
+**视觉一致性保证(硬性要求)**:渲染产物必须与现有 wenyan-mcp 发布结果在**主题/结构/字体/字号/格式/排版/缩进**上完全一致。由于 wenyan-mcp 内部即用 `@wenyan-md/core@3.0.10`,只要满足以下三条,即是同一条渲染代码路径、输出逐字节一致:
+1. **锁定版本**:项目依赖 `@wenyan-md/core` 精确锁 `3.0.10`(与 wenyan-mcp 内含版本一致),不用 `^`。
+2. **同一主题**:注册与现在完全相同的 `~/zen-wechat-theme/zen-trading.css`;若 wenyan-mcp 还叠加了 hlTheme/mac-style/footnote 等,一并复刻。
+3. **复刻渲染参数**:对照 wenyan-mcp `dist/publish.js`/`theme.js` 里调用 core 的确切 options(`isWechat`、`isMacStyle`、`isAddFootnote`、mermaid 等),原样传入。
+
+验收方式见 §12 的**新旧路径 HTML 对拆回归测试**——同一篇 markdown 分别过「旧 wenyan-mcp 路径」与「新 Node 路径」,产出 HTML 必须一致(或差异仅限已知无害项)。
+
 **发布**(`@wenyan-md/core/publish`):
 ```js
 import { WechatPublisher } from '@wenyan-md/core/publish';
@@ -139,7 +146,7 @@ const { media_id } = await pub.publishToDraft(token, {
 ```
 - `media_id` 来自返回值 → 彻底消灭 stdout 解析。
 - token 缓存与 upload-cache 由 core 内置(可注入自定义 storage adapter 指向 `~/.config/wenyan-md/` 或项目内路径)。
-- **封面来源**:frontmatter 指定本地图片路径或复用已有素材;若缺失,回报 ⚠️ 并要求补图(微信草稿必须有封面)。
+- **封面来源(已定)**:接入既有的 `~/zen-push-image/` 开篇图生成器(Chrome 无头渲染 `template.html` + 可选 Gemini 背景),由工作流在发布前自动产出封面 PNG,`uploadImage` 上传得到 `thumb_media_id`。frontmatter 可覆盖指定封面;生成失败则回报 ⚠️ 要求人工补图(微信草稿必须有封面)。作为一个 postProcess/pre-publish 步骤挂到微信工作流。
 
 ## 7. 数据模型(SQLite)
 
@@ -200,16 +207,22 @@ VPS 在国内,因此:
 - **渲染层**:markdown fixtures → 断言输出 HTML 含 zen-trading 主题类名、名片 section、结尾三行板块(纯函数,易测)。
 - **渠道层**:mock `HttpAdapter`,断言 `publishToDraft` 入参(title/content/thumb_media_id)正确,不打真实微信。
 - **队列/状态**:入队→执行→落库的状态流转单测(内存 SQLite)。
+- **视觉一致性回归(验收门)**:同一批 markdown fixtures(含现有样例 `sample-mu-earnings.md`)分别过「旧 wenyan-mcp 渲染路径」与「新 `@wenyan-md/core` 直调路径」,断言产出 HTML 一致(diff 为空,或仅已登记的无害差异)。此测试通过才算 §6 视觉一致要求达标。
 - **端到端 `--dry-run`**:跑完整链路,发布替换为 mock adapter,人工核对渲染产物文件。
 - **真实冒烟**:手动脚本,真发一篇到草稿箱,肉眼验收(白名单/封面/名片)。
 
 ## 13. 风险与开放问题
 
-1. **国内 VPS 出海稳定性/合规**:Claude 与 Exa 需经代理访问境外 API;线路选择与合规需确认。若不可行,回退到「香港/新加坡 VPS」需重议 §9(微信改为海外 IP 白名单)。
-2. **Claude Code 在 VPS 上的认证保活**:长期无人值守下 token/登录如何续期,需在实现计划中定方案(如定期检查 + 失败告警到 Slack)。
-3. **zen-trading 主题注册方式**:确认 `@wenyan-md/core` 注册自定义主题的确切 API(themeId vs 直接传 CSS),渲染结果需与现有草稿视觉一致。
-4. **封面图来源**:临时任务如何提供封面(frontmatter 指定/素材库复用/AI 生成),缺图流程需定义。
-5. **微信 IP 白名单可加数量**:确认后台可加的 IP 数与 VPS IP 是否长期固定(非弹性公网 IP 漂移)。
+### 已定决策
+- **出海线路(§9)**:用户已有可靠出海线路,国内 VPS 方案成立,不回退香港机。
+- **封面来源(§6)**:接入既有 `~/zen-push-image/` 生成器自动出封面。
+- **视觉一致(§6)**:要求与现有主题产物在结构/字体/字号/格式/排版/缩进上完全一致,以 §12 HTML 对拆回归测试为验收门。
+
+### 待实现阶段处理
+1. **Claude Code 在 VPS 上的认证保活**:长期无人值守下 token/登录如何续期,需在实现计划中定方案(如定期检查 + 失败告警到 Slack)。
+2. **`@wenyan-md/core` 主题注册的确切 API**:确认注册自定义主题及复刻 wenyan-mcp 渲染参数的具体写法(§6 已列三条约束,此处只是把接口细节留到实现时对照源码敲定)。
+3. **zen-push-image 接入细节**:生成器现为独立目录脚本,接入方式(子进程调用 vs 抽成模块)与 Gemini API key 缺失时的降级(CSS 渐变占位封面)需在实现时定。
+4. **微信 IP 白名单**:确认后台可加 IP 数,以及 VPS 使用固定公网 IP(非弹性 IP 漂移)。
 
 ## 14. 扩展点(为子项目 B 邮件预留)
 
