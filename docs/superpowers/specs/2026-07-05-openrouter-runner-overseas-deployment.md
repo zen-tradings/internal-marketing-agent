@@ -3,7 +3,7 @@
 - 日期:2026-07-05
 - 关系:本文修订 `2026-07-04-zen-content-hub-design.md`(下称"原 spec")的 §9(出站网络)、§10(部署)与 §6/§4(写作内核)。原 spec 其余部分仍有效。
 - 触发:用户两处决策变更 —— ①部署改到**海外 VPS**(复用现有,不新开云机);②写作内核用 **OpenRouter 开源模型完全替代 Claude Code**。
-- 实施方:后续由 Codex 开发,见 `docs/HANDOFF.md` §7/§8。
+- 实施方:后续由 GLM 5.2 开发,见 `docs/HANDOFF.md` §7/§8。
 
 ## 1. 写作内核:OpenRouter 替代 Claude Code
 

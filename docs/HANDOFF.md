@@ -1,12 +1,12 @@
-# Zen Content Hub — 开发交接文档(致 Codex）
+# Zen Content Hub — 开发交接文档(致 GLM 5.2）
 
-> 交接日期：2026-07-05 · 交接自：Claude（子项目 A 实现者）· 接手方：Codex
+> 交接日期：2026-07-05 · 交接自：Claude（子项目 A 实现者）· 接手方：GLM 5.2
 > 分支：`feat/content-hub-engine`（领先 `main` 19 个提交，未合并）
 > 一句话：`zen-slack-bot` 已从单文件 Slack→微信 bot 重构为**模块化多工作流内容编排引擎**。子项目 A（引擎 + 微信渠道）已完成、54 项测试全绿；接下来主要是**用 OpenRouter 开源模型替代 Claude Code 作为写作/调研内核**，并**部署到一台海外 VPS** 做真实发布冒烟。
 
 ---
 
-## 0. 你（Codex）要做的事，按优先级
+## 0. 你（GLM 5.2）要做的事，按优先级
 
 1. **T-A（核心）用 OpenRouter 开源模型替代 Claude Code**（§7 有完整规格）。这是本次交接的最大新增开发。
 2. **T-B 部署到海外 VPS + 真实发布冒烟**（原计划 Task 11，§8）。先跑 `deploy/vps-check.sh` 判断 VPS 是否可用。
