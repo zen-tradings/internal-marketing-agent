@@ -6,6 +6,7 @@ import { runClaude } from './core/runner.js';
 import { createNotifier } from './core/notifier.js';
 import { registerSlack } from './triggers/slack.js';
 import { registerCron } from './triggers/cron.js';
+import { isTransientSocketModeError } from './lib/slack-resilience.js';
 import wechatWorkflow from './workflows/wechat.js';
 import mockChannel from './channels/mock.js';
 import wechatDraft from './channels/wechat-draft.js';
@@ -23,11 +24,12 @@ export async function runWithRetry(fn, retries = 0) {
 
 export function assertMainProcessDirect(env = process.env) {
   for (const k of ['https_proxy', 'http_proxy', 'all_proxy', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY']) {
-    if (env[k]) throw new Error(`主进程不得设置代理(${k});代理只允许注入 Claude 子进程。把代理配置放到 CHILD_HTTPS_PROXY 等专用变量。`);
+    if (env[k]) throw new Error(`主进程不得设置代理(${k});海外 VPS 部署应让 OpenRouter/Exa/微信全部直连。`);
   }
 }
 
 // 队列处理器工厂,便于注入 stub 做单测(store/runClaude/channels 均可替换)。
+// runClaude 是旧依赖名,当前实际指向 OpenRouter runWriter,保留以减少装配层 churn。
 // 注意:`deps` 对象本身(而非解构出的局部变量)被闭包持有,notifier 字段在
 // start() 中是稍后才赋值的(registerSlack 之后)——沿用原来 `let notifier` 的
 // "调用时才读取当前值" 语义,不在这里提前修复这个时序,只是原样保留。
@@ -93,9 +95,45 @@ export async function start() {
     }
     return result;
   };
-  const app = await registerSlack({ config, enqueue });
+  // Slack 连接监督:退避重试首连;并对 @slack/socket-mode 1.x 的瞬时崩溃容忍 + 自动重连,
+  // 不让一次套接字断开拖垮整个进程(queue/cron 等仍存活)。
+  let reconnecting = false;
+  const backoffs = [2000, 5000, 10000, 20000, 30000];
+  async function connectSlack() {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const app = await registerSlack({ config, enqueue });
+        deps.notifier = createNotifier((m) => app.client.chat.postMessage(m));
+        console.log('⚡ Slack 已连接');
+        return app;
+      } catch (e) {
+        const wait = backoffs[Math.min(attempt, backoffs.length - 1)];
+        console.error(`[hub] Slack 连接失败: ${e.message};${wait / 1000}s 后重试。请核对 SLACK_APP_TOKEN(xapp-)是否有效、应用是否已开启 Socket Mode、以及是否有重复实例在用同一 token。`);
+        await new Promise((r) => setTimeout(r, wait));
+      }
+    }
+  }
+  function scheduleSlackReconnect() {
+    if (reconnecting) return;
+    reconnecting = true;
+    setTimeout(async () => { try { await connectSlack(); } finally { reconnecting = false; } }, 3000);
+  }
+
+  process.on('unhandledRejection', (reason) => {
+    console.error('[hub] unhandledRejection(已记录,进程不退出):', (reason && reason.message) || reason);
+  });
+  process.on('uncaughtException', (err) => {
+    if (isTransientSocketModeError(err)) {
+      console.error('[hub] 已容忍 socket-mode 瞬时崩溃(连接期被 Slack 断开),进程保活并自动重连:', err.message);
+      scheduleSlackReconnect();
+      return;
+    }
+    console.error('[hub] 未捕获异常,退出:', err);
+    process.exit(1);
+  });
+
+  await connectSlack();
   registerCron({ workflows: WORKFLOWS, enqueue });
-  deps.notifier = createNotifier((m) => app.client.chat.postMessage(m));
   console.log('⚡ Zen Content Hub 已启动');
 }
 

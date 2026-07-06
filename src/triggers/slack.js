@@ -18,6 +18,9 @@ export function parseSlackTask(raw, botUserId) {
 
 export async function registerSlack({ config, enqueue, onReady }) {
   const app = new App({ token: config.slack.botToken, appToken: config.slack.appToken, socketMode: true, logLevel: 'warn' });
+  // bolt 分发层错误(事件处理器抛错等)在此兜底,避免冒泡。注意:socket-mode 状态机
+  // 内部的 finity 崩溃不走这里,由 index.js 的进程级守卫容忍并触发重连。
+  app.error(async (error) => { console.error('[slack] bolt error:', (error && error.message) || error); });
   const seen = new Set();
   const dedup = (ts) => { if (seen.has(ts)) return false; seen.add(ts); setTimeout(() => seen.delete(ts), 1800000); return true; };
   let botId = '';
