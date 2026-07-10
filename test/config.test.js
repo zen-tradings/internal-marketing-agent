@@ -21,6 +21,7 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal(c.writer.exaApiKey, 'exa-key');
   assert.equal(c.writer.exaBaseUrl, 'https://api.exa.ai');
   assert.equal(c.writer.exaPriorityResults, 4); // 默认
+  assert.equal(c.writer.exaTimeoutMs, 45000); // 默认
   assert.equal('claudeBin' in c, false);
   assert.equal(c.wechat.appId, 'wx');
 });
@@ -35,6 +36,18 @@ test('EXA_PRIORITY_RESULTS 覆盖优先路默认返回数', () => {
   };
   const c = loadConfig(env);
   assert.equal(c.writer.exaPriorityResults, 7);
+});
+
+test('EXA_TIMEOUT_MS 覆盖单请求超时默认值', () => {
+  const env = {
+    SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
+    WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec',
+    OPENROUTER_API_KEY: 'or-key',
+    EXA_API_KEY: 'exa-key',
+    EXA_TIMEOUT_MS: '8000',
+  };
+  const c = loadConfig(env);
+  assert.equal(c.writer.exaTimeoutMs, 8000);
 });
 
 test('缺关键 env 抛错', () => {

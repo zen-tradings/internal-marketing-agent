@@ -10,10 +10,6 @@ const SYSTEM_PROMPT = `你是 Zen Trading 公众号分析师。你会基于系�
 - 括号内容极度克制,非必要不加
 - 金额用中文单位,例如亿美元、百万美元,不出现美元符号
 - 口径说明板块每个控制在 1-2 句
-- 结尾蓝色板块固定三行:
-  ZEN TRADING STRATEGIES
-  板块模型 · 量化策略 · 前沿解读
-  本文为研究用途,不构成任何投资建议。
 
 输出必须是完整 Markdown,且文件开头必须是 YAML frontmatter:
 ---
@@ -106,7 +102,7 @@ async function searchExaOpen({ query, writer, fetchFn }) {
         highlights: { query, maxCharacters: 1200 },
       },
     }),
-  });
+  }, { timeoutMs: writer.exaTimeoutMs || 45000 });
   if (!res.ok) throw new Error(`Exa search failed: ${res.status} ${res.statusText} ${await safeText(res)}`.trim());
   const data = await res.json();
   return Array.isArray(data.results) ? data.results.slice(0, numResults) : [];
@@ -131,7 +127,7 @@ async function searchExaPriority({ query, writer, prioritySources, fetchFn }) {
         highlights: { query, maxCharacters: 1200 },
       },
     }),
-  });
+  }, { timeoutMs: writer.exaTimeoutMs || 45000 });
   if (!res.ok) throw new Error(`Exa priority search failed: ${res.status} ${res.statusText} ${await safeText(res)}`.trim());
   const data = await res.json();
   const results = Array.isArray(data.results) ? data.results.slice(0, numResults) : [];
@@ -150,7 +146,7 @@ async function fetchExaContents({ urls, writer, fetchFn }) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ urls, text: true }),
-  });
+  }, { timeoutMs: writer.exaTimeoutMs || 45000 });
   if (!res.ok) throw new Error(`Exa contents failed: ${res.status} ${res.statusText} ${await safeText(res)}`.trim());
   const data = await res.json();
   return Array.isArray(data.results) ? data.results : [];
@@ -298,17 +294,25 @@ export function isTransientNetworkError(e) {
 }
 
 // 对瞬时网络错误做退避重试。仅重试 fetch 抛出的网络错误;HTTP 响应(含 4xx/5xx)不在此重试。
+// opts.timeoutMs:若提供,每次尝试都用一个全新的 AbortController 包裹单次请求(不复用上一次
+// 已 abort 的 signal),超时即 controller.abort() 触发 AbortError;AbortError 不算瞬时网络错误
+// (见 isTransientNetworkError),因此不会被重试,而是直接向上抛出,交给调用方的降级逻辑处理。
 export async function fetchWithRetry(fetchFn, url, options, opts = {}) {
-  const { attempts = 3, backoffMs = [500, 1500, 4000], sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = opts;
+  const { attempts = 3, backoffMs = [500, 1500, 4000], sleep = (ms) => new Promise((r) => setTimeout(r, ms)), timeoutMs } = opts;
   let lastErr;
   for (let i = 0; i < attempts; i++) {
+    const controller = timeoutMs ? new AbortController() : undefined;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
     try {
-      return await fetchFn(url, options);
+      const reqOptions = controller ? { ...options, signal: controller.signal } : options;
+      return await fetchFn(url, reqOptions);
     } catch (e) {
       lastErr = e;
       if (!isTransientNetworkError(e)) throw e; // 非瞬时错误原样抛出,保留类型(如 AbortError)
       if (i === attempts - 1) break;
       await sleep(backoffMs[Math.min(i, backoffMs.length - 1)]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
   const err = new Error(`网络请求失败(重试 ${attempts} 次后放弃): ${describeFetchError(lastErr)}`);

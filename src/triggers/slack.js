@@ -19,13 +19,29 @@ export function parseSlackTask(raw, botUserId) {
 // 中文别名 → 工作流 id。别名同样必须命中 workflowIds 才会真正路由。
 const WORKFLOW_ALIASES = { 微信: 'wechat', 邮件: 'email', 财报: 'earnings', 行业: 'sector', 晨报: 'morning', 直译: 'translate', 翻译: 'translate' };
 
-// 从任务文本里识别可选的 "<id>: 其余内容" 前缀(冒号支持半角/全角,id 大小写不敏感)。
-// 命中已注册的 workflowIds(或其中文别名)才路由,否则整段文本走 defaultWorkflowId,不报错。
+// 中文别名按长度从长到短排序,支持多个别名互为前缀时优先取最长匹配。
+const SORTED_ALIAS_KEYS = Object.keys(WORKFLOW_ALIASES).sort((a, b) => b.length - a.length);
+
+// 任务文本路由规则:
+// 1) 中文别名(WORKFLOW_ALIASES 的键)不要求分隔符——别名后紧跟内容、空格或冒号均可识别,
+//    例如 "直译https://x"、"直译 https://x"、"直译：x" 都路由到 translate。
+// 2) 英文工作流 id(workflowIds 本身)仍要求冒号前缀 "id: 内容",避免正文里出现同名英文单词
+//    被误判为路由前缀(如 "wechatXXX 写点东西" 不应被当成 wechat 工作流)。
+// 命中已注册的 workflowIds(或其中文别名映射到的 workflowIds)才路由,否则整段文本走
+// defaultWorkflowId,不报错。剥离别名/前缀后任务文本为空也照常路由,交给工作流兜底处理。
 export function resolveWorkflowTask(task, workflowIds = [], defaultWorkflowId = 'wechat') {
+  for (const alias of SORTED_ALIAS_KEYS) {
+    if (!task.startsWith(alias)) continue;
+    const candidate = WORKFLOW_ALIASES[alias];
+    const matched = workflowIds.find((id) => id.toLowerCase() === candidate.toLowerCase());
+    if (!matched) continue;
+    const rest = task.slice(alias.length).replace(/^[:：]?\s*/, '');
+    return { workflowId: matched, task: rest.trim() };
+  }
+
   const m = task.match(/^([^\s:：]+)[:：]\s*([\s\S]*)$/);
   if (m) {
-    const candidate = WORKFLOW_ALIASES[m[1]] || m[1];
-    const matched = workflowIds.find((id) => id.toLowerCase() === candidate.toLowerCase());
+    const matched = workflowIds.find((id) => id.toLowerCase() === m[1].toLowerCase());
     if (matched) return { workflowId: matched, task: m[2].trim() };
   }
   return { workflowId: defaultWorkflowId, task };

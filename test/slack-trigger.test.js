@@ -130,3 +130,45 @@ test('多工作流路由:中文别名 "翻译：" 命中并路由到 translate',
     { workflowId: 'translate', task: 'https://example.com/article' }
   );
 });
+
+test('多工作流路由:中文别名 "直译" 后紧跟内容(无任何分隔符)也路由到 translate', () => {
+  assert.deepEqual(
+    resolveWorkflowTask('直译https://example.com/article', NEW_WORKFLOW_IDS, 'wechat'),
+    { workflowId: 'translate', task: 'https://example.com/article' }
+  );
+});
+
+test('多工作流路由:中文别名 "直译" 后接空格也路由到 translate', () => {
+  assert.deepEqual(
+    resolveWorkflowTask('直译 https://example.com/article', NEW_WORKFLOW_IDS, 'wechat'),
+    { workflowId: 'translate', task: 'https://example.com/article' }
+  );
+});
+
+test('多工作流路由:中文别名 "直译" 后接全角冒号(无空格)也路由到 translate', () => {
+  assert.deepEqual(
+    resolveWorkflowTask('直译：x', NEW_WORKFLOW_IDS, 'wechat'),
+    { workflowId: 'translate', task: 'x' }
+  );
+});
+
+test('多工作流路由:只发别名本身(无任何内容)仍路由到 translate,任务文本为空串', () => {
+  assert.deepEqual(
+    resolveWorkflowTask('直译', NEW_WORKFLOW_IDS, 'wechat'),
+    { workflowId: 'translate', task: '' }
+  );
+});
+
+test('多工作流路由:英文工作流 id 仍要求冒号,"translate:" 有效', () => {
+  assert.deepEqual(
+    resolveWorkflowTask('translate: https://example.com/article', NEW_WORKFLOW_IDS, 'wechat'),
+    { workflowId: 'translate', task: 'https://example.com/article' }
+  );
+});
+
+test('多工作流路由:正文以英文工作流 id 开头但无冒号("wechatXXX ...")不误判为 wechat,整段走默认(用非 wechat 的默认工作流验证未被误路由)', () => {
+  assert.deepEqual(
+    resolveWorkflowTask('wechatXXX 写点东西', NEW_WORKFLOW_IDS, 'sector'),
+    { workflowId: 'sector', task: 'wechatXXX 写点东西' }
+  );
+});

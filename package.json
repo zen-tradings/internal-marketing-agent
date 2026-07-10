@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "check:openrouter": "node scripts/check-openrouter.mjs",
+    "status": "node scripts/status.mjs",
     "test": "node --test"
   },
   "dependencies": {

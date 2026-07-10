@@ -221,6 +221,31 @@ test('双路调研:优先路带 includeDomains,开放路不带,结果按优先�
   ]);
 });
 
+test('优先路网络 hang(fetchFn 永不返回)时,exaTimeoutMs 超时后按失败降级为仅开放路结果,任务不会永久挂起', async () => {
+  const workflow = tempWorkflow({ research: { prioritySources: ['trendforce.com'] } });
+  const config = baseConfig();
+  config.writer.exaTimeoutMs = 30; // 很短的超时,让测试快速触发
+  const fetchFn = async (url, opts) => {
+    const body = JSON.parse(opts.body || '{}');
+    if (String(url).endsWith('/search')) {
+      if (body.includeDomains) {
+        // 模拟网络 hang:永不 resolve/reject,只在 signal 被 abort 时才拒绝
+        return new Promise((resolve, reject) => {
+          opts.signal?.addEventListener('abort', () => {
+            const e = new Error('aborted'); e.name = 'AbortError'; reject(e);
+          });
+        });
+      }
+      return jsonResponse({ results: [{ title: '开放来源', url: 'https://open.example.com/a' }] });
+    }
+    return completionResponse();
+  };
+
+  const result = await runWriter({ workflow, input: 'HBM 需求', config, fetchFn });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.sources, ['https://open.example.com/a']);
+});
+
 test('优先路失败时降级为仅开放路结果,不抛错', async () => {
   const workflow = tempWorkflow({ research: { prioritySources: ['trendforce.com'] } });
   const fetchFn = async (url, opts) => {

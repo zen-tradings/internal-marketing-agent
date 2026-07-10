@@ -25,6 +25,7 @@ export function loadConfig(env = process.env) {
       exaNumResults: Number(env.EXA_NUM_RESULTS || 5),
       exaPriorityResults: Number(env.EXA_PRIORITY_RESULTS || 4),
       exaUserContentMaxChars: Number(env.EXA_USER_CONTENT_MAX_CHARS || 24000),
+      exaTimeoutMs: Number(env.EXA_TIMEOUT_MS || 45000),
       temperature: env.OPENROUTER_TEMPERATURE === undefined ? 0.4 : Number(env.OPENROUTER_TEMPERATURE),
       httpReferer: env.OPENROUTER_HTTP_REFERER || 'https://zentradings.com',
       appTitle: env.OPENROUTER_APP_TITLE || 'Zen Content Hub',
