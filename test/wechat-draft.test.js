@@ -2,17 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeChannel, RENDER_OPTS } from '../src/channels/wechat-draft.js';
 
-// 合规、含固定结尾板块、无破折号/美元符号的完整文章,门禁应零 errors/零 warnings,
+// 合规、无破折号/美元符号的完整文章,门禁应零 errors/零 warnings,
 // 避免门禁的 notifier.warn 调用干扰各测试对 warned 数组长度/内容的断言。
 const VALID_MD = [
   '---',
   'title: 测试标题',
   '---',
   '正文内容,符合规范。',
-  '',
-  'ZEN TRADING STRATEGIES',
-  '板块模型 · 量化策略 · 前沿解读',
-  '本文为研究用途,不构成任何投资建议。',
   '',
 ].join('\n');
 

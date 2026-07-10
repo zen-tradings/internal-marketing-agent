@@ -6,8 +6,6 @@ const SECRET_PATTERNS = [
   { re: /xox[bap]-[A-Za-z0-9-]{10,}/, label: 'Slack token(xoxb/xoxa/xoxp-...)' },
 ];
 
-const FOOTER_MARKER = 'ZEN TRADING STRATEGIES';
-
 export function checkArticle(markdown) {
   const md = String(markdown || '');
   const errors = [];
@@ -36,10 +34,6 @@ export function checkArticle(markdown) {
 
   if (/\$\s?\d/.test(md)) {
     warnings.push('风格:出现美元符号后跟数字($+数字),规范要求用中文单位(如亿美元)');
-  }
-
-  if (!md.includes(FOOTER_MARKER)) {
-    warnings.push(`格式:缺少固定结尾板块「${FOOTER_MARKER}」`);
   }
 
   return { errors, warnings };

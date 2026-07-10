@@ -8,10 +8,6 @@ const CLEAN_MD = [
   '---',
   '正文内容,符合规范。',
   '',
-  'ZEN TRADING STRATEGIES',
-  '板块模型 · 量化策略 · 前沿解读',
-  '本文为研究用途,不构成任何投资建议。',
-  '',
 ].join('\n');
 
 test('干净文章零 errors 零 warnings', () => {
@@ -88,25 +84,19 @@ test('warnings: 美元符号后不跟数字不命中', () => {
   assert.equal(warnings.some((w) => /美元符号/.test(w)), false);
 });
 
-test('warnings: 缺固定结尾板块「ZEN TRADING STRATEGIES」', () => {
+test('不再要求固定结尾板块:缺结尾板块不产生 warning', () => {
   const md = '---\ntitle: T\n---\n正文没有固定结尾。';
   const { warnings } = checkArticle(md);
-  assert.ok(warnings.some((w) => /ZEN TRADING STRATEGIES/.test(w)));
-});
-
-test('warnings: 含固定结尾板块则不命中该项', () => {
-  const { warnings } = checkArticle(CLEAN_MD);
-  assert.equal(warnings.some((w) => /ZEN TRADING STRATEGIES/.test(w)), false);
+  assert.equal(warnings.some((w) => /结尾板块|ZEN TRADING/.test(w)), false);
 });
 
 test('errors 与 warnings 互不干扰:同时命中多类问题时都各自出现', () => {
-  const md = '---\nfoo: bar\n---\n正文提到买入,含破折号——,也没有结尾板块,还有 /Users/x 路径,金额 $5 亿美元。';
+  const md = '---\nfoo: bar\n---\n正文含破折号——,还有 /Users/x 路径,金额 $5 亿美元。';
   const { errors, warnings } = checkArticle(md);
   assert.ok(errors.some((e) => /title/.test(e)));
   assert.ok(errors.some((e) => /本地路径/.test(e)));
   assert.ok(warnings.some((w) => /破折号/.test(w)));
   assert.ok(warnings.some((w) => /美元符号/.test(w)));
-  assert.ok(warnings.some((w) => /ZEN TRADING STRATEGIES/.test(w)));
 });
 
 test('信息具体可读:破折号 warning 提示规范要求', () => {

@@ -115,7 +115,7 @@ npm run check:openrouter
 
 `channels/wechat-draft.js` 的 `publish()` 在渲染发布前依次执行三个 Node 侧确定性步骤（与写作模型无关，GLM 等模型无需具备图片能力）：
 
-1. **门禁**（`src/lib/gate.js`）：对模型产出的原文做规则检查。errors（缺 title、疑似密钥、本地路径泄漏）会拦截发布并 Slack 告警；warnings（破折号、美元符号、缺固定结尾板块）放行但提醒。
+1. **门禁**（`src/lib/gate.js`）：对模型产出的原文做规则检查。errors（缺 title、疑似密钥、本地路径泄漏）会拦截发布并 Slack 告警；warnings（破折号、美元符号）放行但提醒。
 2. **固定头尾图注入**（`src/lib/assets.js`）：自动在正文开头插入 `assets/zen-header-banner.gif`、结尾插入 `assets/zen-footer-qr.png`（可用 `WECHAT_HEADER_IMAGE`/`WECHAT_FOOTER_IMAGE` 覆盖），幂等、缺文件降级为告警。
 3. **内容驱动封面**（`src/lib/cover.js`）：先用 `.env` 的 `OPENROUTER_MODEL` 从文章提取封面数据（tag/标题/核心结论/链路/要点），再套 `~/zen-push-image` 模板由无头 Chrome 渲染；提取失败自动回退到「示例数据+标题」，封面不会因此挂掉。
 
