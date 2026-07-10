@@ -1,4 +1,6 @@
 .env
+.env.*
+!deploy/.env.example
 .DS_Store
 node_modules/
 *.log

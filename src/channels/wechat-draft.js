@@ -4,6 +4,8 @@ import { renderAndPublish as coreRenderAndPublish } from '@wenyan-md/core/wrappe
 import { getInputContent as defaultGetInputContent } from '../lib/getInputContent.js';
 import { injectFollowCard as defaultInjectFollowCard } from '../lib/wechatApi.js';
 import { generateCover as defaultGenerateCover, ensureFrontmatterCover as defaultEnsureFrontmatterCover } from '../lib/cover.js';
+import { checkArticle as defaultCheckArticle } from '../lib/gate.js';
+import { injectFixedImages as defaultInjectFixedImages } from '../lib/assets.js';
 
 // 与 wenyan-mcp dist/publish.js 完全一致的渲染参数(parity 硬要求)
 export const RENDER_OPTS = { theme: 'zen-trading', highlight: 'solarized-light', macStyle: true, footnote: true };
@@ -28,6 +30,8 @@ export function makeChannel({
   generateCover = defaultGenerateCover,
   ensureFrontmatterCover = defaultEnsureFrontmatterCover,
   writeArticle = defaultWriteArticle,
+  checkArticle = defaultCheckArticle,
+  injectFixedImages = defaultInjectFixedImages,
 } = {}) {
   return {
     id: 'wechat-draft',
@@ -44,11 +48,41 @@ export function makeChannel({
         throw err;
       }
 
+      // 门禁:对模型产出原文(注入头尾图之前)做出口检查。errors 拦截发布并直接结束流程,
+      // 只有在无 errors 时才继续检查 warnings(放行但需人工关注),避免同一次发布重复告警。
+      const gate = checkArticle(markdown);
+      if (gate.errors.length) {
+        try { if (notifier && notify) await notifier.warn(notify, `门禁拦截,不予发布:\n${gate.errors.join('\n')}`); }
+        catch (warnErr) { console.error('门禁拦截告警失败:', warnErr); }
+        const err = new Error(`门禁拦截,不予发布:${gate.errors.join('; ')}`);
+        err.stage = 'gate';
+        throw err;
+      }
+      if (gate.warnings.length) {
+        try { if (notifier && notify) await notifier.warn(notify, `门禁提醒:\n${gate.warnings.join('\n')}`); }
+        catch (warnErr) { console.error('门禁提醒告警失败(不影响流程):', warnErr); }
+      }
+
+      // 注入固定头尾图(幂等)。config.assets 缺失路径时对应块静默跳过。
+      const assetsConfig = config.assets || {};
+      const injectResult = injectFixedImages(markdown, {
+        headerPath: assetsConfig.headerImage,
+        footerPath: assetsConfig.footerImage,
+      });
+      if (injectResult.skipped.length) {
+        try { if (notifier && notify) await notifier.warn(notify, `固定头尾图缺失,已跳过注入:${injectResult.skipped.join(', ')}`); }
+        catch (warnErr) { console.error('固定图告警失败(不影响流程):', warnErr); }
+      }
+      if (injectResult.markdown !== markdown) {
+        await writeArticle(articlePath, injectResult.markdown);
+        markdown = injectResult.markdown;
+      }
+
       // 微信草稿要求封面图:渲染发布前必须先生成封面并写入 frontmatter
       try {
-        const cover = await generateCover({ title, outDir: path.dirname(articlePath) });
+        const cover = await generateCover({ title, outDir: path.dirname(articlePath), markdown, writer: config.writer });
         const updated = ensureFrontmatterCover(markdown, cover);
-        if (updated !== markdown) await writeArticle(articlePath, updated);
+        if (updated !== markdown) { await writeArticle(articlePath, updated); markdown = updated; }
       } catch (e) {
         try { if (notifier && notify) await notifier.warn(notify, `封面生成失败,需人工补图:${e.message}`); }
         catch (warnErr) { console.error('封面告警失败(不影响错误上抛):', warnErr); }
@@ -62,11 +96,13 @@ export function makeChannel({
       process.env.WECHAT_APP_SECRET = appSecret;
       try {
         const mediaId = await renderAndPublish(undefined, { ...RENDER_OPTS, file: articlePath }, getInputContent);
-        // 名片注入:失败不阻断出草稿,只告警;告警本身失败也绝不能影响已成功的发布结果
-        try {
-          try { await injectFollowCard({ config, mediaId }); }
-          catch (e) { if (notifier && notify) await notifier.warn(notify, `名片注入失败(草稿已出):${e.message}`); }
-        } catch (warnErr) { console.error('名片告警失败(不影响发布结果):', warnErr); }
+        // 默认不自动注入账号名片。若后续确认名片数据正确,可用 WECHAT_INJECT_FOLLOW_CARD=1 显式开启。
+        if (process.env.WECHAT_INJECT_FOLLOW_CARD === '1') {
+          try {
+            try { await injectFollowCard({ config, mediaId }); }
+            catch (e) { if (notifier && notify) await notifier.warn(notify, `名片注入失败(草稿已出):${e.message}`); }
+          } catch (warnErr) { console.error('名片告警失败(不影响发布结果):', warnErr); }
+        }
         return { mediaId, title };
       } catch (e) { const err = new Error(`发布失败:${e.message}`); err.stage = 'publish'; throw err; }
       finally {

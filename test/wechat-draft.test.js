@@ -2,6 +2,20 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeChannel, RENDER_OPTS } from '../src/channels/wechat-draft.js';
 
+// 合规、含固定结尾板块、无破折号/美元符号的完整文章,门禁应零 errors/零 warnings,
+// 避免门禁的 notifier.warn 调用干扰各测试对 warned 数组长度/内容的断言。
+const VALID_MD = [
+  '---',
+  'title: 测试标题',
+  '---',
+  '正文内容,符合规范。',
+  '',
+  'ZEN TRADING STRATEGIES',
+  '板块模型 · 量化策略 · 前沿解读',
+  '本文为研究用途,不构成任何投资建议。',
+  '',
+].join('\n');
+
 const stubCover = { generateCover: async () => '/x/cover.png', writeArticle: async () => {} };
 
 test('RENDER_OPTS 与 wenyan-mcp 复刻一致', () => {
@@ -27,7 +41,7 @@ test('renderAndPublish 抛错 → stage=publish', async () => {
   const channel = makeChannel({
     ...stubCover,
     renderAndPublish: async () => { throw new Error('40164'); },
-    readArticle: async () => ({ markdown: 'x', title: 't' }),
+    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
   });
   await assert.rejects(() => channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } } }), (e) => { assert.equal(e.stage, 'publish'); return true; });
 });
@@ -56,12 +70,27 @@ test('缺失微信凭据 → stage=publish 且不调用 renderAndPublish', async
   assert.equal(called, false);
 });
 
-test('publish 成功后调用 injectFollowCard(传 config/mediaId)', async () => {
+test('publish 成功默认不调用 injectFollowCard', async () => {
+  let called = false;
+  const channel = makeChannel({
+    ...stubCover,
+    renderAndPublish: async () => 'MEDIA-9',
+    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
+    injectFollowCard: async () => { called = true; },
+  });
+  const out = await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
+  assert.equal(out.mediaId, 'MEDIA-9');
+  assert.equal(called, false);
+});
+
+test('WECHAT_INJECT_FOLLOW_CARD=1 时 publish 成功后调用 injectFollowCard(传 config/mediaId)', async () => {
+  const prev = process.env.WECHAT_INJECT_FOLLOW_CARD;
+  process.env.WECHAT_INJECT_FOLLOW_CARD = '1';
   let calledWith;
   const channel = makeChannel({
     ...stubCover,
     renderAndPublish: async () => 'MEDIA-9',
-    readArticle: async () => ({ markdown: 'x', title: 't' }),
+    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
     injectFollowCard: async (args) => { calledWith = args; },
   });
   const config = { wechat: { appId: 'wx', appSecret: 's' } };
@@ -69,16 +98,19 @@ test('publish 成功后调用 injectFollowCard(传 config/mediaId)', async () =>
   assert.equal(out.mediaId, 'MEDIA-9');
   assert.equal(calledWith.mediaId, 'MEDIA-9');
   assert.equal(calledWith.config, config);
+  if (prev === undefined) delete process.env.WECHAT_INJECT_FOLLOW_CARD; else process.env.WECHAT_INJECT_FOLLOW_CARD = prev;
 });
 
-test('injectFollowCard 失败 → 不阻断发布,调用 notifier.warn 告警', async () => {
+test('WECHAT_INJECT_FOLLOW_CARD=1 时 injectFollowCard 失败 → 不阻断发布,调用 notifier.warn 告警', async () => {
+  const prev = process.env.WECHAT_INJECT_FOLLOW_CARD;
+  process.env.WECHAT_INJECT_FOLLOW_CARD = '1';
   const warned = [];
   const notifier = { warn: async (notify, msg) => warned.push({ notify, msg }) };
   const notify = { channel: 'C', ts: '1' };
   const channel = makeChannel({
     ...stubCover,
     renderAndPublish: async () => 'MEDIA-9',
-    readArticle: async () => ({ markdown: 'x', title: 't' }),
+    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
     injectFollowCard: async () => { const e = new Error('40001'); e.stage = 'card'; throw e; },
   });
   const out = await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } }, notify, notifier });
@@ -87,13 +119,14 @@ test('injectFollowCard 失败 → 不阻断发布,调用 notifier.warn 告警', 
   assert.equal(warned[0].notify, notify);
   assert.match(warned[0].msg, /名片注入失败/);
   assert.match(warned[0].msg, /40001/);
+  if (prev === undefined) delete process.env.WECHAT_INJECT_FOLLOW_CARD; else process.env.WECHAT_INJECT_FOLLOW_CARD = prev;
 });
 
 test('injectFollowCard 失败但未传 notifier/notify → 静默继续,不抛错', async () => {
   const channel = makeChannel({
     ...stubCover,
     renderAndPublish: async () => 'MEDIA-9',
-    readArticle: async () => ({ markdown: 'x', title: 't' }),
+    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
     injectFollowCard: async () => { throw new Error('网络错误'); },
   });
   const out = await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
@@ -106,7 +139,7 @@ test('publish 成功后恢复 process.env 的原值', async () => {
   const channel = makeChannel({
     ...stubCover,
     renderAndPublish: async () => 'MEDIA-9',
-    readArticle: async () => ({ markdown: 'x', title: 't' }),
+    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
     injectFollowCard: async () => {},
   });
   await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
@@ -114,18 +147,21 @@ test('publish 成功后恢复 process.env 的原值', async () => {
   assert.equal(process.env.WECHAT_APP_SECRET, prevAppSecret);
 });
 
-test('injectFollowCard 和 notifier.warn 都抛错 → publish 仍返回 mediaId/title,不标记 stage=publish', async () => {
+test('WECHAT_INJECT_FOLLOW_CARD=1 且 injectFollowCard 和 notifier.warn 都抛错 → publish 仍返回 mediaId/title,不标记 stage=publish', async () => {
+  const prev = process.env.WECHAT_INJECT_FOLLOW_CARD;
+  process.env.WECHAT_INJECT_FOLLOW_CARD = '1';
   const notifier = { warn: async () => { throw new Error('Slack 网络错误'); } };
   const notify = { channel: 'C', ts: '1' };
   const channel = makeChannel({
     ...stubCover,
     renderAndPublish: async () => 'MEDIA-9',
-    readArticle: async () => ({ markdown: 'x', title: 't' }),
+    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
     injectFollowCard: async () => { throw new Error('40001'); },
   });
   const out = await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } }, notify, notifier });
   assert.equal(out.mediaId, 'MEDIA-9');
   assert.equal(out.title, 't');
+  if (prev === undefined) delete process.env.WECHAT_INJECT_FOLLOW_CARD; else process.env.WECHAT_INJECT_FOLLOW_CARD = prev;
 });
 
 test('publish 前先生成封面并写入 frontmatter(传给 renderAndPublish 前文件已含 cover)', async () => {
@@ -145,17 +181,18 @@ test('publish 前先生成封面并写入 frontmatter(传给 renderAndPublish �
   assert.match(writtenMarkdown, /cover:\s*\/out\/cover\.png/);
 });
 
-test('frontmatter 已有 cover 时不重复写文件', async () => {
-  let writeCalled = false;
+test('frontmatter 已有 cover 时替换为本次生成的新封面', async () => {
+  let writtenMarkdown;
   const channel = makeChannel({
     generateCover: async () => '/out/new-cover.png',
-    writeArticle: async () => { writeCalled = true; },
+    writeArticle: async (p, content) => { writtenMarkdown = content; },
     renderAndPublish: async () => 'MEDIA-9',
     readArticle: async () => ({ markdown: '---\ntitle: T\ncover: /old.png\n---\n正文', title: 'T' }),
     injectFollowCard: async () => {},
   });
   await channel.publish({ articlePath: '/out/article.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
-  assert.equal(writeCalled, false);
+  assert.match(writtenMarkdown, /cover:\s*\/out\/new-cover\.png/);
+  assert.doesNotMatch(writtenMarkdown, /\/old\.png/);
 });
 
 test('封面生成失败 → notifier.warn 告警,抛错 stage=cover,不调用 renderAndPublish', async () => {
@@ -166,7 +203,7 @@ test('封面生成失败 → notifier.warn 告警,抛错 stage=cover,不调用 r
   const channel = makeChannel({
     generateCover: async () => { throw new Error('Chrome 未安装'); },
     renderAndPublish: async () => { renderCalled = true; return 'MEDIA-9'; },
-    readArticle: async () => ({ markdown: 'x', title: 't' }),
+    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
   });
   await assert.rejects(
     () => channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } }, notify, notifier }),
@@ -182,7 +219,7 @@ test('封面生成失败且未传 notifier/notify → 仍抛错 stage=cover,不�
   const channel = makeChannel({
     generateCover: async () => { throw new Error('生成器退出码非0'); },
     renderAndPublish: async () => 'MEDIA-9',
-    readArticle: async () => ({ markdown: 'x', title: 't' }),
+    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
   });
   await assert.rejects(
     () => channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } } }),
@@ -196,10 +233,118 @@ test('notifier.warn 本身抛错 → 不掩盖 stage=cover 错误', async () => 
   const channel = makeChannel({
     generateCover: async () => { throw new Error('封面生成器崩溃'); },
     renderAndPublish: async () => 'MEDIA-9',
-    readArticle: async () => ({ markdown: 'x', title: 't' }),
+    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
   });
   await assert.rejects(
     () => channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } }, notify, notifier }),
     (e) => { assert.equal(e.stage, 'cover'); return true; }
   );
+});
+
+// ---- 门禁(gate)接线 ----
+
+test('门禁 errors 命中 → notifier.warn 汇总告警,抛错 stage=gate,不调用 injectFixedImages/generateCover/renderAndPublish', async () => {
+  const warned = [];
+  const notifier = { warn: async (notify, msg) => warned.push({ notify, msg }) };
+  const notify = { channel: 'C', ts: '1' };
+  let injectCalled = false;
+  let coverCalled = false;
+  let renderCalled = false;
+  const channel = makeChannel({
+    readArticle: async () => ({ markdown: '无 frontmatter 的正文', title: 't' }),
+    injectFixedImages: (md) => { injectCalled = true; return { markdown: md, skipped: [] }; },
+    generateCover: async () => { coverCalled = true; return '/x/cover.png'; },
+    writeArticle: async () => {},
+    renderAndPublish: async () => { renderCalled = true; return 'MEDIA-9'; },
+  });
+  await assert.rejects(
+    () => channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } }, notify, notifier }),
+    (e) => { assert.equal(e.stage, 'gate'); return true; }
+  );
+  assert.equal(injectCalled, false);
+  assert.equal(coverCalled, false);
+  assert.equal(renderCalled, false);
+  assert.equal(warned.length, 1);
+  assert.match(warned[0].msg, /门禁拦截/);
+  assert.match(warned[0].msg, /title/);
+});
+
+test('门禁 errors 命中且未传 notifier/notify → 仍抛错 stage=gate,不崩溃', async () => {
+  const channel = makeChannel({
+    readArticle: async () => ({ markdown: '无 frontmatter 的正文', title: 't' }),
+    renderAndPublish: async () => 'MEDIA-9',
+  });
+  await assert.rejects(
+    () => channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } } }),
+    (e) => { assert.equal(e.stage, 'gate'); return true; }
+  );
+});
+
+test('门禁 warnings 命中 → notifier.warn 告警后继续发布(不阻断)', async () => {
+  const warned = [];
+  const notifier = { warn: async (notify, msg) => warned.push({ notify, msg }) };
+  const notify = { channel: 'C', ts: '1' };
+  const mdWithDash = '---\ntitle: T\n---\n正文含破折号——用法。\n\nZEN TRADING STRATEGIES\n板块模型 · 量化策略 · 前沿解读\n本文为研究用途,不构成任何投资建议。\n';
+  const channel = makeChannel({
+    ...stubCover,
+    readArticle: async () => ({ markdown: mdWithDash, title: 'T' }),
+    renderAndPublish: async () => 'MEDIA-9',
+  });
+  const out = await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } }, notify, notifier });
+  assert.equal(out.mediaId, 'MEDIA-9');
+  assert.equal(warned.length, 1);
+  assert.match(warned[0].msg, /门禁提醒/);
+  assert.match(warned[0].msg, /破折号/);
+});
+
+// ---- 固定头尾图注入(assets)接线 ----
+
+test('注入头尾图后写回 article.md,渲染前 markdown 已含固定图,generateCover 收到注入后的 markdown', async () => {
+  let writtenMarkdown;
+  let generateCoverArgs;
+  const channel = makeChannel({
+    generateCover: async (args) => { generateCoverArgs = args; return '/out/cover.png'; },
+    writeArticle: async (p, content) => { writtenMarkdown = content; },
+    renderAndPublish: async () => 'MEDIA-9',
+    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
+    injectFixedImages: (md) => ({ markdown: `${md}\n![Zen Trading 社群](/abs/footer.png)\n`, skipped: [] }),
+  });
+  const out = await channel.publish({
+    articlePath: '/out/article.md',
+    config: { wechat: { appId: 'wx', appSecret: 's' }, assets: { headerImage: '/abs/header.gif', footerImage: '/abs/footer.png' } },
+  });
+  assert.equal(out.mediaId, 'MEDIA-9');
+  assert.match(generateCoverArgs.markdown, /\/abs\/footer\.png/);
+  assert.match(writtenMarkdown, /\/abs\/footer\.png/); // 最终写回文件含 cover + 固定图
+});
+
+test('固定图缺失(skipped 非空) → notifier.warn 告警,流程继续', async () => {
+  const warned = [];
+  const notifier = { warn: async (notify, msg) => warned.push({ notify, msg }) };
+  const notify = { channel: 'C', ts: '1' };
+  const channel = makeChannel({
+    ...stubCover,
+    renderAndPublish: async () => 'MEDIA-9',
+    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
+    injectFixedImages: (md) => ({ markdown: md, skipped: ['/abs/missing-header.gif'] }),
+  });
+  const out = await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } }, notify, notifier });
+  assert.equal(out.mediaId, 'MEDIA-9');
+  assert.equal(warned.length, 1);
+  assert.match(warned[0].msg, /固定头尾图缺失/);
+  assert.match(warned[0].msg, /missing-header\.gif/);
+});
+
+test('injectFixedImages 未产生变化时不调用 writeArticle(仅 generateCover 阶段写一次)', async () => {
+  let writeCount = 0;
+  const channel = makeChannel({
+    generateCover: async () => '/out/cover.png',
+    writeArticle: async () => { writeCount += 1; },
+    renderAndPublish: async () => 'MEDIA-9',
+    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
+    injectFixedImages: (md) => ({ markdown: md, skipped: [] }), // 无变化
+  });
+  const out = await channel.publish({ articlePath: '/out/article.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
+  assert.equal(out.mediaId, 'MEDIA-9');
+  assert.equal(writeCount, 1); // 只有 cover 那次写入
 });
