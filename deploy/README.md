@@ -1,56 +1,47 @@
-# Zen Content Hub 部署指南（国内 VPS 常驻）
+# Zen Content Hub 部署指南（海外 VPS 常驻）
 
-本文档只描述部署步骤与文件用途，**不代表本任务已执行实际部署**——部署工件（`.env.example` / systemd unit / 本文档）在这里只是写好，供后续人工/脚本在真实 VPS 上执行。
+本文档只描述部署步骤与文件用途，**不代表本任务已执行实际部署**。部署目标是一台已有的海外 VPS，写作内核走 OpenRouter，调研走 Exa，微信公众号发布走微信 API。
 
-## 0. 为什么这台机器必须是「国内 VPS + 固定公网 IP」
+## 0. 硬要求
 
-微信公众号后台的 IP 白名单机制要求：调用 `cgi-bin/token` 等接口的服务器出口 IP，必须提前登记在公众号后台「基本配置 → IP 白名单」里，否则接口直接拒绝（错误码 `40164`）。这意味着：
+微信公众号后台的 IP 白名单机制要求：调用 `cgi-bin/token` 等接口的服务器出口 IP，必须提前登记在公众号后台「基本配置 → IP 白名单」里，否则接口会拒绝，常见错误码是 `40164`。
 
-- **不能用海外 VPS**：国内到微信 API 的网络质量、以及很多微信接口对非大陆 IP 有额外风控，稳定性差。
-- **不能用会漂移 IP 的机器**（例如某些按需重启就换 IP 的云主机、家庭宽带 PPPoE 拨号）：IP 一变，白名单立刻失效，服务不可用直到重新加白。
-- **必须选「固定公网 IP」套餐**：阿里云 / 腾讯云 / 华为云等按量或包年的 ECS/CVM，绑定弹性公网 IP（EIP），全程不释放。
+- 使用固定公网 IP 的海外 VPS，不新开云机。
+- OpenRouter、Exa、微信 API、Slack 在海外机上应全部直连，不配置代理。
+- 必须把 VPS 实际出口 IP 加入公众号 IP 白名单。
+- `.env` 只放真实密钥，绝不提交 git。
 
-> 项目历史踩坑记录（wenyan-mcp 出口 IP 曾经漂移，撞过两次 40164）：出口 IP 一旦变化 = 服务立即中断，且不会有明显报错日志提示"是 IP 问题"，容易误判为 token 或代码 bug。**这是本项目上线后最容易复发的故障，务必按下面的固定 IP + 白名单流程执行，不要临时用测试机 IP 顶替。**
+## 1. VPS 自测
 
-## 1. VPS 选型与准备
-
-1. 选择大陆节点的云服务器（ECS/CVM/云主机均可），操作系统 Ubuntu 22.04/24.04 或同等 Linux 发行版。
-2. 购买/绑定一个**弹性公网 IP（EIP）**并明确该 IP 长期不变（不要用临时公网 IP、不要开启自动续费释放）。
-3. 记录这个固定公网 IP，下一步要用。
-
-## 2. 把 VPS 出口 IP 加入公众号 IP 白名单
-
-1. 登录 [微信公众平台](https://mp.weixin.qq.com) → 「设置与开发」→「基本配置」→ 找到「IP 白名单」。
-2. 点击「修改」，把第 1 步记录的固定公网 IP 添加进去（多个 IP 用换行分隔）。
-3. 保存后**等待几分钟生效**（不是立即生效，首次部署验证时留出等待时间，不要一测失败就怀疑代码）。
-4. 建议：VPS 上执行 `curl ifconfig.me`（走直连，不能挂代理）确认实际出口 IP 与白名单里登记的一致——云厂商的 NAT/多网卡场景下，服务器看到的内网 IP 不等于外部实际出口 IP。
-
-## 3. 安装运行环境
+把代码放到 VPS 后，先跑：
 
 ```bash
-# Node 24
+bash deploy/vps-check.sh
+```
+
+它会检查 Node 版本、OpenRouter/Exa/微信/Slack 连通性、git、磁盘，并打印本机公网出口 IP。把打印出的 IP 加入公众号后台白名单。
+
+## 2. 安装运行环境
+
+推荐 Ubuntu 22.04/24.04 或同等 Linux 发行版，Node 需要 >=22：
+
+```bash
 curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
-apt-get install -y nodejs
-node -v   # 确认 >= 24
-
-# Claude CLI
-npm install -g @anthropic-ai/claude-code   # 或参照官方安装脚本
+apt-get install -y nodejs git
+node -v
+npm -v
 ```
 
-### 认证 Claude CLI（必须经代理，因为 Anthropic 服务在境外）
+本项目不再需要安装 Claude CLI，也不需要认证 Anthropic。
 
-大陆 VPS 直连无法访问 Anthropic，认证与后续调用都要走代理。在**认证这一步**临时导出代理变量（注意：只在认证这个 shell 会话里设置，不要写进服务的 `.env` 主进程会用到的变量里）：
+## 3. 配置微信 IP 白名单
 
-```bash
-export https_proxy=http://127.0.0.1:7897
-export all_proxy=socks5://127.0.0.1:7897
-claude   # 走一遍登录/认证流程
-unset https_proxy all_proxy
-```
+1. 登录 [微信公众平台](https://mp.weixin.qq.com)。
+2. 进入「设置与开发」→「基本配置」→「IP 白名单」。
+3. 把 `deploy/vps-check.sh` 打印的公网出口 IP 加进去。
+4. 保存后等待几分钟生效。
 
-认证成功后，`claude` 会把凭证缓存在本地（一般在 `~/.claude` 下），后续子进程调用不需要重新走浏览器登录，只需要在**运行时**通过 `CHILD_HTTPS_PROXY` / `CHILD_ALL_PROXY`（见下文 `.env`）让 Claude 子进程能连上 Anthropic 即可。
-
-> 关键约束（Task 12 已在代码里强制校验）：**主进程（微信 API 调用）严禁设置 `https_proxy`/`http_proxy`/`all_proxy`**，一旦检测到会直接抛错拒绝启动（见 `src/index.js` 的 `assertMainProcessDirect()`）。代理只能通过 `.env` 里的 `CHILD_HTTPS_PROXY` / `CHILD_ALL_PROXY` 注入 Claude 子进程，两条链路必须物理隔离，否则微信调用会被代理节点污染出口 IP，导致白名单失效。
+如果发布时报 `40164`，优先在 VPS 上重新执行 `curl https://api.ipify.org` 或 `bash deploy/vps-check.sh`，确认实际出口 IP 与白名单一致。
 
 ## 4. 部署代码
 
@@ -66,12 +57,39 @@ npm ci
 ```bash
 cp deploy/.env.example /srv/zen/app/.env
 chmod 600 /srv/zen/app/.env
-vi /srv/zen/app/.env   # 填入真实的 SLACK_BOT_TOKEN / SLACK_APP_TOKEN / NOTIFY_CHANNEL_ID / WECHAT_APP_ID / WECHAT_APP_SECRET / 代理地址
+vi /srv/zen/app/.env
 ```
 
-各字段含义见 `deploy/.env.example` 内注释；再次强调：`CHILD_HTTPS_PROXY`/`CHILD_ALL_PROXY` 只给 Claude 子进程用，`NO_PROXY` 必须包含 `api.weixin.qq.com,mp.weixin.qq.com`，确保即使误配置也不会把微信调用导向代理。
+必须填写：
 
-## 6. 安装为 systemd 服务并启动
+- `OPENROUTER_API_KEY`
+- `OPENROUTER_MODEL`
+- `EXA_API_KEY`
+- `SLACK_BOT_TOKEN`
+- `SLACK_APP_TOKEN`
+- `NOTIFY_CHANNEL_ID`
+- `WECHAT_APP_ID`
+- `WECHAT_APP_SECRET`
+
+海外 VPS 不需要 `https_proxy`、`http_proxy`、`all_proxy`。`src/index.js` 的 `assertMainProcessDirect()` 会在主进程检测到这些代理变量时拒绝启动，避免微信调用出口 IP 被代理污染。
+
+## 6. 本地/线上演练
+
+先 dry-run，验证 Slack 触发、排队、OpenRouter/Exa 写作、mock 发布、Slack 回报：
+
+```bash
+HUB_DRY_RUN=1 node src/index.js
+```
+
+确认链路可用后，再去掉 `HUB_DRY_RUN`，任务会发布到微信公众号草稿箱：
+
+```bash
+node src/index.js
+```
+
+建议先到草稿箱人工核对中文金融写作质量、标题、封面、关注名片与排版，再进行后续正式发布动作。
+
+## 7. 安装为 systemd 服务
 
 ```bash
 cp deploy/zen-content-hub.service /etc/systemd/system/zen-content-hub.service
@@ -79,65 +97,103 @@ cp deploy/zen-content-hub.service /etc/systemd/system/zen-content-hub.service
 systemctl daemon-reload
 systemctl enable --now zen-content-hub
 systemctl status zen-content-hub
-journalctl -u zen-content-hub -f   # 查看实时日志
+journalctl -u zen-content-hub -f
 ```
 
-## 7. Claude 认证保活
+## 8. OpenRouter 探活
 
-Claude CLI 的登录凭证可能过期（例如长期未用、被服务端吊销）。子进程认证失效不会让 systemd 服务本身崩溃（`runClaude` 只是让单次任务失败），因此需要**主动定时探活**，而不是等用户发文时才发现。
+`src/lib/health.js` 导出 `checkOpenRouterHealth({ config, fetchFn })`，会请求 OpenRouter `/models`，确认 API key 和网络可用。测试中仍保留 `checkClaudeAuth` 旧导出名作为兼容别名，但它实际指向 OpenRouter 探活。
 
-用法：`src/lib/health.js` 导出 `checkClaudeAuth({ execFn })`，注入一个真正执行命令的 `execFn`（例如封装 `node:child_process` 的 `execFile`），跑一次极小的 `claude -p "ping" --output-format json`：
+可在后续接入 node-cron 或 systemd timer，每小时探活一次，失败时复用 `src/core/notifier.js` 发 Slack 告警。
 
-```js
-import { checkClaudeAuth } from '../src/lib/health.js';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-const pExecFile = promisify(execFile);
+## 9. 故障排查
 
-const execFn = (cmd, args) => pExecFile(cmd, args, {
-  env: { ...process.env, https_proxy: process.env.CHILD_HTTPS_PROXY, all_proxy: process.env.CHILD_ALL_PROXY },
-});
+### 微信接口报 `40164`
 
-const { ok, detail } = await checkClaudeAuth({ execFn });
-if (!ok) {
-  // 复用 src/core/notifier.js 的 notifier.warn(...) 把 detail 发到 Slack 告警频道
-}
-```
+- 现象：Slack 失败通知里 `stage` 多为 `publish`，错误信息包含 `40164` 或 IP。
+- 排查：确认 VPS 当前公网出口 IP 已加入公众号 IP 白名单；确认主进程没有设置代理变量。
 
-建议接入方式二选一：
-
-- **node-cron**（项目已依赖 `node-cron`）：在 `src/index.js` 启动流程里加一条每小时的 cron job，调用上面的探活逻辑，失败时通过既有的 `createNotifier` 往 `NOTIFY_CHANNEL_ID` 发 `⚠️` 告警。
-- **系统级 systemd timer**：额外写一个一次性脚本 + `zen-content-hub-healthcheck.timer`，与主服务解耦，即使主服务卡死也能告警。
-
-保活探活本身**不需要真的调用生产 claude 二进制去测试**——这属于运行期集成，本任务只交付 `checkClaudeAuth` 函数与说明，接入 cron 的具体代码留给部署时按需接线。
-
-## 8. 故障排查
-
-### 8.1 微信接口报 `40164`（IP 不在白名单）
-
-- 现象：Slack 收到失败通知，`stage` 多为 `publish`，错误信息里包含 `40164` 或“IP”。
-- 排查：
-  1. `curl ifconfig.me`（不挂代理）确认服务器当前实际出口 IP。
-  2. 对照公众号后台「IP 白名单」列表，看是否一致。云主机换了套餐、重装系统、或运营商 NAT 出口漂移都可能导致这个 IP 变化。
-  3. 不一致就把新 IP 加回白名单，等待几分钟生效后重试。
-  4. 长期方案：优先选择「弹性公网 IP 单独购买并绑定」的云主机规格，避免和「随实例分配、实例重建就变」的公网 IP 混用。
-
-### 8.2 微信接口报 `40001`（access_token 无效/过期）
+### 微信接口报 `40001`
 
 - 现象：错误信息包含 `40001` 或 `invalid credential`。
-- 常见原因：
-  - `WECHAT_APP_SECRET` 填错或改密后未同步 `.env`。
-  - 同一个 `appid/secret` 被另一套系统/另一台机器并发调用 `getAccessToken`，各自本地缓存的 token 互相顶掉（微信 access_token 全局唯一，最新一次调用会让旧 token 失效）。
-  - 时钟漂移导致以为 token 还没过期。
-- 排查：确认 `.env` 里的 `WECHAT_APP_SECRET` 与后台一致；确认没有其他脚本/服务在用同一个 appid 抢 token；必要时重启服务强制重新获取。
+- 排查：确认 `WECHAT_APP_SECRET` 与后台一致；确认没有另一套系统使用同一 appid/secret 抢 token。
 
-### 8.3 发布草稿失败，提示缺少封面（cover）
+### 生成阶段失败
 
-- 现象：`draft/add` 或后续更新接口报错提示缺少 `thumb_media_id` / 封面图。
-- 排查：确认 `src/lib/cover.js`（或工作流里生成封面的步骤）产出的封面图片已成功上传素材库并拿到 `media_id`，再传给草稿接口；检查封面图片尺寸/格式是否符合微信要求（建议使用项目内既有封面生成逻辑，不要跳过这一步直接传空值）。
+- 现象：Slack 失败通知 `stage=generate`。
+- 排查：确认 `OPENROUTER_API_KEY`、`OPENROUTER_MODEL`、`EXA_API_KEY`；运行 `bash deploy/vps-check.sh` 检查 OpenRouter/Exa 连通性。
 
-### 8.4 其他排查通用手段
+### 发布草稿失败，提示缺少封面
+
+- 现象：`draft/add` 或后续更新接口提示缺少 `thumb_media_id` 或封面图。
+- 排查：确认 `src/lib/cover.js` 调用的 `~/zen-push-image` 可用，且生成的封面图片已成功上传素材库并拿到 `media_id`。
+
+### 通用手段
 
 - `journalctl -u zen-content-hub -f`：看主服务实时日志。
-- `systemctl status zen-content-hub`：确认服务是否处于 `Restart=always` 的反复重启循环（如果是，说明启动阶段就在报错，通常是 `.env` 缺关键变量或 `assertMainProcessDirect()` 因主进程误设代理而拒绝启动）。
-- Slack 通知：所有任务失败都会带 `stage` 字段（`generate`/`publish`/`card` 等），先看 `stage` 定位是 Claude 生成阶段还是微信发布阶段的问题。
+- `systemctl status zen-content-hub`：确认服务是否反复重启。
+- Slack 通知：失败会带 `stage` 字段，先按 `generate` / `publish` / `cover` / `card` 定位。
+
+## 10. 本机 macOS launchd 常驻（替代方案）
+
+如果不打算用海外 VPS，而是让这台 Mac 长期开机、随开机自动拉起 bot，可以用 macOS 自带的
+launchd 代替 systemd。适用场景：电脑本身长期开机（或至少工作时间段开机），希望开机/登录后
+`@bot` 就能响应，不用每次手动 `node src/index.js` 或在 VS Code 里手动跑。
+
+### 前提
+
+- 仓库根目录已有 `.env`（参考 `deploy/.env.example` 填好必填项）。
+- `node` 在 PATH 中可用。
+- **不要**给这台 Mac 上跑的主进程设置 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`：`src/index.js`
+  的 `assertMainProcessDirect()` 检测到这些代理变量会直接拒绝启动。这是有意为之的设计，
+  避免微信 API 调用的出口 IP 被代理节点污染。安装脚本生成的 plist 里
+  `EnvironmentVariables` 只设置了 `PATH`，不会注入任何代理变量；但如果这台 Mac 本身通过
+  Clash TUN 之类的系统级代理上网，进程流量依然会被转发（见下方 IP 白名单提醒）。
+
+### 安装
+
+```bash
+bash scripts/install-launchd.sh
+```
+
+脚本会：
+1. 校验 `.env` 与 `node` 是否就绪；
+2. 在 `~/Library/LaunchAgents/com.zentrading.content-hub.plist` 生成/覆盖 LaunchAgent 配置
+   （`RunAtLoad` 开机自启，`KeepAlive` 仅在崩溃时重启、正常退出不重启）；
+3. 若已加载旧实例会先卸载再重新加载，可重复安全执行（幂等）。
+
+### 卸载
+
+```bash
+bash scripts/uninstall-launchd.sh
+```
+
+### 看日志
+
+```bash
+tail -f ~/Library/Logs/zen-content-hub/out.log
+tail -f ~/Library/Logs/zen-content-hub/err.log
+```
+
+### 查看状态 / 重启
+
+```bash
+launchctl print gui/$(id -u)/com.zentrading.content-hub | head
+launchctl kickstart -k gui/$(id -u)/com.zentrading.content-hub   # 强制重启
+```
+
+### 与 VS Code 手动启动互斥
+
+launchd 常驻和在 VS Code（或终端）里手动 `node src/index.js` **不能同时跑**——两个进程会
+用同一个 Slack App Token 建立 Socket Mode 连接，重复消费同一个 Slack 事件，导致同一条消息
+被处理/回复两次，甚至微信草稿箱出现重复文章。安装 launchd 常驻前，先确认没有另一个手动
+启动的实例在跑（检查 VS Code 终端、`ps aux | grep 'node src/index.js'`）；反过来，如果要临时
+手动调试，先执行 `bash scripts/uninstall-launchd.sh` 或至少 `launchctl bootout` 停掉常驻实例，
+避免两边同时抢事件。
+
+### 微信 IP 白名单注意事项
+
+微信公众号后台的 IP 白名单只认服务器出口 IP。本机如果通过 Clash TUN 之类的系统级代理上网，
+实际出口 IP 是代理节点的 IP，而不是本机公网 IP；切换代理节点后出口 IP 会变，微信接口会报
+`40164`。用 launchd 常驻这台 Mac 时，每次更换代理节点都需要重新确认出口 IP（如
+`curl https://api.ipify.org`）并同步更新公众号后台的 IP 白名单，否则发布会持续失败。
