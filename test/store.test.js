@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { openStore } from '../src/core/store.js';
 
 test('createRun / getRun / setStatus 流转', () => {
@@ -34,4 +37,13 @@ test('markInterrupted 把 running 置 interrupted', () => {
   s.setStatus('a', 'running', {});
   assert.equal(s.markInterrupted(), 1);
   assert.equal(s.getRun('a').status, 'interrupted');
+});
+
+test('openStore 自动创建数据库父目录', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'store-'));
+  const dbPath = path.join(root, 'missing', 'nested', 'runs.db');
+  const s = openStore(dbPath);
+  s.createRun({ id: 'r3', workflowId: 'wechat', source: 'slack', input: 'x', notify: {} });
+  assert.equal(s.getRun('r3').status, 'queued');
+  assert.equal(fs.existsSync(path.dirname(dbPath)), true);
 });

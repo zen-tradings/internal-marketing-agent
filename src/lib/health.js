@@ -1,10 +1,22 @@
-// Claude 认证自检：跑一次极小探活命令，用来确认子进程仍能通过代理认证到 Anthropic。
-// execFn 由调用方注入（生产环境用真正 spawn/exec claude 的实现；测试用 fake，避免真调用 claude 二进制)。
-export async function checkClaudeAuth({ execFn }) {
+export async function checkOpenRouterHealth({ config, fetchFn = globalThis.fetch }) {
   try {
-    const { stdout } = await execFn('claude', ['-p', 'ping', '--output-format', 'json']);
-    return { ok: true, detail: String(stdout).slice(0, 120) };
+    const writer = config.writer || {};
+    const baseUrl = String(writer.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
+    const res = await fetchFn(`${baseUrl}/models`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${writer.openrouterApiKey}` },
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText} ${await safeText(res)}`.trim());
+    const data = await res.json();
+    const count = Array.isArray(data.data) ? data.data.length : 0;
+    return { ok: true, detail: `models:${count}` };
   } catch (e) {
-    return { ok: false, detail: e.message };
+    return { ok: false, detail: String(e.message || e).slice(0, 120) };
   }
+}
+
+export const checkClaudeAuth = checkOpenRouterHealth;
+
+async function safeText(res) {
+  try { return (await res.text()).slice(0, 120); } catch { return ''; }
 }

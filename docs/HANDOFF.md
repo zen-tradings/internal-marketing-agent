@@ -2,15 +2,14 @@
 
 > 交接日期：2026-07-05 · 交接自：Claude（子项目 A 实现者）· 接手方：Codex
 > 分支：`feat/content-hub-engine`（领先 `main` 19 个提交，未合并）
-> 一句话：`zen-slack-bot` 已从单文件 Slack→微信 bot 重构为**模块化多工作流内容编排引擎**。子项目 A（引擎 + 微信渠道）已完成、54 项测试全绿；接下来主要是**用 OpenRouter 开源模型替代 Claude Code 作为写作/调研内核**，并**部署到一台海外 VPS** 做真实发布冒烟。
+> 一句话：`zen-slack-bot` 已从单文件 Slack→微信 bot 重构为**模块化多工作流内容编排引擎**。子项目 A（引擎 + 微信渠道）已完成；Codex 已完成 T-A：**用 OpenRouter 开源模型 + Exa 替代 Claude Code 作为写作/调研内核**。接下来主要是**部署到一台海外 VPS** 做真实发布冒烟。
 
 ---
 
 ## 0. 你（Codex）要做的事，按优先级
 
-1. **T-A（核心）用 OpenRouter 开源模型替代 Claude Code**（§7 有完整规格）。这是本次交接的最大新增开发。
-2. **T-B 部署到海外 VPS + 真实发布冒烟**（原计划 Task 11，§8）。先跑 `deploy/vps-check.sh` 判断 VPS 是否可用。
-3. **T-C 清理已知设计债务**（§9，小项，按需）。
+1. **T-B 部署到海外 VPS + 真实发布冒烟**（原计划 Task 11，§8）。先跑 `deploy/vps-check.sh` 判断 VPS 是否可用。
+2. **T-C 清理已知设计债务**（§9，小项，按需）。
 4. 未来：子项目 B（邮件）/ C（共享控制台）/ D（官网 panel），见 §10。
 
 **动工前务必读**：本文档 + 设计 spec `docs/superpowers/specs/2026-07-04-zen-content-hub-design.md` + 方向变更 addendum `docs/superpowers/specs/2026-07-05-openrouter-runner-overseas-deployment.md` + 实现计划 `docs/superpowers/plans/2026-07-04-zen-content-hub-engine.md`。逐任务实现记录在 `.superpowers/sdd/progress.md`（gitignored，本地）。
@@ -34,7 +33,7 @@
 
 ## 2. 当前状态（子项目 A）
 
-- 分支 `feat/content-hub-engine`，19 commits，**`node --test` 全绿（54 tests / 0 fail）**。
+- 分支 `feat/content-hub-engine`，**`npm test` 全绿（57 tests / 0 fail）**。
 - 每个任务都过了「实现 → 独立评审 → 修复 → 复评」双关卡，最后有一轮 opus 整体评审（结论与遗留项见 `.superpowers/sdd/progress.md`）。
 - 未合并 `main`；建议**真实发布冒烟通过前不并入 main**。
 
@@ -48,16 +47,16 @@ Node（ESM）单进程。触发器把任务入队（SQLite 持久化）→ runne
 
 ```
 src/
-├── config/index.js      loadConfig(env) → {workDir,dbPath,claudeBin,maxConcurrency,defaultTimeoutMs,proxy,slack,wechat}
+├── config/index.js      loadConfig(env) → {workDir,dbPath,maxConcurrency,defaultTimeoutMs,writer,slack,wechat}
 ├── core/
 │   ├── store.js         openStore(dbPath): runs 表 CRUD（better-sqlite3）
 │   ├── queue.js         createQueue({store,maxConcurrency,handler}).enqueue(task)
-│   ├── runner.js        runClaude({workflow,input,config}) → {ok,articlePath,exitCode,stderr}  ← T-A 要替换的接缝
+│   ├── runner.js        runWriter({workflow,input,config}) → {ok,articlePath,stderr}; runClaude 为兼容别名
 │   └── notifier.js      createNotifier(postMessage) → {ack,success,failure,warn}
 ├── triggers/
 │   ├── slack.js         parseSlackTask / registerSlack（Socket Mode → enqueue）
 │   └── cron.js          parseCronTriggers / registerCron（node-cron → enqueue，为 B 预备）
-├── workflows/wechat.js  声明式配置：triggers/allowedTools/channel/timeoutMs/retries + promptTemplate（写作规范）
+├── workflows/wechat.js  声明式配置：triggers/model/channel/timeoutMs/retries + promptTemplate（写作规范）
 ├── channels/
 │   ├── mock.js          测试/ dry-run 假渠道
 │   └── wechat-draft.js   renderAndPublish（@wenyan-md/core）+ 封面 + 关注名片；导出 RENDER_OPTS
@@ -65,13 +64,13 @@ src/
 │   ├── getInputContent.js  core 渲染要的读文件函数
 │   ├── wechatApi.js        直连微信 token/draft get·update + 名片注入（node:https）
 │   ├── cover.js            调 ~/zen-push-image 生成封面 + ensureFrontmatterCover
-│   └── health.js           checkClaudeAuth（VPS 认证自检；替换 Claude 后需改成 OpenRouter 探活）
+│   └── health.js           checkOpenRouterHealth（VPS OpenRouter key/网络探活；checkClaudeAuth 为兼容别名）
 └── index.js             makeHandler({store,runClaude,workflows,channels,config,notifier}) + start() 装配 + assertMainProcessDirect
 ```
 
 **核心抽象 = Workflow（声明式配置）**：一个工作流是一份配置（触发器 + 写作规范 prompt + 渠道 + 后处理 + 超时/重试）。加渠道/工作流 = 加配置，不改引擎。
 
-**数据流（一次任务）**：触发 → `enqueue({workflowId,source,input,notify})` → 入队(SQLite queued) → `makeHandler`：running → `runClaude`（生成 article.md）→ 幂等检查(已有 media_id 则跳过) → `channel.publish`（渲染+封面+发布+名片）→ done + notifier.success；任一阶段失败 → failed{stage} + notifier.failure。
+**数据流（一次任务）**：触发 → `enqueue({workflowId,source,input,notify})` → 入队(SQLite queued) → `makeHandler`：running → `runWriter`/兼容名 `runClaude`（Exa 调研 + OpenRouter 生成 article.md）→ 幂等检查(已有 media_id 则跳过) → `channel.publish`（渲染+封面+发布+名片）→ done + notifier.success；任一阶段失败 → failed{stage} + notifier.failure。
 
 ---
 
@@ -107,28 +106,28 @@ node src/index.js             # 正式：wechat 工作流默认走 wechat-draft�
 
 ---
 
-## 7. T-A：OpenRouter 开源模型 runner（核心新开发）
+## 7. T-A：OpenRouter 开源模型 runner（已由 Codex 完成）
 
-**目标**：把 `src/core/runner.js` 里「`spawn claude -p` 做 agent 式调研+写作」替换为「调用 OpenRouter 开源模型完成调研+写作」，**保持 §4.2 的 `article.md` 契约不变**，从而不触碰 channel/渲染/发布/parity。
+**状态**：已实现并通过 `npm test`。`src/core/runner.js` 现在使用 Exa REST `/search` 获取素材，再调用 OpenRouter `/chat/completions` 生成文章；仍保持 §4.2 的 `article.md` 契约不变，因此 channel/渲染/发布/parity 未被触碰。
 
 **难点**：OpenRouter 是 OpenAI 兼容的**纯推理 API**（`POST https://openrouter.ai/api/v1/chat/completions`），没有 Claude Code 的 agent 循环 / MCP / 内置 web 工具。「调研」得自己实现。
 
-**推荐方案（管线式，先做这个）**：
-1. **调研在 Node 侧做**：用 Exa 取素材（现有 `mcp__exa__*` 是 MCP；服务端应改用 Exa REST API 或 `exa-js` SDK，需 `EXA_API_KEY`）。对任务/选题做 search + 抓取 top N 来源正文。
-2. **组装上下文**：把 `workflow.promptTemplate` 的写作规范（zen-trading 口吻、不用破折号、金额中文单位、结尾三行等，见 `src/workflows/wechat.js`）+ 调研素材 + 任务，拼成 system+user 消息。
-3. **调 OpenRouter 写作**：`model` 从 config/workflow 取（如 `qwen/qwen3-235b-a22b`、`deepseek/deepseek-chat` 等，用户自选），要求模型输出带 `title` frontmatter 的完整 Markdown。
-4. **写 `article.md`，返回 `{ok, articlePath}`**。
+**已采用方案（管线式）**：
+1. **调研在 Node 侧做**：`searchExa` 调 Exa REST `/search`，请求 top N 来源的 compact text 与 highlights。
+2. **组装上下文**：把 `workflow.promptTemplate` 的写作规范 + 调研素材 + 任务拼成 system+user messages。
+3. **调 OpenRouter 写作**：`model` 从 `workflow.model || config.writer.model` 取，要求模型输出带 `title` frontmatter 的完整 Markdown。
+4. **写 `article.md`，返回 `{ok, articlePath}`**；输出缺 `title` frontmatter 时返回 `ok:false` 并删除半成品。
 
 **备选方案（工具循环式，更灵活更重）**：用 OpenAI 风格 tool-calling，把 Exa search/fetch 作为 tools，让模型自主多轮调研再写。可作为第二阶段迭代。
 
 **实现要点**：
-- 新增 `src/core/runner.js` 的替代实现（或新增 `src/core/openrouter-runner.js` 并在 `makeHandler` 切换）。若沿用函数名 `runClaude`，`makeHandler` 与 `test/handler.test.js` 的桩无需大改；更清晰的做法是重命名为 `runWriter` 并更新那一处调用点 + 桩。
-- **config**：`loadConfig` 增读 `OPENROUTER_API_KEY`、`OPENROUTER_MODEL`、`OPENROUTER_BASE_URL`（默认 `https://openrouter.ai/api/v1`）、`EXA_API_KEY`。workflow 可带 `model` 覆盖。
-- **依赖注入**：把 `fetch`（或 http 客户端）作为可注入参数，测试用 fake 返回固定 OpenRouter/Exa 响应，断言写出的 `article.md` 含 `title` frontmatter 且返回 `ok:true`——保持 hermetic，照抄现有 `test/runner.test.js` 的注入风格。
-- **清理**：`spawn claude` 相关的 `--allowedTools`、`--dangerously-skip-permissions`、CHILD_* 代理注入随之移除；`src/lib/health.js` 的 `checkClaudeAuth` 改成 OpenRouter 探活（`GET /models` 或一次最小 completion）。`config.claudeBin`/`CLAUDE_BIN` 作废。
+- `src/core/runner.js` 导出 `runWriter`，并保留 `runClaude` 兼容别名，减少 `makeHandler` 与旧测试桩 churn。
+- **config**：`loadConfig` 读取 `OPENROUTER_API_KEY`、`OPENROUTER_MODEL`、`OPENROUTER_BASE_URL`、`OPENROUTER_TEMPERATURE`、`EXA_API_KEY`、`EXA_BASE_URL`、`EXA_NUM_RESULTS`。
+- **依赖注入**：runner 和 health 都注入 `fetchFn`，测试用 fake OpenRouter/Exa 响应，保持 hermetic。
+- **清理**：`spawn claude` 相关的 `--allowedTools`、`--dangerously-skip-permissions`、CHILD_* 代理注入已移除；`config.claudeBin`/`CLAUDE_BIN` 作废；`src/lib/health.js` 已改成 OpenRouter `/models` 探活。
 - **质量提示**：开源模型的中文金融写作质量可能弱于 Claude，需要更强的 system prompt 与写作规范约束；建议留一个 `HUB_DRY_RUN=1` 的人工核对环节，并考虑保留「先出草稿箱、人工审核后再群发」的信任模型。
 
-**验收**：新 runner 的单测全绿 + 全量 `npm test` 仍 54+ 全绿（golden parity 不受影响，因为只换了 runner，未动 channel）+ `HUB_DRY_RUN=1` 端到端跑通。
+**验收**：新 runner 单测全绿，全量 `npm test` 为 57/57 通过；golden parity 不受影响，因为 channel 未改。下一步仍需在真实 VPS 上跑 `HUB_DRY_RUN=1` 和真实草稿箱冒烟。
 
 ---
 
@@ -140,7 +139,7 @@ node src/index.js             # 正式：wechat 工作流默认走 wechat-draft�
 4. 先 `HUB_DRY_RUN=1` 跑通链路，再去掉，在 Slack 发 `任务:...`，到公众号草稿箱**肉眼验收**（渲染是否与既有主题一致、封面、关注名片）。
 5. 冒烟通过后再考虑合并 `main`。
 
-> 注：`deploy/README.md` 与 `deploy/.env.example` 原按国内 VPS + CHILD_* 代理写；已在 `.env.example` 补 OpenRouter/Exa 项并标注海外机代理可选。`deploy/README.md` 的国内白名单/代理段落请按海外机实际情况订正。
+> 注：`deploy/README.md` 与 `deploy/.env.example` 已按海外 VPS + OpenRouter/Exa 直连订正。
 
 ---
 
@@ -151,7 +150,7 @@ node src/index.js             # 正式：wechat 工作流默认走 wechat-draft�
 - **retry>0 的重跑设计**：现 `runWithRetry` 包住「生成+发布」整体，发布失败会连带重跑生成（换 OpenRouter 后就是重花一次推理）。目前 `wechat.retries=0` 故 dormant。给邮件(B)等设 `retries>0` 前，改为「只重试失败的下游阶段」。
 - **golden parity 测试并发偶发**：高并发 `node --test` 下曾两次读到空串（fail-safe，后 0/20）。建议给该测试文件强制串行（`{concurrency:1}`）消除 CI 噪声。
 - **notifier 启动竞态**：`deps.notifier` 在 `registerSlack` 之后赋值;已用 `if(deps.notifier)` 守卫（不会崩，最坏丢一条通知）。彻底修需把 notifier 构造提前到装配 enqueue 之前。
-- **`runClaude` 超时→SIGKILL 无专门测试**（人工验证过）。换 runner 后此项作废，改为给 OpenRouter 超时/重试加测试。
+- **OpenRouter 超时细分测试**：runner 已有生成成功、缺 frontmatter、Exa HTTP 失败测试；如后续要做更细超时/重试策略，可补 AbortController 超时单测。
 - **依赖精确锁**：`jsdom`/`form-data-encoder`/`formdata-node` 已从 caret 改精确（保 parity）;`npm ci` + lockfile 是硬保证。
 
 ---
