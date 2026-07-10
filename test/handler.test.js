@@ -83,7 +83,7 @@ test('happy path:生成 + 发布成功 → done,success 调用一次,failure 不
 });
 
 test('生成失败:runClaude 返回 ok:false → failed/generate,failure 调用一次,publish 不调用', async () => {
-  const runClaude = async () => ({ ok: false, stderr: 'claude 挂了' });
+  const runClaude = async () => ({ ok: false, stderr: 'writer 挂了' });
   const { deps, store, notifier, publishCalls } = baseDeps({ runClaude });
 
   const handler = makeHandler(deps);

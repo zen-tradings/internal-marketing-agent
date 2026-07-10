@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import { loadConfig } from './config/index.js';
 import { openStore } from './core/store.js';
 import { createQueue } from './core/queue.js';
@@ -8,10 +8,22 @@ import { registerSlack } from './triggers/slack.js';
 import { registerCron } from './triggers/cron.js';
 import { isTransientSocketModeError } from './lib/slack-resilience.js';
 import wechatWorkflow from './workflows/wechat.js';
+import earningsWorkflow from './workflows/earnings.js';
+import sectorWorkflow from './workflows/sector.js';
+import morningWorkflow from './workflows/morning.js';
+import translateWorkflow from './workflows/translate.js';
 import mockChannel from './channels/mock.js';
 import wechatDraft from './channels/wechat-draft.js';
 
-const WORKFLOWS = { wechat: wechatWorkflow };
+dotenv.config({ override: true });
+
+const WORKFLOWS = {
+  wechat: wechatWorkflow,
+  earnings: earningsWorkflow,
+  sector: sectorWorkflow,
+  morning: morningWorkflow,
+  translate: translateWorkflow,
+};
 const CHANNELS = { mock: mockChannel, 'wechat-draft': wechatDraft };
 
 export async function runWithRetry(fn, retries = 0) {
@@ -102,7 +114,7 @@ export async function start() {
   async function connectSlack() {
     for (let attempt = 0; ; attempt++) {
       try {
-        const app = await registerSlack({ config, enqueue });
+        const app = await registerSlack({ config, enqueue, workflowIds: Object.keys(WORKFLOWS) });
         deps.notifier = createNotifier((m) => app.client.chat.postMessage(m));
         console.log('⚡ Slack 已连接');
         return app;

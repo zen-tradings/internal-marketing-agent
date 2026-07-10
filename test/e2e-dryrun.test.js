@@ -7,7 +7,7 @@ import mockChannel from '../src/channels/mock.js';
 
 // 装配级 dry-run 测试:走真实 makeHandler(而不是只测 queue),
 // 验证 HUB_DRY_RUN 时即使 workflow 声明的是 'wechat-draft' 渠道,
-// 实际发布也会被强制改道 mock,全程不碰真实网络/Claude/微信。
+// 实际发布也会被强制改道 mock,全程不碰真实网络/OpenRouter/Exa/微信。
 
 async function waitUntil(fn, timeoutMs = 1000, stepMs = 5) {
   const start = Date.now();
