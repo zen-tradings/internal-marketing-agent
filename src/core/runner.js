@@ -33,8 +33,8 @@ export async function runWriter({ workflow, input, config, fetchFn = globalThis.
     if (!writer.exaApiKey) throw new Error('缺少 Exa API key');
     if (!model) throw new Error('缺少 OpenRouter model');
 
-    const research = await searchExa({ input, writer, fetchFn });
-    const prompt = buildUserPrompt({ workflow, input, research });
+    const research = await searchExa({ input, writer, workflow, fetchFn });
+    const prompt = buildUserPrompt({ workflow, input, research, writer });
     const content = await completeArticle({ prompt, model, writer, fetchFn, timeoutMs: workflow.timeoutMs });
     const article = normalizeArticle(content);
     if (!hasTitleFrontmatter(article)) {
@@ -51,7 +51,45 @@ export async function runWriter({ workflow, input, config, fetchFn = globalThis.
 
 export const runClaude = runWriter;
 
-async function searchExa({ input, writer, fetchFn }) {
+// 调研入口:
+// 1) 从任务文本里摘出用户手工贴的 URL(最多 5 个),直接调 Exa /contents 抓正文,作为最高优先素材;
+// 2) 剩余文本(去掉 URL)作为 query,并行跑「优先信源」+「开放」两路 /search;
+// 3) 三路结果按 用户指定 > 优先信源 > 开放搜索 顺序合并,按 URL 去重。
+async function searchExa({ input, writer, workflow, fetchFn }) {
+  const { urls, remainder } = extractUrls(input);
+
+  const contentsPromise = urls.length
+    ? fetchExaContents({ urls, writer, fetchFn }).then(
+        (results) => results.map((r) => ({ ...r, userSpecified: true })),
+        () => [], // 抓取失败只降级,不影响其它素材
+      )
+    : Promise.resolve([]);
+
+  const prioritySources = workflow?.research?.prioritySources;
+  const hasPriority = Array.isArray(prioritySources) && prioritySources.length > 0;
+
+  let searchResults = [];
+  if (remainder) {
+    const [openSettled, prioritySettled] = await Promise.allSettled([
+      searchExaOpen({ query: remainder, writer, fetchFn }),
+      hasPriority ? searchExaPriority({ query: remainder, writer, prioritySources, fetchFn }) : Promise.resolve([]),
+    ]);
+    const openFailed = openSettled.status === 'rejected';
+    const priorityFailed = hasPriority && prioritySettled.status === 'rejected';
+    if (openFailed && (!hasPriority || priorityFailed)) {
+      throw openFailed ? openSettled.reason : prioritySettled.reason;
+    }
+    const priorityResults = hasPriority && prioritySettled.status === 'fulfilled' ? prioritySettled.value : [];
+    const openResults = openSettled.status === 'fulfilled' ? openSettled.value : [];
+    searchResults = [...priorityResults, ...openResults];
+  }
+
+  const contentsResults = await contentsPromise;
+  return dedupeByUrl([...contentsResults, ...searchResults]);
+}
+
+async function searchExaOpen({ query, writer, fetchFn }) {
+  const numResults = writer.exaNumResults || 5;
   const url = `${trimTrailingSlash(writer.exaBaseUrl || 'https://api.exa.ai')}/search`;
   const res = await fetchWithRetry(fetchFn, url, {
     method: 'POST',
@@ -60,21 +98,101 @@ async function searchExa({ input, writer, fetchFn }) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      query: input,
-      numResults: writer.exaNumResults || 5,
+      query,
+      numResults,
       type: 'auto',
       contents: {
         text: { verbosity: 'compact' },
-        highlights: { query: input, maxCharacters: 1200 },
+        highlights: { query, maxCharacters: 1200 },
       },
     }),
   });
   if (!res.ok) throw new Error(`Exa search failed: ${res.status} ${res.statusText} ${await safeText(res)}`.trim());
   const data = await res.json();
-  return Array.isArray(data.results) ? data.results.slice(0, writer.exaNumResults || 5) : [];
+  return Array.isArray(data.results) ? data.results.slice(0, numResults) : [];
 }
 
-function buildUserPrompt({ workflow, input, research }) {
+async function searchExaPriority({ query, writer, prioritySources, fetchFn }) {
+  const numResults = writer.exaPriorityResults || 4;
+  const url = `${trimTrailingSlash(writer.exaBaseUrl || 'https://api.exa.ai')}/search`;
+  const res = await fetchWithRetry(fetchFn, url, {
+    method: 'POST',
+    headers: {
+      'x-api-key': writer.exaApiKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      query,
+      numResults,
+      type: 'auto',
+      includeDomains: prioritySources,
+      contents: {
+        text: { verbosity: 'compact' },
+        highlights: { query, maxCharacters: 1200 },
+      },
+    }),
+  });
+  if (!res.ok) throw new Error(`Exa priority search failed: ${res.status} ${res.statusText} ${await safeText(res)}`.trim());
+  const data = await res.json();
+  const results = Array.isArray(data.results) ? data.results.slice(0, numResults) : [];
+  return results.map((r) => ({ ...r, priority: true }));
+}
+
+// 用户手工贴的 URL 走全文抓取(text: true,不做 compact verbosity),不请求 highlights
+// (highlights 是围绕 query 摘取片段,对"抓整篇原文"这个用途没有意义);
+// formatResearch 里再按 userSpecified 单独放宽字符上限。
+async function fetchExaContents({ urls, writer, fetchFn }) {
+  const url = `${trimTrailingSlash(writer.exaBaseUrl || 'https://api.exa.ai')}/contents`;
+  const res = await fetchWithRetry(fetchFn, url, {
+    method: 'POST',
+    headers: {
+      'x-api-key': writer.exaApiKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ urls, text: true }),
+  });
+  if (!res.ok) throw new Error(`Exa contents failed: ${res.status} ${res.statusText} ${await safeText(res)}`.trim());
+  const data = await res.json();
+  return Array.isArray(data.results) ? data.results : [];
+}
+
+// 从任务文本里提取 http(s) URL(最多取前 5 个供 /contents 抓取),并返回去掉所有 URL 后的剩余文本
+// (供两路 /search 当 query 用)。
+export function extractUrls(text) {
+  const re = /https?:\/\/[^\s<>()]+/g;
+  const all = String(text || '').match(re) || [];
+  const urls = all.map((u) => u.replace(/[.,;:!?)\]}>]+$/, '')).slice(0, 5);
+  const remainder = String(text || '').replace(re, ' ').replace(/\s+/g, ' ').trim();
+  return { urls, remainder };
+}
+
+// 按 URL 去重(规范化:去 trailing slash、host 大小写不敏感),先出现的保留,
+// 调用方需保证「更高优先级素材先出现在数组前面」。
+function dedupeByUrl(list) {
+  const seen = new Set();
+  const out = [];
+  for (const r of list) {
+    if (!r) continue;
+    if (r.url) {
+      const key = normalizeUrl(r.url);
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    out.push(r);
+  }
+  return out;
+}
+
+function normalizeUrl(raw) {
+  try {
+    const u = new URL(raw);
+    return `${u.protocol}//${u.host.toLowerCase()}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+  } catch {
+    return String(raw || '').trim().toLowerCase().replace(/\/+$/, '');
+  }
+}
+
+function buildUserPrompt({ workflow, input, research, writer }) {
   const workflowPrompt = typeof workflow.promptTemplate === 'function'
     ? workflow.promptTemplate(input)
     : `写作任务:${input}`;
@@ -82,21 +200,32 @@ function buildUserPrompt({ workflow, input, research }) {
 ${workflowPrompt}
 
 【系统已完成的调研素材】
-${formatResearch(research)}
+${formatResearch(research, writer)}
 
 【最终任务】
 基于以上任务和素材,写出可直接发布到微信公众号草稿箱的 article.md 内容。`;
 }
 
-function formatResearch(results) {
+// 用户手工贴的 URL(userSpecified)是直译等场景的第一手素材,需要保留(接近)全文,
+// 上限用 writer.exaUserContentMaxChars(EXA_USER_CONTENT_MAX_CHARS,默认 24000 字符);
+// 其余(优先信源/开放搜索)只是背景参考,维持原先的 2400 字符上限。
+// 注意:这里只对"单条素材"做截断,不对"多条用户指定素材拼起来的 prompt 总长"做全局上限
+// (一次任务最多 5 个用户 URL,每条最多到 24000 字符,理论上可累加到 12 万字符左右);
+// 目标模型上下文足够大,暂不需要额外的总量控制,后续如遇模型上下文不够可在此加总量裁剪。
+function formatResearch(results, writer = {}) {
   if (!results.length) return '未检索到可用素材。请明确说明信息不足,不要编造事实。';
+  const userMaxChars = writer.exaUserContentMaxChars || 24000;
   return results.map((r, i) => {
-    const excerpts = [
+    const label = r.userSpecified ? '【用户指定素材】' : r.priority ? '【优先信源】' : '';
+    const maxChars = r.userSpecified ? userMaxChars : 2400;
+    const full = [
       ...(Array.isArray(r.highlights) ? r.highlights : []),
       r.summary,
       r.text,
-    ].filter(Boolean).join('\n').slice(0, 2400);
-    return `### 来源 ${i + 1}: ${r.title || '未命名来源'}
+    ].filter(Boolean).join('\n');
+    const truncated = full.length > maxChars;
+    const excerpts = truncated ? `${full.slice(0, maxChars)}\n(原文过长已截断)` : full;
+    return `### 来源 ${i + 1}: ${label}${r.title || '未命名来源'}
 URL: ${r.url || '无'}
 发布日期: ${r.publishedDate || '未知'}
 摘录:
@@ -127,7 +256,7 @@ async function completeArticle({ prompt, model, writer, fetchFn, timeoutMs }) {
         temperature: writer.temperature ?? 0.4,
       }),
     });
-    if (!res.ok) throw new Error(`OpenRouter completion failed: ${res.status} ${res.statusText} ${await safeText(res)}`.trim());
+    if (!res.ok) throw new Error(formatOpenRouterHttpError(res, await safeText(res)));
     const data = await res.json();
     const content = data?.choices?.[0]?.message?.content;
     if (!content) throw new Error('OpenRouter response missing choices[0].message.content');
@@ -189,6 +318,14 @@ export async function fetchWithRetry(fetchFn, url, options, opts = {}) {
 
 async function safeText(res) {
   try { return (await res.text()).slice(0, 300); } catch { return ''; }
+}
+
+function formatOpenRouterHttpError(res, body) {
+  const base = `OpenRouter completion failed: ${res.status} ${res.statusText} ${body || ''}`.trim();
+  if (res.status === 401) {
+    return `${base}\n请检查当前进程读取到的 OPENROUTER_API_KEY 是否来自项目根目录 .env,并运行 npm run check:openrouter 验证。修正后需要重启 VS Code task/debug 进程。`;
+  }
+  return base;
 }
 
 function trimTrailingSlash(value) {
