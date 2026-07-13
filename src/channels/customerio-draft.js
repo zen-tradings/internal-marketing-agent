@@ -1,0 +1,143 @@
+import fs from 'node:fs/promises';
+import { parseNewsletterArticle, renderNewsletterEmail } from '../lib/newsletter-email.js';
+
+async function defaultReadArticle(articlePath) {
+  return fs.readFile(articlePath, 'utf8');
+}
+
+export function makeChannel({ readArticle = defaultReadArticle, fetchFn = globalThis.fetch } = {}) {
+  return {
+    id: 'customerio-draft',
+    async publish({ articlePath, config, workflow }) {
+      const cio = config.customerio || {};
+      if (!cio.appApiKey) throw publishError('缺少 CUSTOMERIO_APP_API_KEY');
+      const audience = resolveAudience(cio);
+      if (!cio.from) throw publishError('缺少 CUSTOMERIO_NEWSLETTER_FROM');
+      if (!cio.companyAddress) throw publishError('缺少 CUSTOMERIO_COMPANY_ADDRESS');
+
+      const baseUrl = String(cio.baseUrl || 'https://api.customer.io').replace(/\/+$/, '');
+      const audienceCount = await fetchAudienceCount({
+        baseUrl,
+        appApiKey: cio.appApiKey,
+        segmentId: audience.segmentId,
+        fetchFn,
+      });
+      validateAudienceCount(audience, audienceCount);
+
+      let markdown;
+      try { markdown = await readArticle(articlePath); }
+      catch (error) { const wrapped = new Error(`读取 newsletter 失败:${error.message}`); wrapped.stage = 'render'; throw wrapped; }
+
+      const article = parseNewsletterArticle(markdown, workflow?.edition || cio.edition || 'Vol. 1');
+      const name = `Zen Trading Newsletter · ${article.edition}`;
+      const body = renderNewsletterEmail(article, cio);
+      const payload = {
+        name,
+        type: 'email',
+        // Customer.io's newsletter endpoint currently rejects a bare
+        // { segment: ... } filter. Wrap the segment in the same AND/OR shape
+        // used by its documented complex-filter example.
+        recipients: {
+          and: [{ or: [{ segment: { id: audience.segmentId } }] }],
+        },
+        subject: article.subject,
+        preheader_text: article.preheader,
+        body,
+        from: cio.from,
+        ...(cio.subscriptionTopicId ? { subscription_topic_id: cio.subscriptionTopicId } : {}),
+      };
+
+      let response;
+      try {
+        response = await fetchFn(`${baseUrl}/v1/newsletters`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${cio.appApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        });
+      } catch (error) { throw publishError(`Customer.io 请求失败:${error.message}`); }
+
+      if (!response.ok) {
+        const detail = await safeText(response);
+        throw publishError(`Customer.io 创建草稿失败:${response.status} ${response.statusText || ''} ${detail}`.trim());
+      }
+      const data = await response.json();
+      const newsletterId = data?.newsletter?.id;
+      if (!newsletterId) throw publishError('Customer.io 返回成功但缺少 newsletter.id');
+      return {
+        mediaId: `customerio-newsletter:${newsletterId}`,
+        title: name,
+        audienceStage: audience.stage,
+        audienceSegmentId: audience.segmentId,
+        audienceRecipientCount: audienceCount,
+      };
+    },
+  };
+}
+
+export function resolveAudience(cio = {}) {
+  const stage = String(cio.audienceStage || 'internal').trim().toLowerCase();
+  if (!['internal', 'pilot', 'full'].includes(stage)) {
+    throw publishError('NEWSLETTER_AUDIENCE_STAGE 必须是 internal、pilot 或 full');
+  }
+  if (stage === 'full' && cio.allowFullAudience !== true) {
+    throw publishError('全量阶段需要显式设置 CUSTOMERIO_ALLOW_FULL_AUDIENCE=true');
+  }
+  const segmentId = cio.audienceSegmentIds?.[stage]
+    || (stage === 'internal' ? cio.newsletterSegmentId : undefined);
+  if (!Number.isInteger(segmentId) || segmentId <= 0) {
+    const variable = {
+      internal: 'CUSTOMERIO_INTERNAL_SEGMENT_ID',
+      pilot: 'CUSTOMERIO_PILOT_SEGMENT_ID',
+      full: 'CUSTOMERIO_FULL_SEGMENT_ID',
+    }[stage];
+    throw publishError(`缺少有效的 ${variable}`);
+  }
+  const maxRecipients = cio.audienceMaxRecipients?.[stage];
+  return { stage, segmentId, maxRecipients };
+}
+
+async function fetchAudienceCount({ baseUrl, appApiKey, segmentId, fetchFn }) {
+  let response;
+  try {
+    response = await fetchFn(`${baseUrl}/v1/segments/${segmentId}/customer_count`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${appApiKey}` },
+    });
+  } catch (error) {
+    throw publishError(`Customer.io 受众预检失败:${error.message}`);
+  }
+  if (!response.ok) {
+    const detail = await safeText(response);
+    throw publishError(`Customer.io 受众预检失败:${response.status} ${response.statusText || ''} ${detail}`.trim());
+  }
+  const data = await response.json();
+  if (!Number.isInteger(data?.count) || data.count < 0) {
+    throw publishError('Customer.io 受众预检返回无效人数');
+  }
+  return data.count;
+}
+
+function validateAudienceCount(audience, count) {
+  if (count === 0) throw publishError(`Customer.io ${audience.stage} 受众为空，拒绝创建草稿`);
+  if (Number.isInteger(audience.maxRecipients) && count > audience.maxRecipients) {
+    throw publishError(
+      `Customer.io ${audience.stage} 受众为 ${count} 人，超过配置上限 ${audience.maxRecipients} 人`,
+    );
+  }
+}
+
+function publishError(message) {
+  const error = new Error(message);
+  error.stage = 'publish';
+  return error;
+}
+
+async function safeText(response) {
+  try { return (await response.text()).slice(0, 1000); }
+  catch { return ''; }
+}
+
+export default makeChannel();

@@ -38,9 +38,9 @@ test('dry-run:HUB_DRY_RUN 强制走 mock 渠道,任务落 done 且拿到 mock me
     // workflow 声明的是真实渠道 'wechat-draft',dry-run 应把它换成 mock。
     const workflows = { wechat: { channel: 'wechat-draft', retries: 0 } };
 
-    let runClaudeCalled = false;
-    const runClaude = async () => {
-      runClaudeCalled = true;
+    let runWriterCalled = false;
+    const runWriter = async () => {
+      runWriterCalled = true;
       return { ok: true, articlePath: '/tmp/fake-article.md' };
     };
 
@@ -51,7 +51,7 @@ test('dry-run:HUB_DRY_RUN 强制走 mock 渠道,任务落 done 且拿到 mock me
       async failure(notify, payload) { failureCalls.push(payload); },
     };
 
-    const handler = makeHandler({ store, runClaude, workflows, channels, config: {}, notifier });
+    const handler = makeHandler({ store, runWriter, workflows, channels, config: {}, notifier });
     const queue = createQueue({ store, maxConcurrency: 1, handler });
 
     queue.enqueue({ id: 'e1', workflowId: 'wechat', source: 'slack', input: 'x', notify: {} });
@@ -62,7 +62,7 @@ test('dry-run:HUB_DRY_RUN 强制走 mock 渠道,任务落 done 且拿到 mock me
     assert.equal(row.status, 'done');
     assert.equal(row.media_id, 'MOCK');
     assert.equal(row.title, 'MOCK');
-    assert.equal(runClaudeCalled, true, 'runClaude 应被调用');
+    assert.equal(runWriterCalled, true, 'runWriter 应被调用');
     assert.equal(realChannelCalled, false, 'dry-run 下不应调用真实渠道');
     assert.equal(successCalls.length, 1);
     assert.equal(failureCalls.length, 0);

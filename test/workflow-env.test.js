@@ -34,9 +34,11 @@ test('workflow env 属性延迟读取:import 后修改 env 仍生效(getter 语�
   }
 });
 
-test('workflow.research.prioritySources:默认列表 + EXA_PRIORITY_DOMAINS 整体覆盖', async () => {
+test('workflow.research:行业优先源排除 Exa 不支持域名,官方源与两类 env 均可整体覆盖', async () => {
   const orig = process.env.EXA_PRIORITY_DOMAINS;
+  const origOfficial = process.env.EXA_OFFICIAL_DOMAINS;
   delete process.env.EXA_PRIORITY_DOMAINS;
+  delete process.env.EXA_OFFICIAL_DOMAINS;
 
   try {
     const mod = await import('../src/workflows/wechat.js');
@@ -47,13 +49,22 @@ test('workflow.research.prioritySources:默认列表 + EXA_PRIORITY_DOMAINS 整�
     assert.ok(Array.isArray(defaults) && defaults.length > 0);
     assert.ok(defaults.includes('trendforce.com'));
     assert.ok(defaults.includes('semianalysis.com'));
-    assert.ok(defaults.includes('x.com'));
+    assert.ok(!defaults.includes('x.com'));
+    assert.ok(!defaults.includes('twitter.com'));
+
+    // “官方/一手信源”任务走独立域名清单,不把行业分析站误算作官方来源
+    assert.ok(wf.research.officialSources.includes('sec.gov'));
+    assert.ok(wf.research.officialSources.includes('nasdaq.com'));
+    assert.ok(wf.research.officialSources.includes('skhynix.com'));
 
     // 设置 env → 整体覆盖,逗号分隔并去除空白
     process.env.EXA_PRIORITY_DOMAINS = 'foo.com, bar.com ,baz.com';
     assert.deepEqual(wf.research.prioritySources, ['foo.com', 'bar.com', 'baz.com']);
+    process.env.EXA_OFFICIAL_DOMAINS = 'sec.test, exchange.test';
+    assert.deepEqual(wf.research.officialSources, ['sec.test', 'exchange.test']);
   } finally {
     if (orig) process.env.EXA_PRIORITY_DOMAINS = orig; else delete process.env.EXA_PRIORITY_DOMAINS;
+    if (origOfficial) process.env.EXA_OFFICIAL_DOMAINS = origOfficial; else delete process.env.EXA_OFFICIAL_DOMAINS;
   }
 });
 
@@ -136,6 +147,28 @@ test('translate 工作流:id、workDir 子目录、channel/research 与其它工
   }
 });
 
+test('company 工作流:专业分析提示词、独立目录与专项检索', async () => {
+  const origWorkDir = process.env.WORK_DIR;
+  delete process.env.WORK_DIR;
+  try {
+    const { default: company } = await import('../src/workflows/company.js');
+    assert.equal(company.id, 'company');
+    assert.equal(company.workDir, '/srv/zen/wechat/company');
+    assert.equal(typeof company.research.extraQueries, 'function');
+    const extraQueries = company.research.extraQueries('AMAT');
+    assert.equal(extraQueries.length, 2);
+    assert.equal(extraQueries[0].type, 'deep');
+    assert.equal(extraQueries[0].category, 'financial report');
+    const prompt = company.promptTemplate('分析 AMAT');
+    assert.match(prompt, /最近连续四到六个已披露季度/);
+    assert.match(prompt, /quarterly-chart/);
+    assert.match(prompt, /不要按用户关键词机械分栏/);
+    assert.match(prompt, /真正可比对手/);
+  } finally {
+    if (origWorkDir) process.env.WORK_DIR = origWorkDir; else delete process.env.WORK_DIR;
+  }
+});
+
 test('morning 工作流:MORNING_CRON 未设置时仅 slack 触发,设置后追加 cron 触发器(getter 语义)', async () => {
   const orig = process.env.MORNING_CRON;
   delete process.env.MORNING_CRON;
@@ -148,5 +181,28 @@ test('morning 工作流:MORNING_CRON 未设置时仅 slack 触发,设置后追�
     assert.deepEqual(morning.triggers, ['slack', 'cron:0 7 * * *']);
   } finally {
     if (orig) process.env.MORNING_CRON = orig; else delete process.env.MORNING_CRON;
+  }
+});
+
+test('email 工作流:Customer.io 草稿渠道、独立目录与 Vol. 版号', async () => {
+  const origWorkDir = process.env.WORK_DIR;
+  const origEdition = process.env.NEWSLETTER_EDITION;
+  delete process.env.WORK_DIR;
+  delete process.env.NEWSLETTER_EDITION;
+  try {
+    const { default: email } = await import('../src/workflows/email.js');
+    assert.equal(email.id, 'email');
+    assert.equal(email.channel, 'customerio-draft');
+    assert.equal(email.workDir, '/srv/zen/wechat/email');
+    assert.match(email.systemPrompt, /research newsletter/);
+    assert.match(email.outputInstruction, /Customer\.io/);
+    assert.match(email.promptTemplate('HBM update'), /Vol\. 1/);
+    assert.match(email.promptTemplate('HBM update'), /preheader:/);
+
+    process.env.NEWSLETTER_EDITION = 'vol.2';
+    assert.match(email.promptTemplate('HBM update'), /Vol\. 2/);
+  } finally {
+    if (origWorkDir) process.env.WORK_DIR = origWorkDir; else delete process.env.WORK_DIR;
+    if (origEdition) process.env.NEWSLETTER_EDITION = origEdition; else delete process.env.NEWSLETTER_EDITION;
   }
 });

@@ -237,6 +237,8 @@ test('buildCoverData: 请求携带 model/temperature 0/鉴权与 OpenRouter 头,
   assert.equal(capturedOpts.headers['X-OpenRouter-Title'], 'Zen Content Hub');
   const body = JSON.parse(capturedOpts.body);
   assert.equal(body.model, 'qwen/x');
+  assert.equal(body.max_tokens, 1200);
+  assert.deepEqual(body.reasoning, { effort: 'none', exclude: true });
   assert.equal(body.temperature, 0);
 });
 

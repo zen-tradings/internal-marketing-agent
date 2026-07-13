@@ -2,7 +2,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { renderAndPublish as coreRenderAndPublish } from '@wenyan-md/core/wrapper';
 import { getInputContent as defaultGetInputContent } from '../lib/getInputContent.js';
-import { injectFollowCard as defaultInjectFollowCard } from '../lib/wechatApi.js';
 import { generateCover as defaultGenerateCover, ensureFrontmatterCover as defaultEnsureFrontmatterCover } from '../lib/cover.js';
 import { checkArticle as defaultCheckArticle } from '../lib/gate.js';
 import { injectFixedImages as defaultInjectFixedImages } from '../lib/assets.js';
@@ -21,12 +20,25 @@ async function defaultWriteArticle(articlePath, content) {
   await fs.writeFile(articlePath, content, 'utf-8');
 }
 
+// 已失败任务重试时,article.md 可能已被上一次发布尝试写入 cover 与固定头尾图。
+// 门禁的对象应始终是模型产出的内容,而不是这些由本渠道确定性注入的本地文件路径。
+function markdownForGate(markdown, assets = {}) {
+  let candidate = String(markdown || '').replace(
+    /^---\n[\s\S]*?\n---/,
+    (block) => block.replace(/^\s*cover\s*:\s*.*(?:\n|$)/gm, '')
+  );
+  const generatedAssetPaths = [assets.headerImage, assets.footerImage].filter(Boolean);
+  for (const assetPath of generatedAssetPaths) {
+    candidate = candidate.split('\n').filter((line) => !line.includes(`](${assetPath})`)).join('\n');
+  }
+  return candidate;
+}
+
 // 依赖注入版,便于测试
 export function makeChannel({
   renderAndPublish = coreRenderAndPublish,
   readArticle = defaultReadArticle,
   getInputContent = defaultGetInputContent,
-  injectFollowCard = defaultInjectFollowCard,
   generateCover = defaultGenerateCover,
   ensureFrontmatterCover = defaultEnsureFrontmatterCover,
   writeArticle = defaultWriteArticle,
@@ -48,9 +60,11 @@ export function makeChannel({
         throw err;
       }
 
-      // 门禁:对模型产出原文(注入头尾图之前)做出口检查。errors 拦截发布并直接结束流程,
+      // 门禁:对模型产出原文(注入头尾图之前)做出口检查。失败后的重试会保留系统写入的
+      // cover/固定图,因此先剥离这些已知资产。errors 拦截发布并直接结束流程,
       // 只有在无 errors 时才继续检查 warnings(放行但需人工关注),避免同一次发布重复告警。
-      const gate = checkArticle(markdown);
+      const assetsConfig = config.assets || {};
+      const gate = checkArticle(markdownForGate(markdown, assetsConfig));
       if (gate.errors.length) {
         try { if (notifier && notify) await notifier.warn(notify, `门禁拦截,不予发布:\n${gate.errors.join('\n')}`); }
         catch (warnErr) { console.error('门禁拦截告警失败:', warnErr); }
@@ -64,7 +78,6 @@ export function makeChannel({
       }
 
       // 注入固定头尾图(幂等)。config.assets 缺失路径时对应块静默跳过。
-      const assetsConfig = config.assets || {};
       const injectResult = injectFixedImages(markdown, {
         headerPath: assetsConfig.headerImage,
         footerPath: assetsConfig.footerImage,
@@ -96,13 +109,6 @@ export function makeChannel({
       process.env.WECHAT_APP_SECRET = appSecret;
       try {
         const mediaId = await renderAndPublish(undefined, { ...RENDER_OPTS, file: articlePath }, getInputContent);
-        // 默认不自动注入账号名片。若后续确认名片数据正确,可用 WECHAT_INJECT_FOLLOW_CARD=1 显式开启。
-        if (process.env.WECHAT_INJECT_FOLLOW_CARD === '1') {
-          try {
-            try { await injectFollowCard({ config, mediaId }); }
-            catch (e) { if (notifier && notify) await notifier.warn(notify, `名片注入失败(草稿已出):${e.message}`); }
-          } catch (warnErr) { console.error('名片告警失败(不影响发布结果):', warnErr); }
-        }
         return { mediaId, title };
       } catch (e) { const err = new Error(`发布失败:${e.message}`); err.stage = 'publish'; throw err; }
       finally {

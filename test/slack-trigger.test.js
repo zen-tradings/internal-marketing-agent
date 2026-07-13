@@ -80,7 +80,24 @@ test('多工作流路由:配合 @mention 触发格式,前缀解析同样生效',
   );
 });
 
-const NEW_WORKFLOW_IDS = ['wechat', 'earnings', 'sector', 'morning', 'translate'];
+const NEW_WORKFLOW_IDS = ['wechat', 'earnings', 'sector', 'morning', 'translate', 'company'];
+
+test('公司深度任务:财务 + 竞争对手 + 上下游自动路由到 company', () => {
+  const task = '写一篇关于amat的分析发到草稿箱，财务分析 + 竞争对手 + 上下游';
+  assert.deepEqual(resolveWorkflowTask(task, NEW_WORKFLOW_IDS, 'wechat'), { workflowId: 'company', task });
+});
+
+test('公司深度任务:显式“公司：”前缀路由到 company', () => {
+  assert.deepEqual(
+    resolveWorkflowTask('公司：分析 AMAT 最近五个季度', NEW_WORKFLOW_IDS, 'wechat'),
+    { workflowId: 'company', task: '分析 AMAT 最近五个季度' }
+  );
+});
+
+test('普通公司写作任务不误判,仍走默认 wechat', () => {
+  const task = '写一篇关于 AMAT 的公司介绍';
+  assert.deepEqual(resolveWorkflowTask(task, NEW_WORKFLOW_IDS, 'wechat'), { workflowId: 'wechat', task });
+});
 
 test('多工作流路由:英文前缀 "earnings:" 命中并剥离前缀', () => {
   assert.deepEqual(

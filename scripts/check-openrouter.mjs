@@ -11,7 +11,7 @@ if (!key) {
   process.exit(1);
 }
 
-console.log(`OpenRouter key detected: len=${key.length}, prefix=${key.slice(0, 8)}...`);
+console.log(`OpenRouter key detected: len=${key.length}`);
 console.log(`OpenRouter base URL: ${baseUrl}`);
 console.log(`OpenRouter model: ${model}`);
 
@@ -42,7 +42,8 @@ const completion = await request(`${baseUrl}/chat/completions`, {
   body: JSON.stringify({
     model,
     messages: [{ role: 'user', content: 'Reply with exactly: ok' }],
-    max_tokens: 8,
+    max_tokens: 64,
+    reasoning: { effort: 'none', exclude: true },
     temperature: 0,
   }),
 });
@@ -50,6 +51,14 @@ const completion = await request(`${baseUrl}/chat/completions`, {
 if (!completion.ok) {
   console.error(`OpenRouter /chat/completions failed: ${completion.status} ${completion.statusText}`);
   console.error(completion.body.slice(0, 500));
+  process.exit(1);
+}
+
+try {
+  const data = JSON.parse(completion.body);
+  if (!data?.choices?.[0]?.message?.content) throw new Error(`empty content, finish_reason=${data?.choices?.[0]?.finish_reason || 'missing'}`);
+} catch (e) {
+  console.error(`OpenRouter completion response invalid: ${e.message}`);
   process.exit(1);
 }
 

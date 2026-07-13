@@ -24,7 +24,6 @@ test('publish 调 renderAndPublish 并返回 mediaId/title', async () => {
     ...stubCover,
     renderAndPublish: async (content, opts) => { calledWith = { content, opts }; return 'MEDIA-9'; },
     readArticle: async () => ({ markdown: '---\ntitle: 英伟达\n---\n正文', title: '英伟达' }),
-    injectFollowCard: async () => {},
   });
   const out = await channel.publish({ articlePath: '/x/article.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
   assert.equal(out.mediaId, 'MEDIA-9');
@@ -66,69 +65,6 @@ test('缺失微信凭据 → stage=publish 且不调用 renderAndPublish', async
   assert.equal(called, false);
 });
 
-test('publish 成功默认不调用 injectFollowCard', async () => {
-  let called = false;
-  const channel = makeChannel({
-    ...stubCover,
-    renderAndPublish: async () => 'MEDIA-9',
-    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
-    injectFollowCard: async () => { called = true; },
-  });
-  const out = await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
-  assert.equal(out.mediaId, 'MEDIA-9');
-  assert.equal(called, false);
-});
-
-test('WECHAT_INJECT_FOLLOW_CARD=1 时 publish 成功后调用 injectFollowCard(传 config/mediaId)', async () => {
-  const prev = process.env.WECHAT_INJECT_FOLLOW_CARD;
-  process.env.WECHAT_INJECT_FOLLOW_CARD = '1';
-  let calledWith;
-  const channel = makeChannel({
-    ...stubCover,
-    renderAndPublish: async () => 'MEDIA-9',
-    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
-    injectFollowCard: async (args) => { calledWith = args; },
-  });
-  const config = { wechat: { appId: 'wx', appSecret: 's' } };
-  const out = await channel.publish({ articlePath: '/x/a.md', config });
-  assert.equal(out.mediaId, 'MEDIA-9');
-  assert.equal(calledWith.mediaId, 'MEDIA-9');
-  assert.equal(calledWith.config, config);
-  if (prev === undefined) delete process.env.WECHAT_INJECT_FOLLOW_CARD; else process.env.WECHAT_INJECT_FOLLOW_CARD = prev;
-});
-
-test('WECHAT_INJECT_FOLLOW_CARD=1 时 injectFollowCard 失败 → 不阻断发布,调用 notifier.warn 告警', async () => {
-  const prev = process.env.WECHAT_INJECT_FOLLOW_CARD;
-  process.env.WECHAT_INJECT_FOLLOW_CARD = '1';
-  const warned = [];
-  const notifier = { warn: async (notify, msg) => warned.push({ notify, msg }) };
-  const notify = { channel: 'C', ts: '1' };
-  const channel = makeChannel({
-    ...stubCover,
-    renderAndPublish: async () => 'MEDIA-9',
-    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
-    injectFollowCard: async () => { const e = new Error('40001'); e.stage = 'card'; throw e; },
-  });
-  const out = await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } }, notify, notifier });
-  assert.equal(out.mediaId, 'MEDIA-9');
-  assert.equal(warned.length, 1);
-  assert.equal(warned[0].notify, notify);
-  assert.match(warned[0].msg, /名片注入失败/);
-  assert.match(warned[0].msg, /40001/);
-  if (prev === undefined) delete process.env.WECHAT_INJECT_FOLLOW_CARD; else process.env.WECHAT_INJECT_FOLLOW_CARD = prev;
-});
-
-test('injectFollowCard 失败但未传 notifier/notify → 静默继续,不抛错', async () => {
-  const channel = makeChannel({
-    ...stubCover,
-    renderAndPublish: async () => 'MEDIA-9',
-    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
-    injectFollowCard: async () => { throw new Error('网络错误'); },
-  });
-  const out = await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
-  assert.equal(out.mediaId, 'MEDIA-9');
-});
-
 test('publish 成功后恢复 process.env 的原值', async () => {
   const prevAppId = process.env.WECHAT_APP_ID;
   const prevAppSecret = process.env.WECHAT_APP_SECRET;
@@ -136,28 +72,10 @@ test('publish 成功后恢复 process.env 的原值', async () => {
     ...stubCover,
     renderAndPublish: async () => 'MEDIA-9',
     readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
-    injectFollowCard: async () => {},
   });
   await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
   assert.equal(process.env.WECHAT_APP_ID, prevAppId);
   assert.equal(process.env.WECHAT_APP_SECRET, prevAppSecret);
-});
-
-test('WECHAT_INJECT_FOLLOW_CARD=1 且 injectFollowCard 和 notifier.warn 都抛错 → publish 仍返回 mediaId/title,不标记 stage=publish', async () => {
-  const prev = process.env.WECHAT_INJECT_FOLLOW_CARD;
-  process.env.WECHAT_INJECT_FOLLOW_CARD = '1';
-  const notifier = { warn: async () => { throw new Error('Slack 网络错误'); } };
-  const notify = { channel: 'C', ts: '1' };
-  const channel = makeChannel({
-    ...stubCover,
-    renderAndPublish: async () => 'MEDIA-9',
-    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
-    injectFollowCard: async () => { throw new Error('40001'); },
-  });
-  const out = await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } }, notify, notifier });
-  assert.equal(out.mediaId, 'MEDIA-9');
-  assert.equal(out.title, 't');
-  if (prev === undefined) delete process.env.WECHAT_INJECT_FOLLOW_CARD; else process.env.WECHAT_INJECT_FOLLOW_CARD = prev;
 });
 
 test('publish 前先生成封面并写入 frontmatter(传给 renderAndPublish 前文件已含 cover)', async () => {
@@ -168,7 +86,6 @@ test('publish 前先生成封面并写入 frontmatter(传给 renderAndPublish �
     writeArticle: async (p, content) => { writtenMarkdown = content; },
     renderAndPublish: async () => 'MEDIA-9',
     readArticle: async () => ({ markdown: '---\ntitle: T\n---\n正文', title: 'T' }),
-    injectFollowCard: async () => {},
   });
   const out = await channel.publish({ articlePath: '/out/article.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
   assert.equal(out.mediaId, 'MEDIA-9');
@@ -184,7 +101,6 @@ test('frontmatter 已有 cover 时替换为本次生成的新封面', async () =
     writeArticle: async (p, content) => { writtenMarkdown = content; },
     renderAndPublish: async () => 'MEDIA-9',
     readArticle: async () => ({ markdown: '---\ntitle: T\ncover: /old.png\n---\n正文', title: 'T' }),
-    injectFollowCard: async () => {},
   });
   await channel.publish({ articlePath: '/out/article.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
   assert.match(writtenMarkdown, /cover:\s*\/out\/new-cover\.png/);
@@ -291,6 +207,29 @@ test('门禁 warnings 命中 → notifier.warn 告警后继续发布(不阻断)'
   assert.equal(warned.length, 1);
   assert.match(warned[0].msg, /门禁提醒/);
   assert.match(warned[0].msg, /破折号/);
+});
+
+test('重试时系统写入的 cover 与固定图本地路径不触发门禁,正文路径仍由门禁检查', async () => {
+  const retriedMarkdown = [
+    '---',
+    'title: T',
+    'cover: /Users/zen/cover.png',
+    '---',
+    '![Zen Trading](/Users/zen/header.gif)',
+    '正文内容。',
+    '![Zen Trading 社群](/Users/zen/footer.png)',
+  ].join('\n');
+  const channel = makeChannel({
+    ...stubCover,
+    readArticle: async () => ({ markdown: retriedMarkdown, title: 'T' }),
+    injectFixedImages: (md) => ({ markdown: md, skipped: [] }),
+    renderAndPublish: async () => 'MEDIA-RETRY',
+  });
+  const out = await channel.publish({
+    articlePath: '/x/a.md',
+    config: { wechat: { appId: 'wx', appSecret: 's' }, assets: { headerImage: '/Users/zen/header.gif', footerImage: '/Users/zen/footer.png' } },
+  });
+  assert.equal(out.mediaId, 'MEDIA-RETRY');
 });
 
 // ---- 固定头尾图注入(assets)接线 ----

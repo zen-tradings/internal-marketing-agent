@@ -1,6 +1,6 @@
 # Zen Content Hub 导读:一个任务的一生 + 想改什么去哪
 
-> 面向维护者(你自己/Cline/任何代理)的项目地图。架构细节看 README.md,部署看 deploy/README.md,本文只回答两个问题:**东西是怎么流动的**、**想改某个行为该动哪个文件**。
+> 面向维护者的项目地图。架构与部署看 README.md,本文只回答两个问题:**东西是怎么流动的**、**想改某个行为该动哪个文件**。
 
 ## 一、一个任务的一生(主链路)
 
@@ -15,7 +15,7 @@
 ② 排队     src/core/queue.js + src/core/store.js
    限并发出队,状态 queued → running。崩溃重启时 running 会被标 interrupted。
 
-③ 调研+写作  src/core/runner.js  (runWriter,别名 runClaude)
+③ 调研+写作  src/core/runner.js  (runWriter)
    三路素材,优先级从高到低:
    a. 任务里贴的 URL(最多 5 个)→ Exa /contents 直抓正文  【用户指定素材】
    b. 优先信源搜索:/search 带 includeDomains(清单见 workflows/shared.js)【优先信源】
@@ -48,14 +48,16 @@
 |---|---|---|
 | 写作风格/文章结构 | `src/workflows/<id>.js` 的 promptTemplate | 通用规范在 `workflows/shared.js` |
 | 新增一种文章类型 | 新建 `src/workflows/<name>.js` + `src/index.js` WORKFLOWS 注册 | 照抄 earnings.js 的结构 |
+| 公司深度分析框架 | `src/workflows/company.js` | 连续季度、竞争、产业链与趋势图 |
 | Slack 触发前缀/中文别名 | `src/triggers/slack.js` 的 WORKFLOW_ALIASES | 微信/财报/行业/晨报/直译… |
 | 优先信源加减域名 | `workflows/shared.js` 的清单,或 .env EXA_PRIORITY_DOMAINS | 写主域即可,子域自动匹配 |
 | 门禁规则(拦截/提醒) | `src/lib/gate.js` | 注意:投资建议敏感词已按要求移除,勿加回 |
 | 头尾图换图 | 替换 `assets/` 下文件,或 .env 覆盖路径 | 幂等注入在 `src/lib/assets.js` |
 | 封面版式/字段 | `~/zen-push-image/template.html`(另一个仓库) | 数据提取 prompt 在 `src/lib/cover.js` |
-| 写作模型/温度 | .env `OPENROUTER_MODEL` / `OPENROUTER_TEMPERATURE` | 改完重启 |
+| 写作模型/生成参数 | .env `OPENROUTER_MODEL` / `OPENROUTER_TEMPERATURE` / `OPENROUTER_MAX_TOKENS` / `OPENROUTER_REASONING_EFFORT` | 默认 12000 tokens、reasoning=none;改完重启 |
 | 微信渲染主题 | 别改。`RENDER_OPTS` 是 parity 硬约束 | 主题本体在 zen-wechat-theme 仓库 |
-| 新发布渠道(如邮件) | 新建 `src/channels/<name>.js` 实现 publish() + 注册 | 见 README「扩展」一节 |
+| Customer.io 邮件草稿 | `src/workflows/email.js` + `src/channels/customerio-draft.js` | 只创建草稿；受众由 `CUSTOMERIO_NEWSLETTER_SEGMENT_ID` 控制 |
+| 新发布渠道 | 新建 `src/channels/<name>.js` 实现 publish() + 注册 | 见 README「扩展」一节 |
 
 ## 四、日常运维(本机 launchd)
 

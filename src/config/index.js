@@ -11,6 +11,13 @@ export function loadConfig(env = process.env) {
     if (!v) throw new Error(`缺少环境变量 ${k}`);
     return v;
   };
+  const customerioAudienceStage = newsletterAudienceStage(env.NEWSLETTER_AUDIENCE_STAGE);
+  const legacyNewsletterSegmentId = positiveInteger(env.CUSTOMERIO_NEWSLETTER_SEGMENT_ID);
+  const customerioAudienceSegmentIds = {
+    internal: positiveInteger(env.CUSTOMERIO_INTERNAL_SEGMENT_ID) || legacyNewsletterSegmentId,
+    pilot: positiveInteger(env.CUSTOMERIO_PILOT_SEGMENT_ID),
+    full: positiveInteger(env.CUSTOMERIO_FULL_SEGMENT_ID),
+  };
   return {
     workDir: env.WORK_DIR || '/srv/zen/wechat',
     dbPath: env.DB_PATH || `${env.HOME || '.'}/zen-content-hub/runs.db`,
@@ -20,6 +27,8 @@ export function loadConfig(env = process.env) {
       openrouterApiKey: need('OPENROUTER_API_KEY'),
       model: env.OPENROUTER_MODEL || 'qwen/qwen3-235b-a22b',
       baseUrl: env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+      maxTokens: Number(env.OPENROUTER_MAX_TOKENS || 12000),
+      reasoningEffort: env.OPENROUTER_REASONING_EFFORT || 'none',
       exaApiKey: need('EXA_API_KEY'),
       exaBaseUrl: env.EXA_BASE_URL || 'https://api.exa.ai',
       exaNumResults: Number(env.EXA_NUM_RESULTS || 5),
@@ -36,9 +45,45 @@ export function loadConfig(env = process.env) {
       notifyChannel: env.NOTIFY_CHANNEL_ID || '',
     },
     wechat: { appId: need('WECHAT_APP_ID'), appSecret: need('WECHAT_APP_SECRET') },
+    customerio: {
+      appApiKey: env.CUSTOMERIO_APP_API_KEY || '',
+      baseUrl: env.CUSTOMERIO_API_BASE_URL || 'https://api.customer.io',
+      audienceStage: customerioAudienceStage,
+      audienceSegmentIds: customerioAudienceSegmentIds,
+      audienceMaxRecipients: {
+        internal: positiveInteger(env.CUSTOMERIO_INTERNAL_MAX_RECIPIENTS) || 10,
+        pilot: positiveInteger(env.CUSTOMERIO_PILOT_MAX_RECIPIENTS) || 50,
+        full: positiveInteger(env.CUSTOMERIO_FULL_MAX_RECIPIENTS),
+      },
+      allowFullAudience: booleanFlag(env.CUSTOMERIO_ALLOW_FULL_AUDIENCE),
+      newsletterSegmentId: customerioAudienceSegmentIds[customerioAudienceStage],
+      subscriptionTopicId: positiveInteger(env.CUSTOMERIO_SUBSCRIPTION_TOPIC_ID),
+      from: env.CUSTOMERIO_NEWSLETTER_FROM || '',
+      edition: env.NEWSLETTER_EDITION || 'Vol. 1',
+      siteUrl: env.CUSTOMERIO_SITE_URL || 'https://zentradings.com',
+      feedbackUrl: env.CUSTOMERIO_NEWSLETTER_FEEDBACK_URL || '',
+      companyAddress: env.CUSTOMERIO_COMPANY_ADDRESS || '',
+    },
     assets: {
       headerImage: env.WECHAT_HEADER_IMAGE || path.join(REPO_ROOT, 'assets', 'zen-header-banner.gif'),
       footerImage: env.WECHAT_FOOTER_IMAGE || path.join(REPO_ROOT, 'assets', 'zen-footer-qr.png'),
     },
   };
+}
+
+function positiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function newsletterAudienceStage(value) {
+  const stage = String(value || 'internal').trim().toLowerCase();
+  if (!['internal', 'pilot', 'full'].includes(stage)) {
+    throw new Error('NEWSLETTER_AUDIENCE_STAGE 必须是 internal、pilot 或 full');
+  }
+  return stage;
+}
+
+function booleanFlag(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || '').trim());
 }

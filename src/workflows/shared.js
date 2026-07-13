@@ -1,4 +1,4 @@
-// 四个工作流(wechat/earnings/sector/morning)共享的公共项:
+// 各写作工作流共享的公共项:
 // - env getter 语义(channel/model/timeoutMs/workDir 基准目录)
 // - Exa 双路调研优先信源清单(可用 EXA_PRIORITY_DOMAINS 整体覆盖)
 // - 通用写作规范/调研素材/产出约束文案,供各工作流的 promptTemplate 拼装复用
@@ -14,7 +14,6 @@ const DEFAULT_PRIORITY_SOURCES = [
   'trendforce.com',        // 含 datatrack.trendforce.com,半导体/AI 供应链/HBM
   'semianalysis.com',
   'alphaxiv.org',
-  'x.com', 'twitter.com',
   'skhynix.com',           // SK Hynix IR
   'marvell.com',           // investor.marvell.com
   'broadcom.com',          // investors.broadcom.com
@@ -29,6 +28,21 @@ const DEFAULT_PRIORITY_SOURCES = [
   'lightcounting.com',
 ];
 
+// 用户明确要求“官方/一手信源”时单独跑这一组域名。它与上面的行业优先源分开,
+// 防止分析站点命中后被误算作官方来源。
+const DEFAULT_OFFICIAL_SOURCES = [
+  'sec.gov',
+  'nasdaq.com',
+  'krx.co.kr',
+  'fsc.go.kr',
+  'fss.or.kr',
+  'kofia.or.kr',
+  'skhynix.com',
+  'samsung.com',
+  'micron.com',
+  'nvidia.com',
+];
+
 export function prioritySources() {
   const raw = process.env.EXA_PRIORITY_DOMAINS;
   return raw
@@ -36,9 +50,21 @@ export function prioritySources() {
     : [...DEFAULT_PRIORITY_SOURCES];
 }
 
+export function officialSources() {
+  const raw = process.env.EXA_OFFICIAL_DOMAINS;
+  return raw
+    ? raw.split(',').map((s) => s.trim()).filter(Boolean)
+    : [...DEFAULT_OFFICIAL_SOURCES];
+}
+
 // 供各工作流 `get research()` 直接返回。
 export function sharedResearch() {
-  return { prioritySources: prioritySources() };
+  return {
+    prioritySources: prioritySources(),
+    officialSources: officialSources(),
+    minOfficialSources: 2,
+    minOfficialCitations: 2,
+  };
 }
 
 export function envChannel() { return process.env.WECHAT_CHANNEL || 'wechat-draft'; }
@@ -52,7 +78,7 @@ export function workDirFor(id) {
   return path.join(base, id);
 }
 
-// 四个工作流共用的通用约束块:风格规范 + 调研素材纪律 + 产出格式。
+// 各工作流共用的通用约束块:风格规范 + 调研素材纪律 + 产出格式。
 // 专属方法论内容(各工作流自己的分析框架)拼在【任务内容】之后、本块之前。
 export const COMMON_CONSTRAINTS_BLOCK = `【写作规范 — 严格执行】
 - 风格:严谨专业,机构分析师口吻

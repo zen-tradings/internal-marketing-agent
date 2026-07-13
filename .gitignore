@@ -1,10 +1,11 @@
 .env
 .env.*
-!deploy/.env.example
+!.env.example
 .DS_Store
 node_modules/
 *.log
-task-*.stdout.log
-task-*.stderr.log
-bot.log
-bot.err.log
+*.pid
+*.sqlite
+*.sqlite3
+coverage/
+.cache/

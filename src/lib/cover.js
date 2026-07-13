@@ -49,6 +49,8 @@ export async function buildCoverData({ title, markdown, writer, fetchFn = global
       },
       body: JSON.stringify({
         model: writer.model,
+        max_tokens: 1200,
+        reasoning: { effort: 'none', exclude: true },
         temperature: 0,
         messages: [
           { role: 'system', content: COVER_SYSTEM_PROMPT },

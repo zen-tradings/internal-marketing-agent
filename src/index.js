@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import { loadConfig } from './config/index.js';
 import { openStore } from './core/store.js';
 import { createQueue } from './core/queue.js';
-import { runClaude } from './core/runner.js';
+import { runWriter } from './core/runner.js';
 import { createNotifier } from './core/notifier.js';
 import { registerSlack } from './triggers/slack.js';
 import { registerCron } from './triggers/cron.js';
@@ -12,8 +12,11 @@ import earningsWorkflow from './workflows/earnings.js';
 import sectorWorkflow from './workflows/sector.js';
 import morningWorkflow from './workflows/morning.js';
 import translateWorkflow from './workflows/translate.js';
+import companyWorkflow from './workflows/company.js';
+import emailWorkflow from './workflows/email.js';
 import mockChannel from './channels/mock.js';
 import wechatDraft from './channels/wechat-draft.js';
+import customerioDraft from './channels/customerio-draft.js';
 
 dotenv.config({ override: true });
 
@@ -23,8 +26,10 @@ const WORKFLOWS = {
   sector: sectorWorkflow,
   morning: morningWorkflow,
   translate: translateWorkflow,
+  company: companyWorkflow,
+  email: emailWorkflow,
 };
-const CHANNELS = { mock: mockChannel, 'wechat-draft': wechatDraft };
+const CHANNELS = { mock: mockChannel, 'wechat-draft': wechatDraft, 'customerio-draft': customerioDraft };
 
 export async function runWithRetry(fn, retries = 0) {
   let last;
@@ -36,17 +41,16 @@ export async function runWithRetry(fn, retries = 0) {
 
 export function assertMainProcessDirect(env = process.env) {
   for (const k of ['https_proxy', 'http_proxy', 'all_proxy', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY']) {
-    if (env[k]) throw new Error(`主进程不得设置代理(${k});海外 VPS 部署应让 OpenRouter/Exa/微信全部直连。`);
+    if (env[k]) throw new Error(`主进程不得设置代理(${k});OpenRouter/Exa/微信必须直连。`);
   }
 }
 
-// 队列处理器工厂,便于注入 stub 做单测(store/runClaude/channels 均可替换)。
-// runClaude 是旧依赖名,当前实际指向 OpenRouter runWriter,保留以减少装配层 churn。
+// 队列处理器工厂,便于注入 stub 做单测(store/runWriter/channels 均可替换)。
 // 注意:`deps` 对象本身(而非解构出的局部变量)被闭包持有,notifier 字段在
 // start() 中是稍后才赋值的(registerSlack 之后)——沿用原来 `let notifier` 的
 // "调用时才读取当前值" 语义,不在这里提前修复这个时序,只是原样保留。
 export function makeHandler(deps) {
-  const { store, runClaude, workflows, channels, config } = deps;
+  const { store, runWriter, workflows, channels, config } = deps;
   return async function handler(run) {
     const wf = workflows[run.workflowId];
     const notify = JSON.parse(store.getRun(run.id).notify_json || '{}');
@@ -58,7 +62,7 @@ export function makeHandler(deps) {
         const existing = store.getRun(run.id);
         if (existing.media_id) return { title: existing.title, mediaId: existing.media_id };
 
-        const res = await runClaude({ workflow: wf, input: run.input, config });
+        const res = await runWriter({ workflow: wf, input: run.input, config });
         if (!res.ok) { const err = new Error(res.stderr); err.stage = 'generate'; throw err; }
 
         // dry-run:HUB_DRY_RUN 置位时,不管 workflow 声明的是哪个渠道,一律强制走 mock,
@@ -90,7 +94,7 @@ export async function start() {
   const interrupted = store.markInterrupted();
   if (interrupted) console.log(`[hub] 启动:${interrupted} 个残留任务标记为 interrupted`);
 
-  const deps = { store, runClaude, workflows: WORKFLOWS, channels: CHANNELS, config, notifier: undefined };
+  const deps = { store, runWriter, workflows: WORKFLOWS, channels: CHANNELS, config, notifier: undefined };
   const handler = makeHandler(deps);
 
   const queue = createQueue({ store, maxConcurrency: config.maxConcurrency, handler });

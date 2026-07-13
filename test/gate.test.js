@@ -66,6 +66,14 @@ test('errors: 含本地路径 /Users/', () => {
   assert.ok(errors.some((e) => /本地路径/.test(e)));
 });
 
+test('系统生成的 cover frontmatter 本地路径允许重试,正文路径仍拦截', () => {
+  const coverOnly = '---\ntitle: T\ncover: /Users/zen/cover.png\n---\n正文';
+  assert.equal(checkArticle(coverOnly).errors.some((e) => /本地路径/.test(e)), false);
+
+  const bodyPath = '---\ntitle: T\ncover: /Users/zen/cover.png\n---\n正文引用 /Users/secret.txt';
+  assert.equal(checkArticle(bodyPath).errors.some((e) => /本地路径/.test(e)), true);
+});
+
 test('warnings: 含中文破折号——', () => {
   const md = '---\ntitle: T\n---\n正文含破折号——用法。';
   const { warnings } = checkArticle(md);

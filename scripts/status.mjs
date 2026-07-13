@@ -1,4 +1,4 @@
-// 只读任务状态监控脚本。不依赖 bot 进程运行,只打开同一个 sqlite 文件读取,方便在 VPS 上
+// 只读任务状态监控脚本。不依赖 bot 进程运行,只打开同一个 sqlite 文件读取,
 // 快速判断队列是否卡死(尤其是 running 任务一直不结束的场景)。
 // 用法: npm run status  (可用 DB_PATH=xxx npm run status 覆盖数据库路径)
 import dotenv from 'dotenv';

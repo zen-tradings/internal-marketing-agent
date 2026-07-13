@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runWriter, runClaude } from '../src/core/runner.js';
+import { runWriter } from '../src/core/runner.js';
 import { loadConfig } from '../src/config/index.js';
 
 function tempWorkflow(overrides = {}) {
@@ -76,13 +76,74 @@ test('成功:Exa 调研 + OpenRouter 写作后写出带 title frontmatter 的 ar
   assert.equal(calls[0].body.query, '英伟达业绩');
   assert.equal(calls[1].url, 'https://openrouter.test/api/v1/chat/completions');
   assert.equal(calls[1].body.model, 'workflow/model');
+  assert.equal(calls[1].body.max_tokens, 12000);
+  assert.deepEqual(calls[1].body.reasoning, { effort: 'none', exclude: true });
   assert.match(calls[1].body.messages[0].content, /Zen Trading/);
   assert.match(calls[1].body.messages[1].content, /NVIDIA results/);
   assert.match(calls[1].body.messages[1].content, /写作任务:英伟达业绩/);
 });
 
-test('兼容旧注入名:runClaude 等价于 runWriter', async () => {
-  assert.equal(runClaude, runWriter);
+test('工作流可覆盖 system prompt 与最终产出指令', async () => {
+  const workflow = tempWorkflow({
+    systemPrompt: 'CUSTOM NEWSLETTER SYSTEM',
+    outputInstruction: 'CREATE CUSTOMER.IO NEWSLETTER MARKDOWN',
+  });
+  let completionBody;
+  const fetchFn = async (url, opts) => {
+    if (String(url).endsWith('/search')) return jsonResponse({ results: [] });
+    completionBody = JSON.parse(opts.body);
+    return completionResponse();
+  };
+
+  const result = await runWriter({ workflow, input: 'Vol. 1', config: baseConfig(), fetchFn });
+  assert.equal(result.ok, true);
+  assert.equal(completionBody.messages[0].content, 'CUSTOM NEWSLETTER SYSTEM');
+  assert.match(completionBody.messages[1].content, /CREATE CUSTOMER\.IO NEWSLETTER MARKDOWN/);
+  assert.doesNotMatch(completionBody.messages[1].content, /微信公众号草稿箱/);
+});
+
+test('OpenRouter 首次空正文时强制关闭 reasoning 重试并成功', async () => {
+  const workflow = tempWorkflow();
+  const config = baseConfig();
+  config.writer.reasoningEffort = 'high';
+  config.writer.maxTokens = 16000;
+  const completionBodies = [];
+  const fetchFn = async (url, opts) => {
+    if (String(url).endsWith('/search')) return jsonResponse({ results: [] });
+    completionBodies.push(JSON.parse(opts.body));
+    if (completionBodies.length === 1) {
+      return jsonResponse({
+        choices: [{ finish_reason: 'length', message: { content: null, reasoning: 'thinking' } }],
+        usage: { completion_tokens: 16000, completion_tokens_details: { reasoning_tokens: 16000 } },
+      });
+    }
+    return jsonResponse({ choices: [{ finish_reason: 'stop', message: { content: '---\ntitle: 重试成功\n---\n正文。' } }] });
+  };
+  const result = await runWriter({ workflow, input: 'AMAT', config, fetchFn });
+  assert.equal(result.ok, true);
+  assert.equal(completionBodies.length, 2);
+  assert.deepEqual(completionBodies[0].reasoning, { effort: 'high', exclude: true });
+  assert.deepEqual(completionBodies[1].reasoning, { effort: 'none', exclude: true });
+  assert.equal(completionBodies[1].max_tokens, 16000);
+});
+
+test('OpenRouter 连续空正文时返回 finish reason 与 token 诊断', async () => {
+  const workflow = tempWorkflow();
+  let completions = 0;
+  const fetchFn = async (url) => {
+    if (String(url).endsWith('/search')) return jsonResponse({ results: [] });
+    completions++;
+    return jsonResponse({
+      choices: [{ finish_reason: 'length', message: { content: null } }],
+      usage: { completion_tokens: 12000, completion_tokens_details: { reasoning_tokens: 12000 } },
+    });
+  };
+  const result = await runWriter({ workflow, input: 'AMAT', config: baseConfig(), fetchFn });
+  assert.equal(result.ok, false);
+  assert.equal(completions, 2);
+  assert.match(result.stderr, /empty content after retry/);
+  assert.match(result.stderr, /finish_reason=length/);
+  assert.match(result.stderr, /reasoning_tokens=12000/);
 });
 
 test('OpenRouter 输出缺 title frontmatter 时返回 ok:false 且不保留 article.md', async () => {
@@ -221,6 +282,225 @@ test('双路调研:优先路带 includeDomains,开放路不带,结果按优先�
   ]);
 });
 
+test('严格任务:独立检索官方域名,注入当前时间,正文引用已检索官方 URL 后才成功', async () => {
+  const workflow = tempWorkflow({
+    research: {
+      prioritySources: [],
+      officialSources: ['sec.gov', 'nasdaq.com'],
+      minOfficialSources: 2,
+      minOfficialCitations: 2,
+    },
+  });
+  const searchBodies = [];
+  let completionBody;
+  const fetchFn = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    if (String(url).endsWith('/search')) {
+      searchBodies.push(body);
+      if (body.includeDomains) {
+        return jsonResponse({
+          results: [
+            { title: 'SEC filing', url: 'https://www.sec.gov/filing', text: 'Official filing.' },
+            { title: 'Nasdaq event', url: 'https://www.nasdaq.com/event', text: 'Official exchange event.' },
+          ],
+        });
+      }
+      return jsonResponse({ results: [{ title: 'Secondary', url: 'https://news.example/a', text: 'Secondary report.' }] });
+    }
+    completionBody = body;
+    return jsonResponse({
+      choices: [{ message: { content: [
+        '---',
+        'title: 严格来源测试',
+        '---',
+        '据[SEC 文件](https://www.sec.gov/filing)与[Nasdaq 公告](https://www.nasdaq.com/event)，事实成立。',
+      ].join('\n') } }],
+    });
+  };
+
+  const result = await runWriter({
+    workflow,
+    input: '充分搜集并引用官方与一手信源的数据',
+    config: baseConfig(),
+    fetchFn,
+  });
+
+  assert.equal(result.ok, true);
+  const officialSearch = searchBodies.find((body) => body.includeDomains);
+  assert.deepEqual(officialSearch.includeDomains, ['sec.gov', 'nasdaq.com']);
+  assert.match(officialSearch.query, /official filing investor relations exchange data/);
+  const prompt = completionBody.messages[1].content;
+  assert.match(prompt, /America\/Los_Angeles/);
+  assert.match(prompt, /周末要明确对应最近一个交易日/);
+  assert.match(prompt, /【官方\/一手信源】SEC filing/);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.selectedSources.filter((source) => source.kind === 'official').length, 2);
+});
+
+test('严格任务:开放搜索成功但官方来源不足时在生成前失败', async () => {
+  const workflow = tempWorkflow({
+    research: {
+      prioritySources: [],
+      officialSources: ['sec.gov', 'nasdaq.com'],
+      minOfficialSources: 2,
+      minOfficialCitations: 2,
+    },
+  });
+  let completionCalls = 0;
+  const fetchFn = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    if (String(url).endsWith('/search')) {
+      if (body.includeDomains) {
+        return jsonResponse({ results: [{ title: 'SEC filing', url: 'https://www.sec.gov/only-one', text: 'Official.' }] });
+      }
+      return jsonResponse({ results: [
+        { title: 'Secondary A', url: 'https://news.example/a' },
+        { title: 'Secondary B', url: 'https://news.example/b' },
+      ] });
+    }
+    completionCalls++;
+    return completionResponse();
+  };
+
+  const result = await runWriter({ workflow, input: '请用官方一手信源并引用', config: baseConfig(), fetchFn });
+
+  assert.equal(result.ok, false);
+  assert.equal(completionCalls, 0);
+  assert.match(result.stderr, /仅检索到 1 个官方\/一手来源,至少需要 2 个/);
+});
+
+test('严格任务:研究素材足够但正文未引用官方链接时拒绝落盘', async () => {
+  const workflow = tempWorkflow({
+    research: {
+      prioritySources: [],
+      officialSources: ['sec.gov', 'nasdaq.com'],
+      minOfficialSources: 2,
+      minOfficialCitations: 2,
+    },
+  });
+  const fetchFn = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    if (String(url).endsWith('/search')) {
+      if (body.includeDomains) {
+        return jsonResponse({ results: [
+          { title: 'SEC filing', url: 'https://www.sec.gov/filing', text: 'Official.' },
+          { title: 'Nasdaq event', url: 'https://www.nasdaq.com/event', text: 'Official.' },
+        ] });
+      }
+      return jsonResponse({ results: [] });
+    }
+    return jsonResponse({ choices: [{ message: { content: '---\ntitle: 无引用稿\n---\n正文只有无链接断言。' } }] });
+  };
+
+  const result = await runWriter({ workflow, input: '请充分引用官方与一手信源', config: baseConfig(), fetchFn });
+
+  assert.equal(result.ok, false);
+  assert.match(result.stderr, /正文仅引用 0 个已检索官方来源,至少需要 2 个/);
+  assert.equal(fs.existsSync(result.articlePath), false);
+});
+
+test('严格任务:官方域名检索偶发返回站外 URL 时不得计入官方来源', async () => {
+  const workflow = tempWorkflow({
+    research: {
+      prioritySources: [],
+      officialSources: ['sec.gov', 'nasdaq.com'],
+      minOfficialSources: 2,
+      minOfficialCitations: 2,
+    },
+  });
+  const fetchFn = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    if (String(url).endsWith('/search')) {
+      if (body.includeDomains) {
+        return jsonResponse({ results: [
+          { title: 'SEC filing', url: 'https://www.sec.gov/filing', text: 'Official.' },
+          { title: 'Unexpected mirror', url: 'https://mirror.example/nasdaq-event', text: 'Not official.' },
+        ] });
+      }
+      return jsonResponse({ results: [] });
+    }
+    return completionResponse();
+  };
+
+  const result = await runWriter({ workflow, input: '请引用官方一手信源', config: baseConfig(), fetchFn });
+
+  assert.equal(result.ok, false);
+  assert.match(result.stderr, /仅检索到 1 个官方\/一手来源/);
+});
+
+test('company 专项调研:基础查询之外并行执行 extraQueries', async () => {
+  const workflow = tempWorkflow({
+    research: {
+      prioritySources: [],
+      extraQueries: (task) => [`${task} 历史季度`, `${task} 竞争产业链`],
+    },
+  });
+  const queries = [];
+  const fetchFn = async (url, opts) => {
+    if (String(url).endsWith('/search')) {
+      const body = JSON.parse(opts.body);
+      queries.push(body.query);
+      return jsonResponse({ results: [{ title: body.query, url: `https://example.com/${queries.length}` }] });
+    }
+    return completionResponse();
+  };
+  const result = await runWriter({ workflow, input: 'AMAT', config: baseConfig(), fetchFn });
+  assert.equal(result.ok, true);
+  assert.deepEqual(queries, ['AMAT', 'AMAT 历史季度', 'AMAT 竞争产业链']);
+});
+
+test('company 财报深搜:传递 deep/financial report 参数,展开 subpages 并写调研轨迹', async () => {
+  const workflow = tempWorkflow({
+    id: 'company',
+    research: {
+      prioritySources: [],
+      extraQueries: () => [{
+        query: 'AMAT five quarters',
+        type: 'deep',
+        category: 'financial report',
+        numResults: 8,
+        kind: 'quarterly-financials',
+        systemPrompt: 'Prefer official filings',
+        additionalQueries: ['AMAT SEC 10-Q'],
+      }],
+    },
+  });
+  let deepBody;
+  const fetchFn = async (url, opts) => {
+    if (String(url).endsWith('/search')) {
+      const body = JSON.parse(opts.body);
+      if (body.category === 'financial report') {
+        deepBody = body;
+        return jsonResponse({
+          requestId: 'exa-deep-1',
+          costDollars: { total: 0.012 },
+          results: [{
+            title: 'FY26 Q2', url: 'https://sec.example/q2', text: 'Q2 data',
+            subpages: [{ title: 'FY26 Q1', url: 'https://sec.example/q1', text: 'Q1 data' }],
+          }],
+        });
+      }
+      return jsonResponse({ requestId: 'exa-open-1', results: [] });
+    }
+    return completionResponse();
+  };
+  const result = await runWriter({ workflow, input: 'AMAT', config: baseConfig(), fetchFn });
+  assert.equal(result.ok, true);
+  assert.equal(deepBody.type, 'deep');
+  assert.equal(deepBody.category, 'financial report');
+  assert.equal(deepBody.numResults, 8);
+  assert.equal(deepBody.systemPrompt, 'Prefer official filings');
+  assert.deepEqual(deepBody.additionalQueries, ['AMAT SEC 10-Q']);
+  assert.ok(result.sources.includes('https://sec.example/q1'));
+
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  const deepEvent = trace.requests.find((event) => event.kind === 'quarterly-financials');
+  assert.equal(deepEvent.status, 'ok');
+  assert.equal(deepEvent.requestId, 'exa-deep-1');
+  assert.ok(deepEvent.results.some((source) => source.url === 'https://sec.example/q1'));
+  assert.ok(trace.selectedSources.some((source) => source.kind === 'financial-report'));
+});
+
 test('优先路网络 hang(fetchFn 永不返回)时,exaTimeoutMs 超时后按失败降级为仅开放路结果,任务不会永久挂起', async () => {
   const workflow = tempWorkflow({ research: { prioritySources: ['trendforce.com'] } });
   const config = baseConfig();
@@ -342,6 +622,43 @@ test('任务 input 含多个 URL 时 /contents 一次性抓取全部(最多 5 �
 
   assert.equal(result.ok, true);
   assert.deepEqual(result.sources, urls);
+});
+
+test('严格官方任务允许一次抓取最多 8 个用户指定 URL', async () => {
+  const workflow = tempWorkflow({
+    research: {
+      prioritySources: [],
+      officialSources: ['sec.gov'],
+      minOfficialSources: 8,
+      minOfficialCitations: 8,
+    },
+  });
+  const urls = Array.from({ length: 8 }, (_, i) => `https://www.sec.gov/source-${i + 1}`);
+  let contentsBody;
+  const fetchFn = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    if (String(url).endsWith('/contents')) {
+      contentsBody = body;
+      return jsonResponse({ results: urls.map((sourceUrl, i) => ({ title: `SEC ${i + 1}`, url: sourceUrl, text: 'Official.' })) });
+    }
+    if (String(url).endsWith('/search')) return jsonResponse({ results: [] });
+    return jsonResponse({ choices: [{ message: { content: [
+      '---',
+      'title: 八个官方来源',
+      '---',
+      ...urls.map((sourceUrl, i) => `[SEC ${i + 1}](${sourceUrl})`),
+    ].join('\n') } }] });
+  };
+
+  const result = await runWriter({
+    workflow,
+    input: `请充分引用官方一手信源 ${urls.join(' ')}`,
+    config: baseConfig(),
+    fetchFn,
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(contentsBody.urls, urls);
 });
 
 test('input 去掉 URL 后为空白时跳过两路搜索,只用 /contents 素材', async () => {

@@ -17,7 +17,7 @@ export function parseSlackTask(raw, botUserId) {
 }
 
 // 中文别名 → 工作流 id。别名同样必须命中 workflowIds 才会真正路由。
-const WORKFLOW_ALIASES = { 微信: 'wechat', 邮件: 'email', 财报: 'earnings', 行业: 'sector', 晨报: 'morning', 直译: 'translate', 翻译: 'translate' };
+const WORKFLOW_ALIASES = { 微信: 'wechat', 公司: 'company', 个股: 'company', 深度: 'company', 邮件: 'email', 财报: 'earnings', 行业: 'sector', 晨报: 'morning', 直译: 'translate', 翻译: 'translate' };
 
 // 中文别名按长度从长到短排序,支持多个别名互为前缀时优先取最长匹配。
 const SORTED_ALIAS_KEYS = Object.keys(WORKFLOW_ALIASES).sort((a, b) => b.length - a.length);
@@ -43,6 +43,10 @@ export function resolveWorkflowTask(task, workflowIds = [], defaultWorkflowId = 
   if (m) {
     const matched = workflowIds.find((id) => id.toLowerCase() === m[1].toLowerCase());
     if (matched) return { workflowId: matched, task: m[2].trim() };
+  }
+  const company = workflowIds.find((id) => id.toLowerCase() === 'company');
+  if (company && /(?:财务|财报|营收|毛利)/.test(task) && /(?:竞争对手|竞争格局)/.test(task) && /(?:上下游|产业链|供应链)/.test(task)) {
+    return { workflowId: company, task };
   }
   return { workflowId: defaultWorkflowId, task };
 }

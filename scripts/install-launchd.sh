@@ -23,7 +23,7 @@ echo "==> 校验运行前提"
 
 if [ ! -f "$REPO/.env" ]; then
   echo "错误:未找到 $REPO/.env。" >&2
-  echo "请先参考 deploy/.env.example 在仓库根目录创建 .env(含 OPENROUTER_API_KEY / SLACK_BOT_TOKEN 等必填项),再重新运行本脚本。" >&2
+  echo "请先复制 .env.example 为 .env 并填写必填项,再重新运行本脚本。" >&2
   exit 1
 fi
 

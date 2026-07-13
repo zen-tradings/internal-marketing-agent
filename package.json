@@ -6,8 +6,11 @@
   "scripts": {
     "start": "node src/index.js",
     "check:openrouter": "node scripts/check-openrouter.mjs",
+    "check:customerio": "node scripts/check-customerio.mjs",
     "status": "node scripts/status.mjs",
-    "test": "node --test"
+    "trace:research": "node scripts/research-trace.mjs",
+    "test": "node --test test/*.test.js test/golden/*.test.js",
+    "test:update-golden": "node scripts/update-render-golden.mjs"
   },
   "dependencies": {
     "@slack/bolt": "^3.17.0",

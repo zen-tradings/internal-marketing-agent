@@ -13,6 +13,11 @@ export function checkArticle(markdown) {
 
   const fmMatch = md.match(/^---\n([\s\S]*?)\n---/);
   const fm = fmMatch ? fmMatch[1] : '';
+  // `cover` 由发布链路写回为本地文件路径，重试时不能把这个系统字段误判为
+  // 模型泄漏的本地路径。正文及其他 frontmatter 字段仍保持严格检查。
+  const markdownWithoutGeneratedCover = fmMatch
+    ? md.replace(/^---\n[\s\S]*?\n---/, (block) => block.replace(/^\s*cover\s*:\s*.*(?:\n|$)/gm, ''))
+    : md;
 
   if (!fmMatch || !/^\s*title\s*:\s*\S/m.test(fm)) {
     errors.push('出口拦截:frontmatter 缺少 title 字段');
@@ -24,7 +29,7 @@ export function checkArticle(markdown) {
     }
   }
 
-  if (/\/Users\//.test(md)) {
+  if (/\/Users\//.test(markdownWithoutGeneratedCover)) {
     errors.push('出口拦截:正文包含本地路径 /Users/,模型产出不应出现本地文件路径');
   }
 
