@@ -18,3 +18,16 @@ test('恰好在最后一次允许的尝试(第 retries+1 次)成功', async () =
   assert.equal(r, 'ok');
   assert.equal(n, 3, 'retries=2 允许 3 次尝试,应恰好在第 3 次成功');
 });
+
+test('runWithRetry 可按工作流配置在重试间等待', async () => {
+  const waits = [];
+  let n = 0;
+  const result = await runWithRetry(
+    async () => { n++; if (n < 3) throw new Error('网络抖动'); return 'ok'; },
+    2,
+    15000,
+    async (ms) => waits.push(ms),
+  );
+  assert.equal(result, 'ok');
+  assert.deepEqual(waits, [15000, 15000]);
+});

@@ -56,6 +56,9 @@ test('workflow.research:行业优先源排除 Exa 不支持域名,官方源与�
     assert.ok(wf.research.officialSources.includes('sec.gov'));
     assert.ok(wf.research.officialSources.includes('nasdaq.com'));
     assert.ok(wf.research.officialSources.includes('skhynix.com'));
+    assert.ok(wf.research.officialSources.includes('sse.com.cn'));
+    assert.ok(wf.research.officialSources.includes('cninfo.com.cn'));
+    assert.ok(wf.research.officialSources.includes('cxmt.com'));
 
     // 设置 env → 整体覆盖,逗号分隔并去除空白
     process.env.EXA_PRIORITY_DOMAINS = 'foo.com, bar.com ,baz.com';
@@ -126,7 +129,8 @@ test('translate 工作流:id、workDir 子目录、channel/research 与其它工
     assert.equal(translate.id, 'translate');
     assert.deepEqual(translate.triggers, ['slack']);
     assert.equal(translate.workDir, '/srv/zen/wechat/translate');
-    assert.equal(translate.retries, 0);
+    assert.equal(translate.retries, 3);
+    assert.equal(translate.retryDelayMs, 15000);
 
     process.env.WECHAT_CHANNEL = 'mock';
     assert.equal(translate.channel, 'mock');
@@ -156,14 +160,15 @@ test('company 工作流:专业分析提示词、独立目录与专项检索', as
     assert.equal(company.workDir, '/srv/zen/wechat/company');
     assert.equal(typeof company.research.extraQueries, 'function');
     const extraQueries = company.research.extraQueries('AMAT');
-    assert.equal(extraQueries.length, 2);
+    assert.equal(extraQueries.length, 3);
     assert.equal(extraQueries[0].type, 'deep');
     assert.equal(extraQueries[0].category, 'financial report');
     const prompt = company.promptTemplate('分析 AMAT');
-    assert.match(prompt, /最近连续四到六个已披露季度/);
+    assert.match(prompt, /最近四到六个季度做同口径比较/);
     assert.match(prompt, /quarterly-chart/);
     assert.match(prompt, /不要按用户关键词机械分栏/);
     assert.match(prompt, /真正可比对手/);
+    assert.match(prompt, /未上市、拟上市或季度披露不足/);
   } finally {
     if (origWorkDir) process.env.WORK_DIR = origWorkDir; else delete process.env.WORK_DIR;
   }

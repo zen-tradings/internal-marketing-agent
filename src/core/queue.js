@@ -18,6 +18,12 @@ export function createQueue({ store, maxConcurrency = 1, handler }) {
       store.createRun(task);
       pending.push(task);
       schedule();
+      return task;
+    },
+    restore(task) {
+      pending.push(task);
+      schedule();
+      return task;
     },
   };
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSlackTask, resolveWorkflowTask } from '../src/triggers/slack.js';
+import { parseSlackTask, resolveNaturalWorkflowTask, resolveWorkflowTask } from '../src/triggers/slack.js';
 
 test('识别 "任务:" 前缀', () => {
   assert.equal(parseSlackTask('任务:写英伟达', 'B1'), '写英伟达');
@@ -11,6 +11,38 @@ test('识别 @bot 提及并清理链接', () => {
 });
 test('非任务返回 null', () => {
   assert.equal(parseSlackTask('随便聊聊', 'B1'), null);
+});
+
+test('Slack 私聊接受普通自然语言,公共频道仍必须 @Bot 或任务前缀', () => {
+  assert.equal(parseSlackTask('帮我写一篇英伟达分析', 'B1', { channelType: 'im', channel: 'D1' }), '帮我写一篇英伟达分析');
+  assert.equal(parseSlackTask('帮我写一篇英伟达分析', 'B1', { channelType: 'channel', channel: 'C1' }), null);
+});
+
+test('自然语言路由:裸链接是研究素材并默认公众号分析,只有显式翻译才走直译', async () => {
+  const ids = ['wechat', 'email', 'translate', 'company', 'earnings', 'sector', 'morning'];
+  assert.equal((await resolveNaturalWorkflowTask('https://papers.ssrn.com/abstract=1', { workflowIds: ids })).workflowId, 'wechat');
+  assert.equal((await resolveNaturalWorkflowTask('请完整翻译这篇文章 https://example.com/a', { workflowIds: ids })).workflowId, 'translate');
+  const middleKeyword = await resolveNaturalWorkflowTask('帮忙把 https://example.com/a 这篇内容翻译一下', { workflowIds: ids });
+  assert.equal(middleKeyword.workflowId, 'translate');
+  assert.equal(middleKeyword.reason, 'translation-keyword-with-url');
+  assert.equal((await resolveNaturalWorkflowTask('给订阅者写一期 newsletter', { workflowIds: ids })).workflowId, 'email');
+});
+
+test('自然语言路由:用户链接加财务、竞品和上下游要求进入公司深度分析', async () => {
+  const ids = ['wechat', 'email', 'translate', 'company', 'earnings', 'sector', 'morning'];
+  const task = '分析长鑫存储 https://www.stcn.com/article/detail/4010092.html，根据这个链接和官方信息源写专业深度分析，包括财务分析、竞争对手和上下游';
+  const route = await resolveNaturalWorkflowTask(task, { workflowIds: ids });
+  assert.equal(route.workflowId, 'company');
+  assert.equal(route.reason, 'natural-rule');
+});
+
+test('自然语言路由:同线程短补充继承上个工作流,模糊长任务默认微信', async () => {
+  const ids = ['wechat', 'email', 'translate'];
+  const followup = await resolveNaturalWorkflowTask('换一个更直接的标题', { workflowIds: ids, previousWorkflowId: 'translate' });
+  assert.equal(followup.workflowId, 'translate');
+  assert.equal(followup.reason, 'thread-context');
+  const fallback = await resolveNaturalWorkflowTask('写一篇对这个主题的深入看法，供下周讨论使用。'.repeat(10), { workflowIds: ids, defaultWorkflowId: 'wechat' });
+  assert.equal(fallback.workflowId, 'wechat');
 });
 
 test('多工作流路由:无前缀走 defaultWorkflowId', () => {

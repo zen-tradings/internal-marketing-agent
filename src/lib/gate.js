@@ -1,3 +1,5 @@
+import { findUnreadableTables } from './mobile-tables.js';
+
 // 发布前门禁:纯函数,确定性规则。errors 出口拦截(不予发布),warnings 放行但需 Slack 提醒人工关注。
 // 门禁在注入头尾图之前跑,检查的是模型产出的原文,本地路径/密钥这类内容在模型输出里本就不该出现。
 
@@ -31,6 +33,32 @@ export function checkArticle(markdown) {
 
   if (/\/Users\//.test(markdownWithoutGeneratedCover)) {
     errors.push('出口拦截:正文包含本地路径 /Users/,模型产出不应出现本地文件路径');
+  }
+
+  if (/```/.test(md)) {
+    errors.push('出口拦截:正文包含代码围栏,公众号固定版式不允许代码卡片');
+  }
+
+  // V2 represents source-authored code samples as explicit HTML <pre><code>
+  // blocks. Their internal indentation is intentional content and cannot
+  // accidentally become a Markdown/Mac-style code card, so only inspect text
+  // outside those blocks for unsafe four-space indentation.
+  const markdownOutsideExplicitPre = md.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, '');
+  if (markdownOutsideExplicitPre.split(/\r?\n/).some((line) => /^ {4,}\S/.test(line))) {
+    errors.push('出口拦截:正文包含四空格缩进块,会被渲染为黄色代码框');
+  }
+
+  if (/source-page-\d+\.png/i.test(md)) {
+    errors.push('出口拦截:正文包含 PDF 整页截图,会破坏公众号阅读体验');
+  }
+
+  if (/!\[[^\]]*\]\([^)]*(?:source[-_]?page|page[-_]?\d+)[^)]*\.(?:png|jpe?g|webp)(?:\?[^)]*)?\)/i.test(md)) {
+    errors.push('出口拦截:正文包含疑似 PDF 整页图片,请仅保留原文图表或中文概括');
+  }
+
+  const unreadableTables = findUnreadableTables(md);
+  if (unreadableTables.length) {
+    warnings.push(`排版提醒:正文仍有 ${unreadableTables.length} 个无法自动拆分的宽表或列数异常表格,已按可读性优先放行`);
   }
 
   if (md.includes('——')) {

@@ -1,4 +1,4 @@
-import { sharedResearch, envChannel, envModel, envTimeoutMs, workDirFor, buildPromptTemplate } from './shared.js';
+import { sharedResearch, officialFirstPolicy, envChannel, envModel, envTimeoutMs, workDirFor, buildPromptTemplate } from './shared.js';
 
 const METHODOLOGY = `【财报分析框架 — 专属要求】
 围绕本季度财报撰写更新点评,聚焦本季度"新变化",不复述公司背景:
@@ -12,6 +12,9 @@ const METHODOLOGY = `【财报分析框架 — 专属要求】
 
 export default {
   id: 'earnings',
+  mode: 'analysis',
+  sourcePolicy: officialFirstPolicy(),
+  factReview: true,
   triggers: ['slack'],
   get workDir() { return workDirFor('earnings'); },
   get model() { return envModel(); },

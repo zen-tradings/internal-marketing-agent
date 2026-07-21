@@ -7,6 +7,7 @@ import { createNotifier } from './core/notifier.js';
 import { registerSlack } from './triggers/slack.js';
 import { registerCron } from './triggers/cron.js';
 import { isTransientSocketModeError } from './lib/slack-resilience.js';
+import { assertExpectedEgress, startEgressMonitor, waitForExpectedEgress } from './lib/egress.js';
 import wechatWorkflow from './workflows/wechat.js';
 import earningsWorkflow from './workflows/earnings.js';
 import sectorWorkflow from './workflows/sector.js';
@@ -31,17 +32,24 @@ const WORKFLOWS = {
 };
 const CHANNELS = { mock: mockChannel, 'wechat-draft': wechatDraft, 'customerio-draft': customerioDraft };
 
-export async function runWithRetry(fn, retries = 0) {
+export async function runWithRetry(fn, retries = 0, retryDelayMs = 0, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
   let last;
   for (let i = 0; i <= retries; i++) {
-    try { return await fn(); } catch (e) { last = e; }
+    try { return await fn(); }
+    catch (e) {
+      last = e;
+      if (i < retries) {
+        console.error(`[hub] 执行失败,准备第 ${i + 2}/${retries + 1} 次尝试:${e?.message || e}`);
+        if (retryDelayMs > 0) await sleep(retryDelayMs);
+      }
+    }
   }
   throw last;
 }
 
 export function assertMainProcessDirect(env = process.env) {
   for (const k of ['https_proxy', 'http_proxy', 'all_proxy', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY']) {
-    if (env[k]) throw new Error(`主进程不得设置代理(${k});OpenRouter/Exa/微信必须直连。`);
+    if (env[k]) throw new Error(`主进程不得设置代理变量(${k});网络出口必须由 Clash TUN 统一接管。`);
   }
 }
 
@@ -55,14 +63,36 @@ export function makeHandler(deps) {
     const wf = workflows[run.workflowId];
     const notify = JSON.parse(store.getRun(run.id).notify_json || '{}');
     store.setStatus(run.id, 'running', { startedAt: Date.now() });
+    let writerAttempt = 0;
     try {
-      const { title, mediaId } = await runWithRetry(async () => {
+      // 每个任务在接触 Exa/OpenRouter/发布渠道之前重新确认固定出口。
+      // Clash/TUN 掉线或静态代理切换时 fail closed,不把真实出口暴露给业务 API。
+      if (wf.mode === 'translation' && deps.waitForEgress) {
+        let waitingLogged = false;
+        await deps.waitForEgress(config.egress, {
+          onWait(error) {
+            if (!waitingLogged) console.error(`[hub] 直译任务 ${run.id} 等待安全出口:${error.message}`);
+            waitingLogged = true;
+          },
+        });
+      } else {
+        await (deps.assertEgress || assertExpectedEgress)(config.egress);
+      }
+      const { title, mediaId, sourceCount, completeness } = await runWithRetry(async () => {
         // 发布幂等:已有 media_id 说明上一轮(重试循环内或重启后重投)已经发布成功过,
         // 跳过重新生成/发布,避免产生重复草稿。
         const existing = store.getRun(run.id);
         if (existing.media_id) return { title: existing.title, mediaId: existing.media_id };
 
-        const res = await runWriter({ workflow: wf, input: run.input, config });
+        const resumeFromCheckpoint = Boolean(run.restored || writerAttempt > 0);
+        writerAttempt += 1;
+        const res = await runWriter({
+          workflow: wf,
+          input: run.input,
+          config,
+          onProgress: (progress) => deps.notifier?.progress?.(notify, progress),
+          resumeFromCheckpoint,
+        });
         if (!res.ok) { const err = new Error(res.stderr); err.stage = 'generate'; throw err; }
 
         // dry-run:HUB_DRY_RUN 置位时,不管 workflow 声明的是哪个渠道,一律强制走 mock,
@@ -71,17 +101,35 @@ export function makeHandler(deps) {
         const DRY = /^(1|true|yes|on)$/i.test(process.env.HUB_DRY_RUN || '');
         const channelId = DRY ? 'mock' : wf.channel;
         const channel = channels[channelId];
-        const { mediaId, title } = await channel.publish({ articlePath: res.articlePath, config, workflow: wf, notify, notifier: deps.notifier });
+        if (wf.mode === 'translation' && deps.notifier?.progress) {
+          await deps.notifier.progress(notify, {
+            stage: 'draft',
+            message: DRY ? '完整性校验通过，正在生成 dry-run 草稿结果' : '完整性校验通过，正在创建微信公众号草稿',
+            completed: 1,
+            total: 1,
+          });
+        }
+        const { mediaId, title } = await channel.publish({
+          articlePath: res.articlePath,
+          config,
+          workflow: wf,
+          notify,
+          notifier: deps.notifier,
+          runId: run.id,
+          resumeFromCheckpoint,
+        });
         store.setMediaId(run.id, mediaId, title); // 早写,发布成功后立刻落库,支撑上面的幂等判断
-        return { mediaId, title };
-      }, wf.retries);
+        return { mediaId, title, sourceCount: res.sources?.length || 0, completeness: res.completeness };
+      }, wf.retries, wf.retryDelayMs);
       store.setStatus(run.id, 'done', { title, mediaId, finishedAt: Date.now() });
-      if (deps.notifier) await deps.notifier.success(notify, { title, mediaId });
+      if (deps.notifier) await deps.notifier.success(notify, { title, mediaId, channelId: wf.channel, sourceCount, completeness });
       else console.error('[hub] notifier 未就绪,跳过 success 通知(启动窗口期竞态)', { runId: run.id, title, mediaId });
     } catch (e) {
       const stage = e.stage || 'publish';
       store.setStatus(run.id, 'failed', { stage, error: e.message, finishedAt: Date.now() });
-      if (deps.notifier) await deps.notifier.failure(notify, { stage, error: e.message });
+      // 出口未知时不调用 Slack 告警,否则告警请求本身也可能从错误出口发出。
+      if (stage === 'egress') console.error(`[hub] ${e.message}`);
+      else if (deps.notifier) await deps.notifier.failure(notify, { stage, error: e.message });
       else console.error('[hub] notifier 未就绪,跳过 failure 通知(启动窗口期竞态)', { runId: run.id, stage, error: e.message });
     }
   };
@@ -90,11 +138,41 @@ export function makeHandler(deps) {
 export async function start() {
   assertMainProcessDirect();
   const config = loadConfig();
+  let waitingLogged = false;
+  await waitForExpectedEgress(config.egress, {
+    onWait(error) {
+      if (!waitingLogged) console.error(`[hub] ${error.message};等待固定出口恢复后再启动。`);
+      waitingLogged = true;
+    },
+  });
+  if (config.egress.enabled) console.log('[hub] 固定公网出口校验通过');
+
+  startEgressMonitor(config.egress, {
+    onFailure(error) {
+      console.error(`[hub] ${error.message};为避免直连泄漏,进程退出并等待 launchd 重启。`);
+      process.exit(1);
+    },
+  });
   const store = openStore(config.dbPath);
+  // 长篇直译按分块保存 checkpoint，可在出口波动导致进程重启后安全续跑。
+  // 其它工作流仍标记 interrupted 并等待人工确认，避免自动重复创建草稿。
+  const recoveredTranslations = store.recoverRunningWorkflow('translate');
+  if (recoveredTranslations) console.log(`[hub] 启动:自动恢复 ${recoveredTranslations} 个直译任务`);
   const interrupted = store.markInterrupted();
   if (interrupted) console.log(`[hub] 启动:${interrupted} 个残留任务标记为 interrupted`);
+  // 只恢复显式处于 queued 的持久化任务。interrupted 不会自动重跑，必须先由
+  // 管理操作明确 requeue，避免旧任务在重启后意外创建草稿。
+  const persistedQueued = store.listByStatus('queued');
 
-  const deps = { store, runWriter, workflows: WORKFLOWS, channels: CHANNELS, config, notifier: undefined };
+  const deps = {
+    store,
+    runWriter,
+    workflows: WORKFLOWS,
+    channels: CHANNELS,
+    config,
+    notifier: undefined,
+    waitForEgress: waitForExpectedEgress,
+  };
   const handler = makeHandler(deps);
 
   const queue = createQueue({ store, maxConcurrency: config.maxConcurrency, handler });
@@ -118,7 +196,7 @@ export async function start() {
   async function connectSlack() {
     for (let attempt = 0; ; attempt++) {
       try {
-        const app = await registerSlack({ config, enqueue, workflowIds: Object.keys(WORKFLOWS) });
+        const app = await registerSlack({ config, enqueue, store, workflowIds: Object.keys(WORKFLOWS) });
         deps.notifier = createNotifier((m) => app.client.chat.postMessage(m));
         console.log('⚡ Slack 已连接');
         return app;
@@ -148,7 +226,22 @@ export async function start() {
     process.exit(1);
   });
 
-  await connectSlack();
+  // Slack 的 Socket Mode 是交互入口，不是已持久化发布任务的前置条件。
+  // 网络瞬断时 connectSlack 会自行退避重试；若在这里 await，它会把恢复中的
+  // 长篇直译永远卡在队列外，直到 Slack 恢复。先让队列恢复并执行，通知器随后
+  // 连接成功时再接管回执/进度通知。
+  void connectSlack();
+  for (const row of persistedQueued) {
+    queue.restore({
+      id: row.id,
+      workflowId: row.workflow_id,
+      source: row.source,
+      input: row.input,
+      notify: JSON.parse(row.notify_json || '{}'),
+      restored: true,
+    });
+  }
+  if (persistedQueued.length) console.log(`[hub] 已恢复 ${persistedQueued.length} 个持久化排队任务`);
   registerCron({ workflows: WORKFLOWS, enqueue });
   console.log('⚡ Zen Content Hub 已启动');
 }

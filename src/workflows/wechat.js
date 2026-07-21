@@ -1,7 +1,10 @@
-import { sharedResearch, envChannel, envModel, envTimeoutMs, buildPromptTemplate } from './shared.js';
+import { sharedResearch, officialFirstPolicy, envChannel, envModel, envTimeoutMs, buildPromptTemplate } from './shared.js';
 
 export default {
   id: 'wechat',
+  mode: 'analysis',
+  sourcePolicy: officialFirstPolicy(),
+  factReview: true,
   triggers: ['slack'],
   get workDir() { return process.env.WORK_DIR || '/srv/zen/wechat'; }, // 保持现状,不带子目录
   get model() { return envModel(); },

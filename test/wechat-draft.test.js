@@ -14,8 +14,8 @@ const VALID_MD = [
 
 const stubCover = { generateCover: async () => '/x/cover.png', writeArticle: async () => {} };
 
-test('RENDER_OPTS 与 wenyan-mcp 复刻一致', () => {
-  assert.deepEqual(RENDER_OPTS, { theme: 'zen-trading', highlight: 'solarized-light', macStyle: true, footnote: true });
+test('RENDER_OPTS 固定为普通微信公众号版式', () => {
+  assert.deepEqual(RENDER_OPTS, { theme: 'zen-trading', highlight: 'solarized-light', macStyle: false, footnote: false });
 });
 
 test('publish 调 renderAndPublish 并返回 mediaId/title', async () => {
@@ -63,6 +63,23 @@ test('缺失微信凭据 → stage=publish 且不调用 renderAndPublish', async
     (e) => { assert.equal(e.stage, 'publish'); return true; }
   );
   assert.equal(called, false);
+});
+
+test('微信发布前出口校验失败时不生成封面、不调用微信 API', async () => {
+  let coverCalled = false;
+  let renderCalled = false;
+  const channel = makeChannel({
+    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
+    assertExpectedEgress: async () => { const error = new Error('出口不一致'); error.stage = 'egress'; throw error; },
+    generateCover: async () => { coverCalled = true; return '/x/cover.png'; },
+    renderAndPublish: async () => { renderCalled = true; return 'MEDIA-X'; },
+  });
+  await assert.rejects(
+    () => channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' }, egress: { enabled: true } } }),
+    (error) => error.stage === 'egress',
+  );
+  assert.equal(coverCalled, false);
+  assert.equal(renderCalled, false);
 });
 
 test('publish 成功后恢复 process.env 的原值', async () => {
@@ -207,6 +224,36 @@ test('门禁 warnings 命中 → notifier.warn 告警后继续发布(不阻断)'
   assert.equal(warned.length, 1);
   assert.match(warned[0].msg, /门禁提醒/);
   assert.match(warned[0].msg, /破折号/);
+});
+
+test('不可读宽表在门禁前自动拆分并写回,随后继续发布', async () => {
+  const warned = [];
+  const writes = [];
+  let gateInput;
+  const markdown = [
+    '---', 'title: T', '---',
+    '| 报告期 | 营业收入（亿元） | 同比增速 | 毛利率 | 净利润/归母净利润（亿元） |',
+    '|---|---:|---:|---:|---:|',
+    '| 2025年 | 617.99 | 155.60% | 41.02% | 18.75 |',
+  ].join('\n');
+  const channel = makeChannel({
+    generateCover: async () => '/out/cover.png',
+    readArticle: async () => ({ markdown, title: 'T' }),
+    writeArticle: async (path, content) => writes.push(content),
+    checkArticle: (md) => { gateInput = md; return { errors: [], warnings: [] }; },
+    injectFixedImages: (md) => ({ markdown: md, skipped: [] }),
+    renderAndPublish: async () => 'MEDIA-WIDE',
+  });
+  const out = await channel.publish({
+    articlePath: '/out/article.md',
+    config: { wechat: { appId: 'wx', appSecret: 's' } },
+    notify: { channel: 'C', ts: '1' },
+    notifier: { warn: async (notify, message) => warned.push(message) },
+  });
+  assert.equal(out.mediaId, 'MEDIA-WIDE');
+  assert.match(gateInput, /\| 报告期 \| 净利润\/归母净利润（亿元） \|/);
+  assert.ok(writes.some((content) => content.includes('| 报告期 | 净利润/归母净利润（亿元） |')));
+  assert.ok(warned.some((message) => /自动将 1 个宽表拆为 2 个/.test(message)));
 });
 
 test('重试时系统写入的 cover 与固定图本地路径不触发门禁,正文路径仍由门禁检查', async () => {

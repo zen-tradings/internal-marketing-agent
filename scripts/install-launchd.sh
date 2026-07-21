@@ -7,7 +7,8 @@
 # 重要:生成的 plist 里 EnvironmentVariables 只设置 PATH，绝不注入
 # HTTP_PROXY/HTTPS_PROXY/ALL_PROXY 等代理变量。src/index.js 的
 # assertMainProcessDirect() 会在主进程检测到这些代理变量时主动拒绝启动——
-# 这是有意为之的设计(避免微信 API 调用的出口 IP 被代理污染，导致 IP 白名单失效)。
+# 这是有意为之的设计:应用层不单独选路,所有 Node/Slack/微信请求统一由
+# Clash TUN 接管；项目自身再用 EXPECTED_EGRESS_IP 做 fail-closed 校验。
 # 如果你的 shell profile 里全局导出了代理变量，不会影响 launchd 启动的进程，
 # 因为 launchd 不会继承交互式 shell 的环境变量。
 set -euo pipefail
@@ -36,8 +37,52 @@ fi
 NODE_BIN="$(command -v node)"
 NODE_DIR="$(cd "$(dirname "$NODE_BIN")" && pwd)"
 
+# launchd 不会读取交互式 shell 的 profile。除 Node 自身目录外，显式加入
+# Apple Silicon 与 Intel Homebrew 的常用 bin 路径，并优先使用当前 brew
+# 实际返回的 prefix，确保 Poppler 等运行时工具在登录重启后仍可被找到。
+PATH_PARTS=("$NODE_DIR")
+append_path_part() {
+  local candidate="$1"
+  [ -n "$candidate" ] || return 0
+  [ -d "$candidate" ] || return 0
+  local existing
+  for existing in "${PATH_PARTS[@]}"; do
+    [ "$existing" = "$candidate" ] && return 0
+  done
+  PATH_PARTS+=("$candidate")
+}
+
+BREW_PREFIX=""
+if command -v brew >/dev/null 2>&1; then
+  BREW_PREFIX="$(brew --prefix 2>/dev/null || true)"
+fi
+append_path_part "${BREW_PREFIX:+${BREW_PREFIX}/bin}"
+append_path_part "/opt/homebrew/bin"
+append_path_part "/usr/local/bin"
+append_path_part "/usr/bin"
+append_path_part "/bin"
+append_path_part "/usr/sbin"
+append_path_part "/sbin"
+SERVICE_PATH="$(IFS=:; echo "${PATH_PARTS[*]}")"
+
+POPLER_COMMANDS=(pdftotext pdfinfo pdftoppm pdfimages)
+for command_name in "${POPLER_COMMANDS[@]}"; do
+  if ! env PATH="$SERVICE_PATH" "$command_name" -v >/dev/null 2>&1; then
+    if [ -n "$BREW_PREFIX" ] && brew list --versions poppler >/dev/null 2>&1; then
+      echo "错误:Poppler 已安装,但服务环境找不到 ${command_name}。" >&2
+      echo "请检查 Homebrew 安装状态,然后重新运行本脚本。" >&2
+    else
+      echo "错误:未安装 PDF 直译所需的 Poppler 命令 ${command_name}。" >&2
+      echo "请先运行 brew install poppler,再重新运行本脚本。" >&2
+    fi
+    exit 1
+  fi
+done
+
 echo "    仓库根目录: $REPO"
 echo "    node 路径:   $NODE_BIN"
+echo "    服务 PATH:   $SERVICE_PATH"
+echo "    Poppler:      已验证 pdftotext / pdfinfo / pdftoppm / pdfimages"
 
 echo "==> 准备日志目录"
 mkdir -p "$LOG_DIR"
@@ -74,15 +119,38 @@ cat > "$PLIST_PATH" <<PLIST_EOF
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>${NODE_DIR}:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>${SERVICE_PATH}</string>
     </dict>
 </dict>
 </plist>
 PLIST_EOF
 
 echo "==> 加载 LaunchAgent(幂等:先尝试卸载已加载的旧实例)"
-launchctl bootout "gui/${UID_NUM}/${LABEL}" >/dev/null 2>&1 || true
-launchctl bootstrap "gui/${UID_NUM}" "$PLIST_PATH"
+launchctl bootout "gui/${UID_NUM}/${LABEL}" >/dev/null 2>&1 \
+  || launchctl bootout "gui/${UID_NUM}" "$PLIST_PATH" >/dev/null 2>&1 \
+  || true
+
+# bootout 有时会在旧进程退出完成前返回；等待服务从 launchd 域消失，避免紧接着
+# bootstrap 时出现瞬时的 Input/output error。
+for _ in {1..20}; do
+  if ! launchctl print "gui/${UID_NUM}/${LABEL}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.25
+done
+
+BOOTSTRAPPED=false
+for _ in {1..3}; do
+  if launchctl bootstrap "gui/${UID_NUM}" "$PLIST_PATH"; then
+    BOOTSTRAPPED=true
+    break
+  fi
+  sleep 1
+done
+if [ "$BOOTSTRAPPED" != true ]; then
+  echo "错误:LaunchAgent 重新加载失败,请检查 launchctl 与日志输出。" >&2
+  exit 1
+fi
 launchctl kickstart -k "gui/${UID_NUM}/${LABEL}"
 
 echo ""

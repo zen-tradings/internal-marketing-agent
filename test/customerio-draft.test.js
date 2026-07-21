@@ -5,7 +5,7 @@ import { parseNewsletterArticle, renderNewsletterEmail } from '../src/lib/newsle
 
 const ARTICLE = `---
 title: HBM supply is the bottleneck
-subject: Zen Trading Newsletter · Vol. 1 | HBM supply
+subject: Zen Research from Zen Trading · Vol. 1 | HBM supply
 preheader: Three signals we are watching this week.
 edition: vol.1
 ---
@@ -26,7 +26,7 @@ function config(overrides = {}) {
       audienceMaxRecipients: { internal: 10, pilot: 50 },
       allowFullAudience: false,
       newsletterSegmentId: 17,
-      from: 'Zen Trading <newsletter@example.com>',
+      from: 'Zen Trading <support@zentradings.com>',
       companyAddress: '123 Market Street, San Francisco, CA',
       siteUrl: 'https://zentradings.com',
       feedbackUrl: 'https://example.com/feedback',
@@ -39,13 +39,28 @@ test('newsletter article:规范化 Vol. 版号并渲染品牌/退订/反馈结�
   const parsed = parseNewsletterArticle(ARTICLE);
   assert.equal(parsed.edition, 'Vol. 1');
   const html = renderNewsletterEmail(parsed, config().customerio);
-  assert.match(html, /ZEN TRADING NEWSLETTER · VOL\. 1/);
+  assert.match(html, /ZEN RESEARCH FROM ZEN TRADING/);
   assert.match(html, /HBM supply is the bottleneck/);
   assert.match(html, /\{% unsubscribe_url %\}/);
   assert.doesNotMatch(html, /\{\{ unsubscribe_url \}\}/);
-  assert.match(html, /Share feedback/);
+  assert.match(html, /Satisfied/);
+  assert.match(html, /Not satisfied/);
+  assert.match(html, /rating=positive/);
+  assert.match(html, /rating=negative/);
+  assert.match(html, /edition=Vol\.\+1/);
   assert.match(html, /<strong>supply matters<\/strong>/);
   assert.match(html, /href="https:\/\/example\.com\/filing"/);
+});
+
+test('newsletter feedback:未配置反馈页时退化为可追踪 mailto 按钮', () => {
+  const parsed = parseNewsletterArticle(ARTICLE);
+  const html = renderNewsletterEmail(parsed, config({
+    feedbackUrl: '',
+    contactEmail: 'research@example.com',
+  }).customerio);
+  assert.match(html, /mailto:research@example\.com\?subject=/);
+  assert.match(html, /Zen%20Research%20feedback%3A%20satisfied/);
+  assert.match(html, /Zen%20Research%20feedback%3A%20not%20satisfied/);
 });
 
 test('Customer.io channel:只创建内部 segment 草稿,绝不夹带发送或排期字段', async () => {
@@ -64,7 +79,7 @@ test('Customer.io channel:只创建内部 segment 草稿,绝不夹带发送或�
   const [preflight, request] = requests;
 
   assert.equal(result.mediaId, 'customerio-newsletter:41');
-  assert.equal(result.title, 'Zen Trading Newsletter · Vol. 1');
+  assert.equal(result.title, 'Zen Research from Zen Trading · Vol. 1');
   assert.equal(result.audienceStage, 'internal');
   assert.equal(result.audienceSegmentId, 17);
   assert.equal(result.audienceRecipientCount, 3);
@@ -76,9 +91,57 @@ test('Customer.io channel:只创建内部 segment 草稿,绝不夹带发送或�
     and: [{ or: [{ segment: { id: 17 } }] }],
   });
   assert.equal(request.payload.type, 'email');
-  assert.equal(request.payload.subject, 'Zen Trading Newsletter · Vol. 1 | HBM supply');
+  assert.equal(request.payload.subject, 'Zen Research from Zen Trading · Vol. 1 | HBM supply');
+  assert.equal(request.payload.from, 'Zen Trading <support@zentradings.com>');
   assert.ok(!('send_now' in request.payload));
   assert.ok(!('scheduled_at' in request.payload));
+});
+
+test('Customer.io channel:发件邮箱不是 support@zentradings.com 时在网络请求前拦截', async () => {
+  let calls = 0;
+  const channel = makeChannel({ readArticle: async () => ARTICLE, fetchFn: async () => { calls++; } });
+  await assert.rejects(
+    channel.publish({ articlePath: '/tmp/article.md', config: config({ from: 'Other <other@example.com>' }) }),
+    /发件邮箱必须统一为 support@zentradings\.com/,
+  );
+  assert.equal(calls, 0);
+});
+
+test('Customer.io channel:未验证发件域名时返回可操作提示且不切换发件人', async () => {
+  const requests = [];
+  const channel = makeChannel({
+    readArticle: async () => ARTICLE,
+    fetchFn: async (url, options) => {
+      requests.push({ url, options, payload: options.body ? JSON.parse(options.body) : undefined });
+      if (options.method === 'GET') {
+        return { ok: true, status: 200, async json() { return { segment_id: 17, count: 3 }; } };
+      }
+      return {
+        ok: false,
+        status: 422,
+        statusText: 'Unprocessable Entity',
+        async text() {
+          return JSON.stringify({
+            errors: [{ detail: 'domain "zentradings.com" has not been verified in this workspace' }],
+          });
+        },
+      };
+    },
+  });
+
+  await assert.rejects(
+    channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' } }),
+    (error) => {
+      assert.equal(error.stage, 'publish');
+      assert.match(error.message, /发件域名 zentradings\.com 尚未在当前 workspace 完成验证/);
+      assert.match(error.message, /保留 support@zentradings\.com/);
+      assert.match(error.message, /Settings → Workspace Settings → Email/);
+      assert.doesNotMatch(error.message, /unknown|"errors"/);
+      return true;
+    },
+  );
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].payload.from, 'Zen Trading <support@zentradings.com>');
 });
 
 test('Customer.io channel:缺 segment 或公司地址时在网络请求前拦截', async () => {

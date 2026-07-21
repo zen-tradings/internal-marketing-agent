@@ -1,13 +1,17 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { renderAndPublish as coreRenderAndPublish } from '@wenyan-md/core/wrapper';
 import { getInputContent as defaultGetInputContent } from '../lib/getInputContent.js';
 import { generateCover as defaultGenerateCover, ensureFrontmatterCover as defaultEnsureFrontmatterCover } from '../lib/cover.js';
 import { checkArticle as defaultCheckArticle } from '../lib/gate.js';
 import { injectFixedImages as defaultInjectFixedImages } from '../lib/assets.js';
+import { assertExpectedEgress as defaultAssertExpectedEgress } from '../lib/egress.js';
+import { renderAndPublishWithFinalFooter, stripFooterMarkdown } from '../lib/wechat-render.js';
+import { normalizeWideTables as defaultNormalizeWideTables } from '../lib/mobile-tables.js';
 
 // 与 wenyan-mcp dist/publish.js 完全一致的渲染参数(parity 硬要求)
-export const RENDER_OPTS = { theme: 'zen-trading', highlight: 'solarized-light', macStyle: true, footnote: true };
+// 正文固定走普通公众号版式。代码围栏本来就会被门禁拒绝，不能再让渲染器启用
+// macStyle，否则一旦上游出现异常缩进就会得到黄色 Mac 卡片。
+export const RENDER_OPTS = { theme: 'zen-trading', highlight: 'solarized-light', macStyle: false, footnote: false };
 
 async function defaultReadArticle(articlePath) {
   const md = await fs.readFile(articlePath, 'utf-8');
@@ -36,18 +40,20 @@ function markdownForGate(markdown, assets = {}) {
 
 // 依赖注入版,便于测试
 export function makeChannel({
-  renderAndPublish = coreRenderAndPublish,
+  renderAndPublish = renderAndPublishWithFinalFooter,
   readArticle = defaultReadArticle,
   getInputContent = defaultGetInputContent,
   generateCover = defaultGenerateCover,
   ensureFrontmatterCover = defaultEnsureFrontmatterCover,
   writeArticle = defaultWriteArticle,
   checkArticle = defaultCheckArticle,
-  injectFixedImages = defaultInjectFixedImages,
+    injectFixedImages = defaultInjectFixedImages,
+    assertExpectedEgress = defaultAssertExpectedEgress,
+    normalizeWideTables = defaultNormalizeWideTables,
 } = {}) {
   return {
     id: 'wechat-draft',
-    async publish({ articlePath, config, notify, notifier }) {
+    async publish({ articlePath, config, notify, notifier, runId, resumeFromCheckpoint = false }) {
       let title, markdown;
       try { ({ title, markdown } = await readArticle(articlePath)); }
       catch (e) { const err = new Error(`读取文章失败:${e.message}`); err.stage = 'render'; throw err; }
@@ -58,6 +64,27 @@ export function makeChannel({
         const err = new Error('微信凭据缺失(WECHAT_APP_ID/WECHAT_APP_SECRET)');
         err.stage = 'publish';
         throw err;
+      }
+
+      // 生成阶段可能持续数分钟,发布前必须再次确认出口没有在中途变化。
+      await assertExpectedEgress(config.egress);
+
+      // 先把手机端不可读的宽表确定性拆成多个窄表。紧凑五列表可保留；普通宽表
+      // 固定首列、每组三个指标，保证不丢数据。转换后再跑最终门禁。
+      const tableResult = normalizeWideTables(markdown);
+      if (tableResult.changed) {
+        try {
+          await writeArticle(articlePath, tableResult.markdown);
+          markdown = tableResult.markdown;
+        } catch (e) {
+          const err = new Error(`移动端表格转换写入失败:${e.message}`); err.stage = 'render'; throw err;
+        }
+        try {
+          if (notifier && notify) await notifier.warn(
+            notify,
+            `已自动将 ${tableResult.transformedTables} 个宽表拆为 ${tableResult.outputTables} 个移动端窄表,内容未删减。`,
+          );
+        } catch (warnErr) { console.error('宽表转换提醒失败(不影响流程):', warnErr); }
       }
 
       // 门禁:对模型产出原文(注入头尾图之前)做出口检查。失败后的重试会保留系统写入的
@@ -77,10 +104,18 @@ export function makeChannel({
         catch (warnErr) { console.error('门禁提醒告警失败(不影响流程):', warnErr); }
       }
 
-      // 注入固定头尾图(幂等)。config.assets 缺失路径时对应块静默跳过。
+      // 历史重试稿可能已经把尾图写进 Markdown。先移除，最终由渲染后 HTML 阶段
+      // 追加到脚注/引用之后，确保它是真正的最后一个正文节点。
+      const withoutLegacyFooter = stripFooterMarkdown(markdown, assetsConfig.footerImage);
+      if (withoutLegacyFooter !== markdown) {
+        await writeArticle(articlePath, withoutLegacyFooter);
+        markdown = withoutLegacyFooter;
+      }
+
+      // Markdown 阶段只注入头图；尾图在完成主题和脚注渲染后追加。
       const injectResult = injectFixedImages(markdown, {
         headerPath: assetsConfig.headerImage,
-        footerPath: assetsConfig.footerImage,
+        footerPath: undefined,
       });
       if (injectResult.skipped.length) {
         try { if (notifier && notify) await notifier.warn(notify, `固定头尾图缺失,已跳过注入:${injectResult.skipped.join(', ')}`); }
@@ -93,7 +128,23 @@ export function makeChannel({
 
       // 微信草稿要求封面图:渲染发布前必须先生成封面并写入 frontmatter
       try {
-        const cover = await generateCover({ title, outDir: path.dirname(articlePath), markdown, writer: config.writer });
+        const outDir = path.dirname(articlePath);
+        const coverPath = path.join(outDir, 'cover.png');
+        const coverOwnerPath = path.join(outDir, '.cover-run-id');
+        let cover;
+        if (resumeFromCheckpoint && runId) {
+          try {
+            const [owner] = await Promise.all([
+              fs.readFile(coverOwnerPath, 'utf8'),
+              fs.access(coverPath),
+            ]);
+            if (owner.trim() === runId) cover = coverPath;
+          } catch {}
+        }
+        if (!cover) {
+          cover = await generateCover({ title, outDir, markdown, writer: config.writer });
+          if (runId) await fs.writeFile(coverOwnerPath, runId, 'utf8');
+        }
         const updated = ensureFrontmatterCover(markdown, cover);
         if (updated !== markdown) { await writeArticle(articlePath, updated); markdown = updated; }
       } catch (e) {
@@ -108,7 +159,11 @@ export function makeChannel({
       process.env.WECHAT_APP_ID = appId;
       process.env.WECHAT_APP_SECRET = appSecret;
       try {
-        const mediaId = await renderAndPublish(undefined, { ...RENDER_OPTS, file: articlePath }, getInputContent);
+        const mediaId = await renderAndPublish(undefined, {
+          ...RENDER_OPTS,
+          file: articlePath,
+          finalFooterPath: assetsConfig.footerImage,
+        }, getInputContent);
         return { mediaId, title };
       } catch (e) { const err = new Error(`发布失败:${e.message}`); err.stage = 'publish'; throw err; }
       finally {

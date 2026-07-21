@@ -31,3 +31,14 @@ test('handler 抛错不卡死队列', async () => {
   await new Promise(r => setTimeout(r, 50));
   assert.deepEqual(done, ['ok']);
 });
+
+test('restore 恢复持久化任务但不重复 INSERT', async () => {
+  const store = openStore(':memory:');
+  store.createRun({ id: 'saved', workflowId: 'translate', source: 'slack', input: '直译', notify: {} });
+  const done = [];
+  const q = createQueue({ store, maxConcurrency: 1, handler: async (run) => done.push(run.id) });
+  q.restore({ id: 'saved', workflowId: 'translate', source: 'slack', input: '直译', notify: {} });
+  await new Promise(r => setTimeout(r, 20));
+  assert.deepEqual(done, ['saved']);
+  assert.equal(store.getRun('saved').status, 'queued');
+});

@@ -134,20 +134,15 @@ function jsonFetch(content) {
 test('buildCoverData: 正常 JSON → 返回归一化后的封面数据', async () => {
   const payload = validPayload();
   const data = await buildCoverData({ title: 'X', markdown: 'Y', writer: VALID_WRITER, fetchFn: jsonFetch(JSON.stringify(payload)) });
-  assert.equal(data.tag, payload.tag);
   assert.equal(data.title, payload.title);
   assert.equal(data.key_takeaway, payload.key_takeaway);
-  assert.equal(data.chain.direction, 'up');
-  assert.equal(data.chain.stages.length, 2);
-  assert.equal(data.bullets.length, 3);
-  assert.equal(data.source, payload.source);
+  assert.deepEqual(Object.keys(data).sort(), ['key_takeaway', 'title']);
 });
 
 test('buildCoverData: 容忍 ```json 围栏', async () => {
   const payload = validPayload();
   const content = '```json\n' + JSON.stringify(payload) + '\n```';
   const data = await buildCoverData({ title: 'X', markdown: 'Y', writer: VALID_WRITER, fetchFn: jsonFetch(content) });
-  assert.equal(data.tag, payload.tag);
   assert.equal(data.title, payload.title);
 });
 
@@ -168,23 +163,10 @@ test('buildCoverData: 响应缺 choices[0].message.content → 返回 null', asy
   assert.equal(data, null);
 });
 
-test('buildCoverData: 缺关键字段(chain)→ 返回 null', async () => {
-  const payload = validPayload();
-  delete payload.chain;
+test('buildCoverData: 白底简版不再要求 chain/bullets/tag', async () => {
+  const payload = { title: '简版标题', key_takeaway: '一句核心结论' };
   const data = await buildCoverData({ title: 'X', markdown: 'Y', writer: VALID_WRITER, fetchFn: jsonFetch(JSON.stringify(payload)) });
-  assert.equal(data, null);
-});
-
-test('buildCoverData: bullets 少于 3 个 → 返回 null', async () => {
-  const payload = validPayload({ bullets: [{ ic: '1', tx: 'x' }] });
-  const data = await buildCoverData({ title: 'X', markdown: 'Y', writer: VALID_WRITER, fetchFn: jsonFetch(JSON.stringify(payload)) });
-  assert.equal(data, null);
-});
-
-test('buildCoverData: tag 不在枚举内 → 返回 null', async () => {
-  const payload = validPayload({ tag: '非法标签' });
-  const data = await buildCoverData({ title: 'X', markdown: 'Y', writer: VALID_WRITER, fetchFn: jsonFetch(JSON.stringify(payload)) });
-  assert.equal(data, null);
+  assert.deepEqual(data, payload);
 });
 
 test('buildCoverData: title 超过 30 字时截断为 22 字而非失败', async () => {
@@ -196,13 +178,13 @@ test('buildCoverData: title 超过 30 字时截断为 22 字而非失败', async
   assert.equal(data.title.length, 22);
 });
 
-test('buildCoverData: key_takeaway 超过 35 字时截断为 25 字而非失败', async () => {
-  const longTakeaway = '论'.repeat(40);
+test('buildCoverData: key_takeaway 超过 40 字时截断为 30 字而非失败', async () => {
+  const longTakeaway = '论'.repeat(45);
   const payload = validPayload({ key_takeaway: longTakeaway });
   const data = await buildCoverData({ title: 'X', markdown: 'Y', writer: VALID_WRITER, fetchFn: jsonFetch(JSON.stringify(payload)) });
   assert.notEqual(data, null);
-  assert.equal(data.key_takeaway, longTakeaway.slice(0, 25));
-  assert.equal(data.key_takeaway.length, 25);
+  assert.equal(data.key_takeaway, longTakeaway.slice(0, 30));
+  assert.equal(data.key_takeaway.length, 30);
 });
 
 test('buildCoverData: writer 缺 apiKey 或 model → 直接返回 null,不发请求', async () => {
@@ -240,6 +222,7 @@ test('buildCoverData: 请求携带 model/temperature 0/鉴权与 OpenRouter 头,
   assert.equal(body.max_tokens, 1200);
   assert.deepEqual(body.reasoning, { effort: 'none', exclude: true });
   assert.equal(body.temperature, 0);
+  assert.deepEqual(body.response_format, { type: 'json_object' });
 });
 
 // ---- generateCover:内容驱动封面 + 回退 ----

@@ -74,6 +74,12 @@ test('系统生成的 cover frontmatter 本地路径允许重试,正文路径仍
   assert.equal(checkArticle(bodyPath).errors.some((e) => /本地路径/.test(e)), true);
 });
 
+test('errors: PDF 整页图片的变体路径均拒绝发布', () => {
+  const md = '---\ntitle: T\n---\n![原文页](assets/source_page_2.jpg)';
+  const { errors } = checkArticle(md);
+  assert.ok(errors.some((e) => /PDF 整页图片/.test(e)));
+});
+
 test('warnings: 含中文破折号——', () => {
   const md = '---\ntitle: T\n---\n正文含破折号——用法。';
   const { warnings } = checkArticle(md);
@@ -112,4 +118,35 @@ test('信息具体可读:破折号 warning 提示规范要求', () => {
   const { warnings } = checkArticle(md);
   const w = warnings.find((x) => /破折号/.test(x));
   assert.match(w, /逗号或冒号/);
+});
+
+test('公众号版式门禁:代码围栏和四空格缩进拦截,不可读宽表降为提醒', () => {
+  const md = '---\ntitle: T\n---\n```text\nx\n```\n    indented\n|报告期|营业收入（亿元）|同比增速|毛利率|净利润/归母净利润（亿元）|\n|---|---|---|---|---|';
+  const { errors, warnings } = checkArticle(md);
+  assert.ok(errors.some((error) => /代码围栏/.test(error)));
+  assert.ok(errors.some((error) => /四空格缩进/.test(error)));
+  assert.equal(errors.some((error) => /移动端宽表/.test(error)), false);
+  assert.ok(warnings.some((warning) => /宽表/.test(warning)));
+});
+
+test('公众号版式门禁:显式 HTML pre 中的原文代码缩进不误判为 Markdown 代码卡片', () => {
+  const { errors } = checkArticle(`---
+title: 原文直译
+---
+<pre><code>{
+    "criterion_number": 1
+}</code></pre>`);
+  assert.ok(!errors.some((error) => /四空格缩进/.test(error)));
+});
+
+test('公众号版式门禁:PDF 整页截图禁止进入正文', () => {
+  const md = '---\ntitle: T\n---\n![原文第 2 页](assets/source-page-2.png)';
+  const { errors } = checkArticle(md);
+  assert.ok(errors.some((error) => /PDF 整页截图/.test(error)));
+});
+
+test('公众号版式门禁:内容紧凑的五列表可直接通过', () => {
+  const md = '---\ntitle: T\n---\n|Q|Rev|GM|OM|EPS|\n|---|---|---|---|---|\n|Q1|10|20%|8%|1.2|';
+  const { errors } = checkArticle(md);
+  assert.equal(errors.some((error) => /移动端宽表/.test(error)), false);
 });

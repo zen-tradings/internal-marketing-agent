@@ -1,4 +1,4 @@
-import { sharedResearch, envChannel, envModel, envTimeoutMs, workDirFor, buildPromptTemplate } from './shared.js';
+import { sharedResearch, officialFirstPolicy, envChannel, envModel, envTimeoutMs, workDirFor, buildPromptTemplate } from './shared.js';
 
 const METHODOLOGY = `【晨报体例 — 专属要求】
 撰写晨会纪要体例的简报,风格紧凑、观点鲜明,总篇幅控制在一页以内:
@@ -9,6 +9,9 @@ const METHODOLOGY = `【晨报体例 — 专属要求】
 
 export default {
   id: 'morning',
+  mode: 'analysis',
+  sourcePolicy: officialFirstPolicy(),
+  factReview: true,
   // 支持可选 cron 定时触发:设置 MORNING_CRON 后自动追加 cron 触发器,未设置则仅 slack。
   get triggers() {
     const cronExpr = process.env.MORNING_CRON;

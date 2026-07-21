@@ -97,6 +97,39 @@ test('生成失败:runWriter 返回 ok:false → failed/generate,failure 调用�
   assert.equal(notifier.successCalls.length, 0);
 });
 
+test('出口校验失败时不调用 writer、发布渠道或 Slack 告警', async () => {
+  let writerCalled = false;
+  const runWriter = async () => { writerCalled = true; return { ok: true, articlePath: '/tmp/a.md' }; };
+  const { deps, store, notifier, publishCalls } = baseDeps({ runWriter });
+  deps.config = { egress: { enabled: true } };
+  deps.assertEgress = async () => { const error = new Error('出口不一致'); error.stage = 'egress'; throw error; };
+
+  await makeHandler(deps)(RUN);
+
+  assert.equal(writerCalled, false);
+  assert.equal(publishCalls.length, 0);
+  assert.equal(store._row().status, 'failed');
+  assert.equal(store._row().stage, 'egress');
+  assert.equal(notifier.failureCalls.length, 0);
+  assert.equal(notifier.successCalls.length, 0);
+});
+
+test('直译任务等待安全出口恢复,不使用一次性出口断言', async () => {
+  let waited = 0;
+  let asserted = 0;
+  const workflows = { translate: { mode: 'translation', channel: 'mock', retries: 0 } };
+  const { deps, store } = baseDeps({ workflows });
+  deps.config = { egress: { enabled: true } };
+  deps.waitForEgress = async () => { waited++; };
+  deps.assertEgress = async () => { asserted++; throw new Error('不应调用'); };
+
+  await makeHandler(deps)({ id: 't1', workflowId: 'translate', input: '直译' });
+
+  assert.equal(waited, 1);
+  assert.equal(asserted, 0);
+  assert.equal(store._row().status, 'done');
+});
+
 test('重试后成功:workflow.retries=1,首次抛错次次成功 → 最终 done 且 success 只调用一次', async () => {
   let n = 0;
   const runWriter = async () => {

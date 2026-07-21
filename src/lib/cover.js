@@ -21,17 +21,10 @@ const COVER_SYSTEM_PROMPT = `你负责从 Zen Trading 公众号文章中提取�
 
 输出 JSON 字段(严格遵守):
 {
-  "tag": "事件驱动|周报|月报|季报|年报 之一",
   "title": "封面标题,不超过22个汉字",
-  "key_takeaway": "核心结论,不超过25个汉字",
-  "chain": {
-    "direction": "up|down|neutral",
-    "stages": [ { "kicker": "...", "nm": "英文公司名或Ticker", "sub": "..." } ]
-  },
-  "bullets": [ { "ic": "1", "tx": "不超过15字,数字用<b>包裹" } ],
-  "source": "来源：公开资料 · 截至 YYYY-MM"
+  "key_takeaway": "一句核心结论或定位,不超过30个汉字"
 }
-chain.stages 需 2 到 3 个,bullets 需 3 到 5 个。`;
+标题应保留文章主体名称；核心结论必须来自正文，信息不足时写“Zen Research from Zen Trading”。`;
 
 // 调 OpenRouter 从文章内容里提取封面数据。解析/校验失败一律返回 null,不抛错,
 // 让调用方(generateCover)回退到示例数据 + 标题的既有行为,不能让封面因提取失败而挂掉。
@@ -52,6 +45,7 @@ export async function buildCoverData({ title, markdown, writer, fetchFn = global
         max_tokens: 1200,
         reasoning: { effort: 'none', exclude: true },
         temperature: 0,
+        response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: COVER_SYSTEM_PROMPT },
           { role: 'user', content: `文章标题:${title || ''}\n\n文章正文:\n${markdown || ''}` },
@@ -80,37 +74,13 @@ function parseCoverContent(content) {
   }
 }
 
-const VALID_TAGS = ['事件驱动', '周报', '月报', '季报', '年报'];
-const VALID_DIRECTIONS = ['up', 'down', 'neutral'];
-
 function normalizeCoverData(data) {
   if (!data || typeof data !== 'object') return null;
-  if (!VALID_TAGS.includes(data.tag)) return null;
 
   const title = truncateField(data.title, 30, 22);
-  const key_takeaway = truncateField(data.key_takeaway, 35, 25);
+  const key_takeaway = truncateField(data.key_takeaway, 40, 30);
   if (title === null || key_takeaway === null) return null;
-
-  if (!data.chain || typeof data.chain !== 'object') return null;
-  if (!VALID_DIRECTIONS.includes(data.chain.direction)) return null;
-  if (!Array.isArray(data.chain.stages) || data.chain.stages.length < 2 || data.chain.stages.length > 3) return null;
-  for (const s of data.chain.stages) {
-    if (!s || typeof s !== 'object' || !s.kicker || !s.nm || !s.sub) return null;
-  }
-
-  if (!Array.isArray(data.bullets) || data.bullets.length < 3 || data.bullets.length > 5) return null;
-  for (const b of data.bullets) {
-    if (!b || typeof b !== 'object' || !b.ic || !b.tx) return null;
-  }
-
-  return {
-    tag: data.tag,
-    title,
-    key_takeaway,
-    chain: data.chain,
-    bullets: data.bullets,
-    source: typeof data.source === 'string' && data.source.trim() ? data.source : '来源:公开资料',
-  };
+  return { title, key_takeaway };
 }
 
 // 缺失/空字符串返回 null(触发整体提取失败);超过硬上限的字符串截断而非失败。
@@ -159,7 +129,7 @@ export async function generateCover({
   }
 
   // 既有回退行为:示例数据 + 文章标题覆盖 title 字段,其余字段沿用示例默认值。
-  let data = { ...exampleData, title };
+  let data = { ...exampleData, title, key_takeaway: 'Zen Research from Zen Trading' };
 
   if (markdown && writer) {
     let built = null;
