@@ -4,6 +4,7 @@ import {
   makeChannel,
   RENDER_OPTS,
   WECHAT_TEMPLATE_ID,
+  WECHAT_THEME_PATH,
 } from '../src/channels/wechat-draft.js';
 
 // 合规、无破折号/美元符号的完整文章,门禁应零 errors/零 warnings,
@@ -19,7 +20,14 @@ const VALID_MD = [
 const stubCover = { generateCover: async () => '/x/cover.png', writeArticle: async () => {} };
 
 test('RENDER_OPTS 固定为普通微信公众号版式', () => {
-  assert.deepEqual(RENDER_OPTS, { theme: 'zen-trading', highlight: 'solarized-light', macStyle: false, footnote: false });
+  assert.deepEqual(RENDER_OPTS, {
+    theme: 'zen-trading',
+    customTheme: WECHAT_THEME_PATH,
+    highlight: 'solarized-light',
+    macStyle: false,
+    footnote: false,
+  });
+  assert.match(WECHAT_THEME_PATH, /assets\/zen-trading\.css$/);
   assert.equal(Object.isFrozen(RENDER_OPTS), true);
   const channel = makeChannel();
   assert.equal(channel.templateId, WECHAT_TEMPLATE_ID);

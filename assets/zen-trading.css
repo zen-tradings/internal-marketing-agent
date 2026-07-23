@@ -1,0 +1,167 @@
+/* =====================================================================
+   ZEN TRADING STRATEGIES · 微信公众号主题  (v3 · 相对单位 / 自适应)
+   for wenyan-mcp (@wenyan-md/core)  ——  容器选择器 #wenyan
+   字号全部用 em（跟随读者字体设置缩放）· 行高用倍数 · 不写固定宽度
+   ===================================================================== */
+
+#wenyan {
+  --navy:#0E2138; --navy-text:#16335C; --cream:#E9E5DC; --card:#FFFFFF;
+  --bar:#D8DAD4; --up:#2F7D54; --down:#BD4A30; --muted:#9AA0A6;
+  --hair:#E6E2D9; --ink:#2B3645;
+  --sans:"PingFang SC","PingFang TC",-apple-system,BlinkMacSystemFont,"Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --kai:"Kaiti SC","STKaiti",KaiTi,"楷体","楷体_GB2312",serif;
+  --serif:Georgia,"Times New Roman","Songti SC",serif;
+  --mono:"SFMono-Regular",Menlo,Consolas,"Courier New",monospace;
+
+  background:#E9E5DC;
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:1em;          /* 不写死 px：跟随微信读者字体设置缩放 */
+  font-weight:300;        /* 苹方细体（PingFang Light）气质 */
+  line-height:1.6;        /* 倍数行高，对标参考样式 */
+  letter-spacing:.12em;   /* ≈2px 宽字距，透气 */
+  text-align:left;        /* 关掉微信默认两端对齐，避免大字号下英文被拉散 */
+  word-break:break-word;
+}
+
+/* ---- 正文 ---- */
+#wenyan p{
+  font-family:var(--sans);
+  font-size:.88em;
+  font-weight:300;
+  line-height:1.6;
+  color:var(--ink);
+  margin:0 0 1em;
+}
+
+/* ---- 主标题 H1 ---- */
+#wenyan h1{
+  font-family:var(--kai);
+  font-size:1.5em;
+  font-weight:700;
+  line-height:1.45;
+  color:var(--navy-text);
+  letter-spacing:.02em;
+  margin:1.5em .3em .8em;
+}
+
+/* ---- 一级分区 H2（浅灰条 + 左藏青粗杠）---- */
+#wenyan h2{
+  font-family:var(--kai);
+  font-size:1.1em;
+  font-weight:700;
+  color:var(--navy-text);
+  letter-spacing:.04em;
+  background:var(--bar);
+  border-left:4px solid var(--navy);
+  border-radius:0 .25em .25em 0;
+  margin:2em 0 .6em;
+  padding:.7em 1em;
+}
+
+/* ---- 二级标题 H3（左绿杠）---- */
+#wenyan h3{
+  font-family:var(--kai);
+  font-size:1.1em;
+  font-weight:700;
+  color:var(--navy-text);
+  margin:1.5em 0 .5em;
+  padding-left:.7em;
+  border-left:4px solid var(--up);
+  line-height:1.5;
+}
+
+#wenyan h4{
+  font-family:var(--sans);
+  font-size:.95em;
+  font-weight:700;
+  color:var(--navy-text);
+  letter-spacing:.04em;
+  margin:1.3em 0 .3em;
+}
+
+/* ---- 强调 / 链接 ---- */
+#wenyan strong{color:var(--navy-text);font-weight:700;}
+#wenyan a{color:var(--navy-text);border-bottom:2px solid rgba(47,125,84,.45);text-decoration:none;}
+
+/* ---- 引用块 ---- */
+#wenyan blockquote{
+  font-family:var(--kai);
+  font-size:1.05em;
+  line-height:1.95;
+  color:var(--ink);
+  background:#F6F7F4;
+  border-left:3px solid var(--up);
+  border-radius:0 .4em .4em 0;
+  margin:1.3em 0;
+  padding:.9em 1.1em;
+}
+#wenyan blockquote p{margin:0;font-size:1em;color:var(--ink);}
+
+/* ---- 列表（菱形/序号项目符号，用字符更稳）---- */
+#wenyan ul,#wenyan ol{margin:1em 0;padding-left:0;}
+#wenyan ul li,#wenyan ol li{
+  font-family:var(--sans);
+  font-size:.88em;
+  font-weight:300;
+  line-height:1.6;
+  color:var(--ink);
+  margin:.55em 0;
+  padding-left:0;        /* 不缩进：分点与正文左边缘对齐 */
+  list-style:none;
+}
+#wenyan ul li::before{content:"▪";color:var(--navy);margin-right:.45em;}
+#wenyan ol{counter-reset:zen;}
+#wenyan ol li::before{counter-increment:zen;content:counter(zen) ".";font-weight:700;color:var(--up);margin-right:.45em;}
+#wenyan li strong{color:var(--navy-text);}
+
+/* ---- 行内代码 ---- */
+#wenyan p code,#wenyan li code,#wenyan td code{
+  font-family:var(--mono);
+  font-size:.85em;
+  color:var(--navy-text);
+  background:#EEF1F6;
+  border-radius:.25em;
+  padding:.1em .4em;
+}
+
+/* ---- 代码块（浅底，横向滚动）---- */
+#wenyan pre{
+  background:#F6F7F9;
+  border-radius:.5em;
+  margin:1.2em .3em;
+  padding:1em 1.1em;
+  overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+  border-left:3px solid var(--navy);
+}
+#wenyan pre code{
+  font-family:var(--mono);
+  font-size:.85em;
+  line-height:1.7;
+  white-space:pre;
+  display:block;
+}
+
+/* ---- 表格（如使用：宽度自适应，不写死 px）---- */
+#wenyan table{
+  width:100%;
+  margin:1.2em 0;
+  border-collapse:collapse;
+  font-size:.85em;
+  background:var(--card);
+  border:1px solid var(--hair);
+  border-radius:.4em;
+  overflow:hidden;
+}
+#wenyan table th{background:var(--navy);color:#fff;font-weight:600;letter-spacing:.04em;padding:.7em .8em;text-align:left;}
+#wenyan table td{padding:.6em .8em;border-bottom:1px solid var(--hair);color:var(--ink);vertical-align:middle;}
+#wenyan table tr:nth-child(even) td{background:#FAFAF7;}
+#wenyan table td:first-child{font-weight:600;color:var(--navy-text);}
+
+/* ---- 分隔线 ---- */
+#wenyan hr{border:none;height:1px;background:var(--hair);margin:2em 1.5em;}
+
+/* ---- 图片 ---- */
+#wenyan img{max-width:100%;border-radius:.5em;margin:.5em auto;display:block;}
+#wenyan figcaption{text-align:center;font-size:.75em;color:var(--muted);margin-top:.4em;}

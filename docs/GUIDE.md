@@ -66,7 +66,7 @@
 | 封面版式/字段 | `tools/cover-generator/template.html` | 自定义生成器时覆盖 `COVER_GENERATOR_DIR`；数据提取 prompt 在 `src/lib/cover.js` |
 | 写作模型/生成参数 | .env `OPENROUTER_MODEL` / `OPENROUTER_TEMPERATURE` / `OPENROUTER_MAX_TOKENS` / `OPENROUTER_REASONING_EFFORT` | 默认 12000 tokens、reasoning=none;改完重启 |
 | 草稿固定模板总门禁 | `src/lib/draft-template.js` | 所有真实渠道必须登记模板 ID 并锁定；任务不得覆盖，改版必须升版本和更新测试 |
-| 微信渲染主题 | 别改。`zen-wechat/zen-trading@1` 与 `RENDER_OPTS` 是 parity 硬约束 | 主题本体在 zen-wechat-theme 仓库 |
+| 微信渲染主题 | 别改。`zen-wechat/zen-trading@1`、`assets/zen-trading.css` 与 `RENDER_OPTS` 是 parity 硬约束 | 主题文件随本仓库部署，避免依赖服务器用户目录 |
 | Customer.io 邮件草稿 | `src/workflows/email.js` + `src/channels/customerio-draft.js` | 固定 `zen-customerio/zen-research@1`，只创建草稿；受众由 internal/pilot/full 三阶段配置控制 |
 | 新发布渠道 | 新建 `src/channels/<name>.js` 实现 publish() + 注册模板和渠道 | 见 README「扩展」一节；未登记模板时 fail closed |
 

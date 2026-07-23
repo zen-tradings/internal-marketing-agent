@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getInputContent as defaultGetInputContent } from '../lib/getInputContent.js';
 import { generateCover as defaultGenerateCover, ensureFrontmatterCover as defaultEnsureFrontmatterCover } from '../lib/cover.js';
 import { checkArticle as defaultCheckArticle } from '../lib/gate.js';
@@ -12,8 +13,16 @@ import { FIXED_DRAFT_TEMPLATE_IDS } from '../lib/draft-template.js';
 // 正文固定走普通公众号版式。代码围栏本来就会被门禁拒绝，不能再让渲染器启用
 // macStyle，否则一旦上游出现异常缩进就会得到黄色 Mac 卡片。
 export const WECHAT_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['wechat-draft'];
+export const WECHAT_THEME_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'assets',
+  'zen-trading.css'
+);
 export const RENDER_OPTS = Object.freeze({
   theme: 'zen-trading',
+  customTheme: WECHAT_THEME_PATH,
   highlight: 'solarized-light',
   macStyle: false,
   footnote: false,

@@ -161,7 +161,7 @@ npm run check:translation-text -- https://example.com/article
 2. 判断表格的移动端可读性：紧凑五列表直接保留；不可读宽表固定首列、每组三个指标自动拆成多个窄表，再执行最终门禁。
 3. 在 Markdown 开头注入 `assets/zen-header-banner.gif`。
 4. 用 OpenRouter 提取封面字段，再由仓库内置 `tools/cover-generator` 渲染封面；只有替换实现时才需设置 `COVER_GENERATOR_DIR`。浏览器优先读取 `COVER_BROWSER_EXECUTABLE`，否则复用直译浏览器配置并自动发现常见 Chromium/Chrome 路径。
-5. 用 `@wenyan-md/core` 的 `zen-trading` 主题完成正文和脚注渲染。
+5. 用 `@wenyan-md/core` 和仓库内固定的 `assets/zen-trading.css` 完成正文渲染；不依赖服务器用户目录中预装的 Wenyan 主题。
 6. 在最终 HTML 最后追加默认封底底图 `assets/zen-footer-background.png`，并断言其后没有文字或其它节点，再上传微信草稿箱。可通过 `WECHAT_FOOTER_IMAGE` 覆盖为其他封底。
 
 封面字段提取失败会回退到模板示例数据；封面文件生成失败会阻止发布。
