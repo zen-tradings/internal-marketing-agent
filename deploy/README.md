@@ -12,14 +12,15 @@ manual process with the same Slack tokens or SQLite database.
 /var/lib/zen-content-hub/      SQLite database and per-run artifacts
 ```
 
-Install Node.js 22+, Chromium and Poppler with the distribution's supported
-packages. The cover generator is versioned in `tools/cover-generator`; run
-`npm ci` in `/opt/zen-content-hub` and set these Linux-specific values:
+Install Node.js 22+, Chrome/Chromium and Poppler. The cover generator is
+versioned in `tools/cover-generator`; run `npm ci` in
+`/opt/zen-content-hub` and set these Linux-specific values (use the actual
+browser executable installed on the host):
 
 ```dotenv
 WORK_DIR=/var/lib/zen-content-hub/work
 DB_PATH=/var/lib/zen-content-hub/runs.db
-TRANSLATION_BROWSER_EXECUTABLE=/usr/bin/chromium
+TRANSLATION_BROWSER_EXECUTABLE=/usr/bin/google-chrome
 CRON_TIMEZONE=America/Los_Angeles
 HEALTH_HOST=127.0.0.1
 HEALTH_PORT=8080
@@ -67,3 +68,20 @@ instance; the local SQLite queue is not a multi-replica coordination system.
 On startup, terminal runs and their isolated artifact directories older than
 `RUN_RETENTION_DAYS` are removed. Back up the data directory before reducing
 that value.
+
+Install the included SQLite-aware daily snapshot timer:
+
+```bash
+sudo install -o root -g root -m 0755 deploy/zen-content-hub-backup /usr/local/sbin/
+sudo install -o root -g root -m 0644 deploy/zen-content-hub-backup.service /etc/systemd/system/
+sudo install -o root -g root -m 0644 deploy/zen-content-hub-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now zen-content-hub-backup.timer
+sudo systemctl start zen-content-hub-backup.service
+sudo systemctl status zen-content-hub-backup.timer
+```
+
+Snapshots are written to `/var/lib/zen-content-hub/backups/` and retained for
+14 days. They protect against application-level database mistakes but remain on
+the same Droplet; use a separately confirmed off-host or DigitalOcean backup for
+Droplet-level disaster recovery.

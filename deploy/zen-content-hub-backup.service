@@ -1,0 +1,16 @@
+[Unit]
+Description=Back up the Zen Content Hub SQLite database
+ConditionPathExists=/var/lib/zen-content-hub/runs.db
+
+[Service]
+Type=oneshot
+User=zenbot
+Group=zenbot
+ExecStart=/usr/local/sbin/zen-content-hub-backup
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/zen-content-hub/backups
+
