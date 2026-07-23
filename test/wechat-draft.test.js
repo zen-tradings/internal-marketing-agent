@@ -241,6 +241,29 @@ test('门禁 warnings 命中 → notifier.warn 告警后继续发布(不阻断)'
   assert.match(warned[0].msg, /破折号/);
 });
 
+test('直译工作流跳过中文破折号提醒并继续发布', async () => {
+  const warned = [];
+  const notifier = { warn: async (notify, msg) => warned.push({ notify, msg }) };
+  const notify = { channel: 'C', ts: '1' };
+  const channel = makeChannel({
+    ...stubCover,
+    readArticle: async () => ({
+      markdown: '---\ntitle: T\n---\n忠实译文保留原句中的破折号——不做风格改写。',
+      title: 'T',
+    }),
+    renderAndPublish: async () => 'MEDIA-TRANSLATION',
+  });
+  const out = await channel.publish({
+    articlePath: '/x/a.md',
+    config: { wechat: { appId: 'wx', appSecret: 's' } },
+    workflow: { mode: 'translation' },
+    notify,
+    notifier,
+  });
+  assert.equal(out.mediaId, 'MEDIA-TRANSLATION');
+  assert.equal(warned.length, 0);
+});
+
 test('不可读宽表在门禁前自动拆分并写回,随后继续发布', async () => {
   const warned = [];
   const writes = [];

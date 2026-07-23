@@ -86,6 +86,14 @@ test('warnings: 含中文破折号——', () => {
   assert.ok(warnings.some((w) => /破折号/.test(w)));
 });
 
+test('直译工作流不触发中文破折号风格提醒', () => {
+  const md = '---\ntitle: T\n---\n忠实译文保留破折号——以及金额 $12。';
+  const { errors, warnings } = checkArticle(md, { workflowMode: 'translation' });
+  assert.equal(errors.length, 0);
+  assert.equal(warnings.some((w) => /破折号/.test(w)), false);
+  assert.equal(warnings.some((w) => /美元符号/.test(w)), true);
+});
+
 test('warnings: 含美元符号后跟数字', () => {
   const md = '---\ntitle: T\n---\n营收达 $12 亿美元。';
   const { warnings } = checkArticle(md);

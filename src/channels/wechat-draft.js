@@ -69,7 +69,7 @@ export function makeChannel({
     id: 'wechat-draft',
     templateId: WECHAT_TEMPLATE_ID,
     templateLocked: true,
-    async publish({ articlePath, config, notify, notifier, runId, resumeFromCheckpoint = false }) {
+    async publish({ articlePath, config, workflow, notify, notifier, runId, resumeFromCheckpoint = false }) {
       let title, markdown;
       try { ({ title, markdown } = await readArticle(articlePath)); }
       catch (e) { const err = new Error(`读取文章失败:${e.message}`); err.stage = 'render'; throw err; }
@@ -105,6 +105,7 @@ export function makeChannel({
       // 只有在无 errors 时才继续检查 warnings(放行但需人工关注),避免同一次发布重复告警。
       const assetsConfig = config.assets || {};
       const gate = checkArticle(markdownForGate(markdown, assetsConfig), {
+        workflowMode: workflow?.mode || '',
         secretValues: [
           config.writer?.openrouterApiKey,
           config.writer?.exaApiKey,

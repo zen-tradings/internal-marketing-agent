@@ -10,7 +10,7 @@ const SECRET_PATTERNS = [
   { re: /(?:authorization|api[_ -]?key|app[_ -]?secret)\s*[:=]\s*(?:bearer\s+)?[A-Za-z0-9._~+/-]{12,}/i, label: '通用 API 凭据' },
 ];
 
-export function checkArticle(markdown, { secretValues = [] } = {}) {
+export function checkArticle(markdown, { secretValues = [], workflowMode = '' } = {}) {
   const md = String(markdown || '');
   const errors = [];
   const warnings = [];
@@ -69,7 +69,9 @@ export function checkArticle(markdown, { secretValues = [] } = {}) {
     warnings.push(`排版提醒:正文仍有 ${unreadableTables.length} 个无法自动拆分的宽表或列数异常表格,已按可读性优先放行`);
   }
 
-  if (md.includes('——')) {
+  // 直译以忠实还原原文为最高优先级，不用原创写作的破折号风格规范干预译文。
+  // 这里只豁免这一条风格提醒；密钥、本地路径、代码块、坏表格等门禁保持不变。
+  if (workflowMode !== 'translation' && md.includes('——')) {
     warnings.push('风格:出现中文破折号——,规范要求用逗号或冒号代替');
   }
 
