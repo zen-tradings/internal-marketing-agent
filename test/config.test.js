@@ -30,7 +30,7 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.match(c.cover.generatorDir, /tools\/cover-generator$/);
   assert.equal('claudeBin' in c, false);
   assert.equal(c.wechat.appId, 'wx');
-  assert.match(c.assets.footerImage, /assets\/zen-footer-background\.png$/);
+  assert.match(c.assets.footerImage, /assets\/zen-footer-qr\.png$/);
 });
 
 test('纯文字直译抓取、浏览器、PDF 与 Notion 配置可由 env 覆盖', () => {

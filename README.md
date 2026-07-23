@@ -151,7 +151,7 @@ npm run check:translation-text -- https://example.com/article
 
 ### 固定模板契约
 
-所有由 Bot 创建的真实草稿都必须沿用中央登记的固定模板。`src/lib/draft-template.js` 是唯一模板注册表：微信公众号草稿固定为 `zen-wechat/zen-trading@1`，Customer.io Newsletter 草稿固定为 `zen-customerio/zen-research@1`。真实渠道未登记模板、模板 ID 不匹配或未声明锁定时，会在调用发布接口前失败；任务文字、工作流和单次运行都不能指定另一套模板。`mock` 只用于 dry-run，不属于真实草稿渠道。
+所有由 Bot 创建的真实草稿都必须沿用中央登记的固定模板。`src/lib/draft-template.js` 是唯一模板注册表：微信公众号草稿固定为 `zen-wechat/zen-trading@2`，Customer.io Newsletter 草稿固定为 `zen-customerio/zen-research@1`。真实渠道未登记模板、模板 ID 不匹配或未声明锁定时，会在调用发布接口前失败；任务文字、工作流和单次运行都不能指定另一套模板。`mock` 只用于 dry-run，不属于真实草稿渠道。
 
 需要改版时，必须集中修改模板实现、升级注册表中的版本号，并同步渠道测试、渲染 golden 与本文档；不能在单个任务里绕过。标题、正文、链接、期号和受众等内容进入模板预留槽位，不改变模板本身。
 
@@ -160,9 +160,9 @@ npm run check:translation-text -- https://example.com/article
 1. 检查 title、疑似密钥、本地路径和格式警告。
 2. 判断表格的移动端可读性：紧凑五列表直接保留；不可读宽表固定首列、每组三个指标自动拆成多个窄表，再执行最终门禁。
 3. 在 Markdown 开头注入 `assets/zen-header-banner.gif`。
-4. 用 OpenRouter 提取封面字段，再由仓库内置 `tools/cover-generator` 渲染封面；只有替换实现时才需设置 `COVER_GENERATOR_DIR`。浏览器优先读取 `COVER_BROWSER_EXECUTABLE`，否则复用直译浏览器配置并自动发现常见 Chromium/Chrome 路径。
+4. 用 OpenRouter 提取封面字段，再由仓库内置 `tools/cover-generator` 把标题与副标题渲染到固定白底 `assets/zen-cover-background.png` 上，输出与底图一致的 900×383 封面；只有替换实现时才需设置 `COVER_GENERATOR_DIR`。浏览器优先读取 `COVER_BROWSER_EXECUTABLE`，否则复用直译浏览器配置并自动发现常见 Chromium/Chrome 路径。
 5. 用 `@wenyan-md/core` 和仓库内固定的 `assets/zen-trading.css` 完成正文渲染；不依赖服务器用户目录中预装的 Wenyan 主题。
-6. 在最终 HTML 最后追加默认封底底图 `assets/zen-footer-background.png`，并断言其后没有文字或其它节点，再上传微信草稿箱。可通过 `WECHAT_FOOTER_IMAGE` 覆盖为其他封底。
+6. 在最终 HTML 最后追加带四个二维码的固定封底 `assets/zen-footer-qr.png`，并断言其后没有文字或其它节点，再上传微信草稿箱。可通过 `WECHAT_FOOTER_IMAGE` 覆盖为其他封底。
 
 封面字段提取失败会回退到模板示例数据；封面文件生成失败会阻止发布。
 

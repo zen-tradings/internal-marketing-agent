@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 用法: node render.mjs <data.json> [out.png]
-// 把数据注入 template.html，再用本机 Chromium/Chrome 渲染成精确 1280×720 PNG。
+// 把数据注入 template.html，再用本机 Chromium/Chrome 渲染成精确 900×383 PNG。
 import {
   existsSync,
   mkdtempSync,
@@ -14,6 +14,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
 
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+export const COVER_WIDTH = 900;
+export const COVER_HEIGHT = 383;
+export const DEFAULT_COVER_BACKGROUND = resolve(
+  MODULE_DIR,
+  '..',
+  '..',
+  'assets',
+  'zen-cover-background.png'
+);
 
 const COMMON_BROWSER_PATHS = [
   '/usr/bin/chromium',
@@ -47,8 +56,8 @@ export async function renderCover({
   const absoluteOutPath = resolve(outPath);
   const data = JSON.parse(readFileSync(absoluteDataPath, 'utf8'));
 
-  if (data.bg && !/^https?:|^file:/.test(data.bg)) {
-    data.bg = pathToFileURL(resolve(dirname(absoluteDataPath), data.bg)).href;
+  if (!existsSync(DEFAULT_COVER_BACKGROUND)) {
+    throw new Error(`固定封面背景不存在: ${DEFAULT_COVER_BACKGROUND}`);
   }
 
   const template = readFileSync(join(MODULE_DIR, 'template.html'), 'utf8');
@@ -56,10 +65,12 @@ export async function renderCover({
     .replaceAll('<', '\\u003c')
     .replaceAll('\u2028', '\\u2028')
     .replaceAll('\u2029', '\\u2029');
-  const html = template.replace(
-    '<script>',
-    `<script>window.DATA = ${serializedData};</script>\n<script>`
-  );
+  const html = template
+    .replaceAll('__ZEN_COVER_BACKGROUND__', pathToFileURL(DEFAULT_COVER_BACKGROUND).href)
+    .replace(
+      '<script>',
+      `<script>window.DATA = ${serializedData};</script>\n<script>`
+    );
 
   const workDir = mkdtempSync(join(tmpdir(), 'zen-cover-render-'));
   const htmlPath = join(workDir, 'render.html');
@@ -76,7 +87,7 @@ export async function renderCover({
         '--disable-dev-shm-usage',
       ],
     });
-    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    const page = await browser.newPage({ viewport: { width: COVER_WIDTH, height: COVER_HEIGHT } });
     await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'load', timeout: 30000 });
     await page.screenshot({ path: absoluteOutPath, type: 'png', omitBackground: true });
   } finally {

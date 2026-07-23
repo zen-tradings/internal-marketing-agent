@@ -1,6 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveBrowserExecutable } from '../tools/cover-generator/render.mjs';
+import {
+  COVER_HEIGHT,
+  COVER_WIDTH,
+  DEFAULT_COVER_BACKGROUND,
+  resolveBrowserExecutable,
+} from '../tools/cover-generator/render.mjs';
+
+test('封面固定使用原始白底图尺寸与背景资产', () => {
+  assert.equal(COVER_WIDTH, 900);
+  assert.equal(COVER_HEIGHT, 383);
+  assert.match(DEFAULT_COVER_BACKGROUND, /assets\/zen-cover-background\.png$/);
+});
 
 test('封面生成器优先使用显式 COVER_BROWSER_EXECUTABLE', () => {
   const exists = (candidate) => candidate === '/custom/chromium';
