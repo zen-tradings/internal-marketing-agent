@@ -4,14 +4,20 @@ import { getInputContent as defaultGetInputContent } from '../lib/getInputConten
 import { generateCover as defaultGenerateCover, ensureFrontmatterCover as defaultEnsureFrontmatterCover } from '../lib/cover.js';
 import { checkArticle as defaultCheckArticle } from '../lib/gate.js';
 import { injectFixedImages as defaultInjectFixedImages } from '../lib/assets.js';
-import { assertExpectedEgress as defaultAssertExpectedEgress } from '../lib/egress.js';
 import { renderAndPublishWithFinalFooter, stripFooterMarkdown } from '../lib/wechat-render.js';
 import { normalizeWideTables as defaultNormalizeWideTables } from '../lib/mobile-tables.js';
+import { FIXED_DRAFT_TEMPLATE_IDS } from '../lib/draft-template.js';
 
 // 与 wenyan-mcp dist/publish.js 完全一致的渲染参数(parity 硬要求)
 // 正文固定走普通公众号版式。代码围栏本来就会被门禁拒绝，不能再让渲染器启用
 // macStyle，否则一旦上游出现异常缩进就会得到黄色 Mac 卡片。
-export const RENDER_OPTS = { theme: 'zen-trading', highlight: 'solarized-light', macStyle: false, footnote: false };
+export const WECHAT_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['wechat-draft'];
+export const RENDER_OPTS = Object.freeze({
+  theme: 'zen-trading',
+  highlight: 'solarized-light',
+  macStyle: false,
+  footnote: false,
+});
 
 async function defaultReadArticle(articlePath) {
   const md = await fs.readFile(articlePath, 'utf-8');
@@ -47,12 +53,13 @@ export function makeChannel({
   ensureFrontmatterCover = defaultEnsureFrontmatterCover,
   writeArticle = defaultWriteArticle,
   checkArticle = defaultCheckArticle,
-    injectFixedImages = defaultInjectFixedImages,
-    assertExpectedEgress = defaultAssertExpectedEgress,
-    normalizeWideTables = defaultNormalizeWideTables,
+  injectFixedImages = defaultInjectFixedImages,
+  normalizeWideTables = defaultNormalizeWideTables,
 } = {}) {
   return {
     id: 'wechat-draft',
+    templateId: WECHAT_TEMPLATE_ID,
+    templateLocked: true,
     async publish({ articlePath, config, notify, notifier, runId, resumeFromCheckpoint = false }) {
       let title, markdown;
       try { ({ title, markdown } = await readArticle(articlePath)); }
@@ -65,9 +72,6 @@ export function makeChannel({
         err.stage = 'publish';
         throw err;
       }
-
-      // 生成阶段可能持续数分钟,发布前必须再次确认出口没有在中途变化。
-      await assertExpectedEgress(config.egress);
 
       // 先把手机端不可读的宽表确定性拆成多个窄表。紧凑五列表可保留；普通宽表
       // 固定首列、每组三个指标，保证不丢数据。转换后再跑最终门禁。
@@ -91,7 +95,17 @@ export function makeChannel({
       // cover/固定图,因此先剥离这些已知资产。errors 拦截发布并直接结束流程,
       // 只有在无 errors 时才继续检查 warnings(放行但需人工关注),避免同一次发布重复告警。
       const assetsConfig = config.assets || {};
-      const gate = checkArticle(markdownForGate(markdown, assetsConfig));
+      const gate = checkArticle(markdownForGate(markdown, assetsConfig), {
+        secretValues: [
+          config.writer?.openrouterApiKey,
+          config.writer?.exaApiKey,
+          config.slack?.botToken,
+          config.slack?.appToken,
+          config.wechat?.appSecret,
+          config.customerio?.appApiKey,
+          config.translation?.notionApiToken,
+        ],
+      });
       if (gate.errors.length) {
         try { if (notifier && notify) await notifier.warn(notify, `门禁拦截,不予发布:\n${gate.errors.join('\n')}`); }
         catch (warnErr) { console.error('门禁拦截告警失败:', warnErr); }
@@ -142,7 +156,13 @@ export function makeChannel({
           } catch {}
         }
         if (!cover) {
-          cover = await generateCover({ title, outDir, markdown, writer: config.writer });
+          cover = await generateCover({
+            title,
+            outDir,
+            markdown,
+            writer: config.writer,
+            generatorDir: config.cover?.generatorDir || undefined,
+          });
           if (runId) await fs.writeFile(coverOwnerPath, runId, 'utf8');
         }
         const updated = ensureFrontmatterCover(markdown, cover);

@@ -1,5 +1,8 @@
 export function createNotifier(postMessage) {
-  const send = (notify, text) => postMessage({ channel: notify.channel, thread_ts: notify.ts, text });
+  const send = (notify, text) => {
+    if (!notify?.channel) return Promise.resolve({ skipped: true, reason: 'missing-channel' });
+    return postMessage({ channel: notify.channel, thread_ts: notify.ts, text });
+  };
   return {
     ack(notify, input) {
       const route = notify?.routeLabel ? `\n识别:${notify.routeLabel}` : '';

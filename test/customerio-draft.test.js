@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeChannel } from '../src/channels/customerio-draft.js';
-import { parseNewsletterArticle, renderNewsletterEmail } from '../src/lib/newsletter-email.js';
+import {
+  NEWSLETTER_TEMPLATE_ID,
+  parseNewsletterArticle,
+  renderNewsletterEmail,
+} from '../src/lib/newsletter-email.js';
 
 const ARTICLE = `---
 title: HBM supply is the bottleneck
@@ -39,6 +43,7 @@ test('newsletter article:规范化 Vol. 版号并渲染品牌/退订/反馈结�
   const parsed = parseNewsletterArticle(ARTICLE);
   assert.equal(parsed.edition, 'Vol. 1');
   const html = renderNewsletterEmail(parsed, config().customerio);
+  assert.match(html, new RegExp(`data-zen-draft-template="${NEWSLETTER_TEMPLATE_ID}"`));
   assert.match(html, /ZEN RESEARCH FROM ZEN TRADING/);
   assert.match(html, /HBM supply is the bottleneck/);
   assert.match(html, /\{% unsubscribe_url %\}/);
@@ -83,6 +88,9 @@ test('Customer.io channel:只创建内部 segment 草稿,绝不夹带发送或�
   assert.equal(result.audienceStage, 'internal');
   assert.equal(result.audienceSegmentId, 17);
   assert.equal(result.audienceRecipientCount, 3);
+  assert.equal(channel.templateId, NEWSLETTER_TEMPLATE_ID);
+  assert.equal(channel.templateLocked, true);
+  assert.match(request.payload.body, new RegExp(`data-zen-draft-template="${NEWSLETTER_TEMPLATE_ID}"`));
   assert.equal(preflight.url, 'https://api.customer.test/v1/segments/17/customer_count');
   assert.equal(preflight.options.method, 'GET');
   assert.equal(request.url, 'https://api.customer.test/v1/newsletters');
@@ -209,4 +217,11 @@ test('Customer.io channel:Pilot/full 不能回退到旧的单一 segment ID', as
     /CUSTOMERIO_PILOT_SEGMENT_ID/,
   );
   assert.equal(calls, 0);
+});
+
+test('Newsletter 查询参数链接不会被双重转义', () => {
+  const article = parseNewsletterArticle('---\ntitle: T\n---\n[Link](https://example.com/a?x=1&y=2)');
+  const html = renderNewsletterEmail(article, { companyAddress: 'A' });
+  assert.match(html, /href="https:\/\/example\.com\/a\?x=1&amp;y=2"/);
+  assert.doesNotMatch(html, /amp;amp/);
 });

@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeChannel, RENDER_OPTS } from '../src/channels/wechat-draft.js';
+import {
+  makeChannel,
+  RENDER_OPTS,
+  WECHAT_TEMPLATE_ID,
+} from '../src/channels/wechat-draft.js';
 
 // 合规、无破折号/美元符号的完整文章,门禁应零 errors/零 warnings,
 // 避免门禁的 notifier.warn 调用干扰各测试对 warned 数组长度/内容的断言。
@@ -16,6 +20,10 @@ const stubCover = { generateCover: async () => '/x/cover.png', writeArticle: asy
 
 test('RENDER_OPTS 固定为普通微信公众号版式', () => {
   assert.deepEqual(RENDER_OPTS, { theme: 'zen-trading', highlight: 'solarized-light', macStyle: false, footnote: false });
+  assert.equal(Object.isFrozen(RENDER_OPTS), true);
+  const channel = makeChannel();
+  assert.equal(channel.templateId, WECHAT_TEMPLATE_ID);
+  assert.equal(channel.templateLocked, true);
 });
 
 test('publish 调 renderAndPublish 并返回 mediaId/title', async () => {
@@ -65,21 +73,20 @@ test('缺失微信凭据 → stage=publish 且不调用 renderAndPublish', async
   assert.equal(called, false);
 });
 
-test('微信发布前出口校验失败时不生成封面、不调用微信 API', async () => {
-  let coverCalled = false;
+test('微信发布不再检查公网 IP 或调用旧出口钩子', async () => {
   let renderCalled = false;
   const channel = makeChannel({
+    ...stubCover,
     readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
-    assertExpectedEgress: async () => { const error = new Error('出口不一致'); error.stage = 'egress'; throw error; },
-    generateCover: async () => { coverCalled = true; return '/x/cover.png'; },
+    assertExpectedEgress: async () => { throw new Error('旧钩子不应调用'); },
     renderAndPublish: async () => { renderCalled = true; return 'MEDIA-X'; },
   });
-  await assert.rejects(
-    () => channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' }, egress: { enabled: true } } }),
-    (error) => error.stage === 'egress',
-  );
-  assert.equal(coverCalled, false);
-  assert.equal(renderCalled, false);
+  const result = await channel.publish({
+    articlePath: '/x/a.md',
+    config: { wechat: { appId: 'wx', appSecret: 's' }, egress: { enabled: true } },
+  });
+  assert.equal(renderCalled, true);
+  assert.equal(result.mediaId, 'MEDIA-X');
 });
 
 test('publish 成功后恢复 process.env 的原值', async () => {

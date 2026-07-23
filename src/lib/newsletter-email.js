@@ -1,4 +1,7 @@
+import { FIXED_DRAFT_TEMPLATE_IDS } from './draft-template.js';
+
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?/;
+export const NEWSLETTER_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['customerio-draft'];
 
 export function normalizeEdition(value = 'Vol. 1') {
   const raw = String(value || 'Vol. 1').trim();
@@ -46,7 +49,7 @@ export function renderNewsletterEmail(article, options = {}) {
   return `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(article.subject)}</title></head>
-<body style="margin:0;background:#f0edeb;color:#08272b;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-weight:300">
+<body data-zen-draft-template="${NEWSLETTER_TEMPLATE_ID}" style="margin:0;background:#f0edeb;color:#08272b;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-weight:300">
   <div style="display:none;max-height:0;overflow:hidden;opacity:0">${escapeHtml(article.preheader)}</div>
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f0edeb"><tr><td align="center" style="padding:24px 12px">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#fffdf8;border:1px solid #dcd8d5;border-radius:12px">
@@ -132,10 +135,16 @@ function renderMarkdown(markdown) {
 }
 
 function inline(text) {
-  let value = escapeHtml(text);
-  value = value.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => `<a href="${escapeAttr(url)}" style="color:#0b6d75">${label}</a>`);
+  const links = [];
+  const source = String(text).replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => {
+    const token = `\uE000ZEN_LINK_${links.length}\uE001`;
+    links.push(`<a href="${escapeAttr(url)}" style="color:#0b6d75">${escapeHtml(label)}</a>`);
+    return token;
+  });
+  let value = escapeHtml(source);
   value = value.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   value = value.replace(/`([^`]+)`/g, '<code style="background:#f0edeb;padding:1px 4px;border-radius:3px">$1</code>');
+  value = value.replace(/\uE000ZEN_LINK_(\d+)\uE001/g, (_, index) => links[Number(index)] || '');
   return value;
 }
 

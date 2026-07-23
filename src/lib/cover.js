@@ -2,8 +2,15 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const DEFAULT_GENERATOR_DIR = path.join(os.homedir(), 'zen-push-image');
+const DEFAULT_GENERATOR_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'tools',
+  'cover-generator'
+);
 
 // 发布前总是写入本次生成的封面,避免沿用旧文章 cover。
 export function ensureFrontmatterCover(markdown, coverPath) {
@@ -29,11 +36,15 @@ const COVER_SYSTEM_PROMPT = `你负责从 Zen Trading 公众号文章中提取�
 // 调 OpenRouter 从文章内容里提取封面数据。解析/校验失败一律返回 null,不抛错,
 // 让调用方(generateCover)回退到示例数据 + 标题的既有行为,不能让封面因提取失败而挂掉。
 export async function buildCoverData({ title, markdown, writer, fetchFn = globalThis.fetch }) {
+  const controller = new AbortController();
+  const timeoutMs = Number(writer?.coverTimeoutMs || 30000);
+  let timer;
   try {
     if (!writer || !writer.openrouterApiKey || !writer.model) return null;
     const url = `${trimTrailingSlash(writer.baseUrl || 'https://openrouter.ai/api/v1')}/chat/completions`;
-    const res = await fetchFn(url, {
+    const request = fetchFn(url, {
       method: 'POST',
+      signal: controller.signal,
       headers: {
         Authorization: `Bearer ${writer.openrouterApiKey}`,
         'Content-Type': 'application/json',
@@ -52,6 +63,15 @@ export async function buildCoverData({ title, markdown, writer, fetchFn = global
         ],
       }),
     });
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        const error = new Error('封面数据请求超时');
+        error.name = 'AbortError';
+        reject(error);
+      }, timeoutMs);
+    });
+    const res = await Promise.race([request, timeout]);
     if (!res.ok) return null;
     const data = await res.json();
     const content = data?.choices?.[0]?.message?.content;
@@ -59,6 +79,8 @@ export async function buildCoverData({ title, markdown, writer, fetchFn = global
     return parseCoverContent(content);
   } catch {
     return null;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -95,6 +117,7 @@ function deepMerge(base, override) {
   if (override && typeof override === 'object') {
     const result = { ...(base && typeof base === 'object' && !Array.isArray(base) ? base : {}) };
     for (const key of Object.keys(override)) {
+      if (['__proto__', 'prototype', 'constructor'].includes(key)) continue;
       result[key] = deepMerge(base ? base[key] : undefined, override[key]);
     }
     return result;
@@ -106,10 +129,9 @@ function trimTrailingSlash(value) {
   return String(value || '').replace(/\/+$/, '');
 }
 
-// 调用 ~/zen-push-image/render.mjs 生成封面 PNG。
+// 调用仓库内置 cover-generator/render.mjs 生成封面 PNG。
 // 真实接口: node render.mjs <data.json> [out.png] —— 无 --title/--out flag,
 // 数据以 window.DATA 形式注入 template.html 后由无头 Chrome 截图。
-// 不需要 Gemini API key:无 key 时背景退化为 CSS 渐变占位图。
 export async function generateCover({
   title,
   outDir,
@@ -118,6 +140,8 @@ export async function generateCover({
   markdown,
   writer,
   buildDataFn = buildCoverData,
+  processTimeoutMs = Number(writer?.coverProcessTimeoutMs || 90000),
+  keepTemp = false,
 }) {
   const examplePath = path.join(generatorDir, 'samples', 'example.json');
   let exampleData;
@@ -147,18 +171,33 @@ export async function generateCover({
   const outPath = path.join(outDir, 'cover.png');
   await fs.writeFile(dataPath, JSON.stringify(data, null, 2));
 
-  return new Promise((resolve, reject) => {
-    let cp;
-    try {
-      cp = spawnFn(process.execPath, [path.join(generatorDir, 'render.mjs'), dataPath, outPath], { cwd: generatorDir, stdio: 'inherit' });
-    } catch (e) {
-      reject(Object.assign(e, { stage: 'cover' }));
-      return;
-    }
-    cp.on('close', (code) => {
-      if (code === 0) resolve(path.resolve(outPath));
-      else reject(Object.assign(new Error(`封面生成失败 code=${code}`), { stage: 'cover' }));
+  try {
+    return await new Promise((resolve, reject) => {
+      let cp;
+      let settled = false;
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      };
+      const timer = setTimeout(() => {
+        try { cp?.kill?.('SIGKILL'); } catch {}
+        finish(reject, Object.assign(new Error(`封面生成超时:${processTimeoutMs}ms`), { stage: 'cover' }));
+      }, processTimeoutMs);
+      try {
+        cp = spawnFn(process.execPath, [path.join(generatorDir, 'render.mjs'), dataPath, outPath], { cwd: generatorDir, stdio: 'inherit' });
+      } catch (e) {
+        finish(reject, Object.assign(e, { stage: 'cover' }));
+        return;
+      }
+      cp.on('close', (code) => {
+        if (code === 0) finish(resolve, path.resolve(outPath));
+        else finish(reject, Object.assign(new Error(`封面生成失败 code=${code}`), { stage: 'cover' }));
+      });
+      cp.on('error', (e) => finish(reject, Object.assign(e, { stage: 'cover' })));
     });
-    cp.on('error', (e) => reject(Object.assign(e, { stage: 'cover' })));
-  });
+  } finally {
+    if (!keepTemp) await fs.rm(workDir, { recursive: true, force: true });
+  }
 }

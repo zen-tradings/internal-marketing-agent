@@ -22,10 +22,10 @@ test('把季度数据块渲染为微信兼容的内联趋势图', () => {
   assert.doesNotMatch(out, /```quarterly-chart/);
 });
 
-test('季度不足或 JSON 非法时静默移除图块,不影响正文', () => {
+test('季度不足或 JSON 非法时显式失败,避免图表静默丢失', () => {
   const tooShort = '前```quarterly-chart\n{"periods":["Q1"],"revenue":[1],"grossMargin":[2]}\n```后';
-  assert.equal(renderQuarterlyCharts(tooShort), '前后');
-  assert.equal(renderQuarterlyCharts('前```quarterly-chart\n{x}\n```后'), '前后');
+  assert.throws(() => renderQuarterlyCharts(tooShort), /季度图表数据不完整/);
+  assert.throws(() => renderQuarterlyCharts('前```quarterly-chart\n{x}\n```后'), /季度图表 JSON 无效/);
 });
 
 test('内联趋势图能通过 Wenyan 渲染进入微信正文', async () => {

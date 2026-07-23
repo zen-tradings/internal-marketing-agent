@@ -31,12 +31,19 @@ CREATE TABLE IF NOT EXISTS slack_threads (
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_slack_threads_updated ON slack_threads(updated_at);
+
+CREATE TABLE IF NOT EXISTS slack_events (
+  event_key TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_slack_events_created ON slack_events(created_at);
 `;
 
 export function openStore(dbPath) {
   if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
+  db.pragma('busy_timeout = 5000');
   db.exec(SCHEMA);
   return {
     createRun({ id, workflowId, source, input, notify }) {
@@ -83,6 +90,25 @@ export function openStore(dbPath) {
           updated_at = excluded.updated_at
       `).run(threadKey, channelId, threadTs, workflowId, JSON.stringify(bounded), lastRunId ?? null, Date.now());
     },
+    claimSlackEvent(eventKey) {
+      if (!eventKey) return false;
+      return db.prepare('INSERT OR IGNORE INTO slack_events (event_key, created_at) VALUES (?, ?)')
+        .run(eventKey, Date.now()).changes === 1;
+    },
+    releaseSlackEvent(eventKey) {
+      if (!eventKey) return 0;
+      return db.prepare('DELETE FROM slack_events WHERE event_key = ?').run(eventKey).changes;
+    },
+    listPrunableRuns(before) {
+      if (!Number.isFinite(before)) return [];
+      return db.prepare(`
+        SELECT id, workflow_id
+        FROM runs
+        WHERE status IN ('done', 'failed', 'interrupted')
+          AND COALESCE(finished_at, created_at) < ?
+        ORDER BY created_at
+      `).all(before);
+    },
     markInterrupted() {
       return db.prepare(`UPDATE runs SET status = 'interrupted' WHERE status = 'running'`).run().changes;
     },
@@ -94,6 +120,7 @@ export function openStore(dbPath) {
       `).run(id).changes;
     },
     requeueRecoverableTranslation(id) {
+      // egress 只用于兼容旧版本已落库的失败记录；当前运行时不再产生出口门禁失败。
       return db.prepare(`
         UPDATE runs
         SET status = 'queued', stage = NULL, error = NULL, started_at = NULL, finished_at = NULL
@@ -116,5 +143,26 @@ export function openStore(dbPath) {
         WHERE workflow_id = ? AND status = 'running'
       `).run(workflowId).changes;
     },
+    prune({ runBefore, threadBefore, eventBefore } = {}) {
+      const pruneTransaction = db.transaction(() => {
+        const result = { runs: 0, threads: 0, events: 0 };
+        if (Number.isFinite(runBefore)) {
+          result.runs = db.prepare(`
+            DELETE FROM runs
+            WHERE status IN ('done', 'failed', 'interrupted')
+              AND COALESCE(finished_at, created_at) < ?
+          `).run(runBefore).changes;
+        }
+        if (Number.isFinite(threadBefore)) {
+          result.threads = db.prepare('DELETE FROM slack_threads WHERE updated_at < ?').run(threadBefore).changes;
+        }
+        if (Number.isFinite(eventBefore)) {
+          result.events = db.prepare('DELETE FROM slack_events WHERE created_at < ?').run(eventBefore).changes;
+        }
+        return result;
+      });
+      return pruneTransaction();
+    },
+    close() { db.close(); },
   };
 }

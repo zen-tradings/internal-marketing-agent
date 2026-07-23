@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSlackTask, resolveNaturalWorkflowTask, resolveWorkflowTask } from '../src/triggers/slack.js';
+import {
+  createSlackIntentClassifier,
+  parseSlackTask,
+  resolveNaturalWorkflowTask,
+  resolveWorkflowTask,
+} from '../src/triggers/slack.js';
 
 test('识别 "任务:" 前缀', () => {
   assert.equal(parseSlackTask('任务:写英伟达', 'B1'), '写英伟达');
@@ -43,6 +48,30 @@ test('自然语言路由:同线程短补充继承上个工作流,模糊长任务
   assert.equal(followup.reason, 'thread-context');
   const fallback = await resolveNaturalWorkflowTask('写一篇对这个主题的深入看法，供下周讨论使用。'.repeat(10), { workflowIds: ids, defaultWorkflowId: 'wechat' });
   assert.equal(fallback.workflowId, 'wechat');
+});
+
+test('模型路由给短 JSON 预留足够输出预算并关闭 reasoning', async () => {
+  let body;
+  const fetchFn = async (_url, options) => {
+    body = JSON.parse(options.body);
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: '{"workflowId":"email"}' } }],
+      }),
+    };
+  };
+  const classify = createSlackIntentClassifier({
+    writer: {
+      openrouterApiKey: 'or-key',
+      model: 'z-ai/glm-5.2',
+      baseUrl: 'https://openrouter.ai/api/v1',
+    },
+  }, fetchFn);
+
+  assert.equal(await classify('写一封 newsletter', ['wechat', 'email']), 'email');
+  assert.equal(body.max_tokens, 256);
+  assert.deepEqual(body.reasoning, { effort: 'none', exclude: true });
 });
 
 test('多工作流路由:无前缀走 defaultWorkflowId', () => {

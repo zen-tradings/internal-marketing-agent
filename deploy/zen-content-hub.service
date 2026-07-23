@@ -1,0 +1,27 @@
+[Unit]
+Description=Zen Content Hub Slack bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=zenbot
+Group=zenbot
+WorkingDirectory=/opt/zen-content-hub
+Environment=NODE_ENV=production
+Environment=HOME=/var/lib/zen-content-hub
+EnvironmentFile=/etc/zen-content-hub/zen-content-hub.env
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=10
+TimeoutStopSec=35
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/zen-content-hub
+
+[Install]
+WantedBy=multi-user.target

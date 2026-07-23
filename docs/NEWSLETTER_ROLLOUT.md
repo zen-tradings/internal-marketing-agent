@@ -1,6 +1,8 @@
 # Customer.io newsletter 发布工作流
 
-## 当前配置
+## 当前配置与历史记录
+
+本节中的发送结果和人数是当时的运维记录，不是 Customer.io 的实时状态。每次创建或扩容前都必须运行 `npm run check:customerio`，并以 Customer.io Review 页显示的人数为最终依据。
 
 - 命名格式：`Zen Research from Zen Trading · Vol. N`
 - Slack 入口：私聊自然语言或频道 `@Bot`；`邮件：<本期主题>`、`email: <topic>` 继续兼容。
@@ -17,9 +19,11 @@
 Customer.io 的 App API 不能改写由 Design Studio 创建的邮件正文，因此保留两条发布路径：
 
 1. 现有 `Vol. 1` 使用 Customer.io Design Studio 模板，人工替换内容并试发。
-2. Slack `email:` 工作流使用仓库内的邮件 HTML 模板创建新的 Customer.io 草稿，适合后续稳定自动化。
+2. Slack `email:` 工作流固定使用仓库内 `zen-customerio/zen-research@1` 邮件 HTML 模板创建新的 Customer.io 草稿，适合后续稳定自动化。
 
 两条路径都必须经过 Customer.io Review 页，任何发送或排期都由人工确认。
+
+Bot 自动化路径不接受单次任务或工作流覆盖模板。真实渠道会在调用 Customer.io 前核对中央登记的模板 ID、锁定状态和最终 HTML 模板标识；任一不匹配都会拒绝创建草稿。后续改版必须升级模板版本并更新离线渲染测试。
 
 ## 每一期的发布步骤
 
@@ -34,7 +38,7 @@ Customer.io 的 App API 不能改写由 Design Studio 创建的邮件正文，�
 
 ## 三阶段受众门禁
 
-| Stage | Customer.io segment | 当前人数 | 默认人数上限 | 额外门禁 |
+| Stage | Customer.io segment | 文档记录人数（非实时） | 默认人数上限 | 额外门禁 |
 |---|---|---:|---:|---|
 | `internal` | `Newsletter · Internal Beta`（17） | 3 | 10 | 默认阶段 |
 | `pilot` | `Newsletter · Pilot`（18） | 0 | 50 | 空名单拒绝创建草稿 |

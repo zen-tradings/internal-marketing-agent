@@ -8,7 +8,7 @@ dotenv.config({ override: true });
 
 const sourceUrl = process.argv.slice(2).find((value) => /^https?:\/\//i.test(value));
 if (!sourceUrl) {
-  console.error('用法: npm run check:translation-v2 -- https://example.com/article');
+  console.error('用法: npm run check:translation-text -- https://example.com/article');
   process.exit(2);
 }
 
@@ -24,24 +24,23 @@ if (!['http:', 'https:'].includes(parsed.protocol)) {
 }
 
 const config = loadConfig();
-config.translation.v2Enabled = true;
 
-console.log('[translation-v2] 只生成本地验收稿，不会调用微信草稿接口。');
+console.log('[translation-text] 只提取并翻译正文文字，生成本地验收稿，不会调用微信草稿接口。');
 const result = await runWriter({
   workflow: translateWorkflow,
   input: `直译 ${sourceUrl}`,
   config,
   onProgress(progress) {
-    console.log(`[translation-v2] ${progress.stage}: ${progress.message}`);
+    console.log(`[translation-text] ${progress.stage}: ${progress.message}`);
   },
 });
 
 if (!result.ok) {
-  console.error(`[translation-v2] 失败: ${result.stderr}`);
-  console.error(`[translation-v2] trace: ${result.researchTracePath}`);
+  console.error(`[translation-text] 失败: ${result.stderr}`);
+  console.error(`[translation-text] trace: ${result.researchTracePath}`);
   process.exit(1);
 }
 
-console.log(`[translation-v2] 验收稿: ${result.articlePath}`);
-console.log(`[translation-v2] trace: ${result.researchTracePath}`);
-console.log(`[translation-v2] completeness: ${JSON.stringify(result.completeness)}`);
+console.log(`[translation-text] 验收稿: ${result.articlePath}`);
+console.log(`[translation-text] trace: ${result.researchTracePath}`);
+console.log(`[translation-text] completeness: ${JSON.stringify(result.completeness)}`);

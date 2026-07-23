@@ -137,7 +137,9 @@ export function createSlackIntentClassifier(config, fetchFn = globalThis.fetch) 
         body: JSON.stringify({
           model: writer.routerModel || writer.model,
           temperature: 0,
-          max_tokens: 80,
+          // GLM 等模型即使 reasoning=none 也可能消耗少量隐藏 token。
+          // 给短 JSON 足够预算，避免 80 token 时正文为空而错误回退默认路由。
+          max_tokens: 256,
           reasoning: { effort: 'none', exclude: true },
           messages: [
             { role: 'system', content: `Classify a Slack writing request. Return JSON only: {"workflowId":"..."}. Allowed: ${workflowIds.join(', ')}. A URL is research material, not translation intent. Never choose translate for a URL alone; choose translate only when the user explicitly asks for faithful/full translation. email=newsletter/Customer.io; earnings=quarterly earnings; sector=industry; morning=daily brief; company=company deep dive including financials, competitors, or value chain; wechat=other public-account analysis and bare URLs.` },
@@ -173,13 +175,44 @@ export async function registerSlack({ config, enqueue, store, onReady, workflowI
   // 内部的 finity 崩溃不走这里,由 index.js 的进程级守卫容忍并触发重连。
   app.error(async (error) => { console.error('[slack] bolt error:', (error && error.message) || error); });
   const seen = new Set();
-  const dedup = (ts) => { if (seen.has(ts)) return false; seen.add(ts); setTimeout(() => seen.delete(ts), 1800000); return true; };
+  const dedup = (key) => { if (seen.has(key)) return false; seen.add(key); setTimeout(() => seen.delete(key), 1800000).unref?.(); return true; };
+  const rateWindows = new Map();
+  const allowedUsers = new Set(config.slack.allowedUserIds || []);
+  const allowedChannels = new Set(config.slack.allowedChannelIds || []);
+  const rateLimit = Number(config.slack.rateLimitPerMinute || 10);
+  const isAuthorized = ({ user, channel }) => {
+    if (allowedUsers.size && !allowedUsers.has(user)) return false;
+    if (allowedChannels.size && !allowedChannels.has(channel)) return false;
+    return true;
+  };
+  const withinRateLimit = (user) => {
+    const key = user || 'unknown';
+    const cutoff = Date.now() - 60000;
+    const recent = (rateWindows.get(key) || []).filter((at) => at >= cutoff);
+    if (recent.length >= rateLimit) { rateWindows.set(key, recent); return false; }
+    recent.push(Date.now());
+    rateWindows.set(key, recent);
+    return true;
+  };
   let botId = '';
   const classify = createSlackIntentClassifier(config);
-  const handle = async ({ channel, ts, threadTs, channelType, raw }) => {
-    if (!dedup(ts)) return;
+  const handle = async ({ channel, ts, threadTs, channelType, raw, user, eventId }) => {
     const task = parseSlackTask(raw, botId, { channelType, channel });
     if (!task) return;
+    if (!isAuthorized({ user, channel })) {
+      console.error(`[slack] 已拒绝未授权任务:user=${user || 'unknown'} channel=${channel || 'unknown'}`);
+      return;
+    }
+    const eventKey = eventId || `${channel}:${ts}`;
+    if (!dedup(eventKey)) return;
+    if (!withinRateLimit(user)) {
+      console.error(`[slack] 已限流:user=${user || 'unknown'} 每分钟上限=${rateLimit}`);
+      return;
+    }
+    const claimed = store?.claimSlackEvent ? store.claimSlackEvent(eventKey) : true;
+    if (!claimed) return;
+    let enqueued = false;
+    try {
     const rootTs = threadTs || ts;
     const threadKey = `${channel}:${rootTs}`;
     const previous = store?.getSlackThread?.(threadKey);
@@ -199,25 +232,38 @@ export async function registerSlack({ config, enqueue, store, onReady, workflowI
       input,
       notify: { channel, ts: rootTs, routeLabel: workflowRouteLabel(route.workflowId), threadKey },
     });
-    store?.upsertSlackThread?.({
-      threadKey,
-      channelId: channel,
-      threadTs: rootTs,
-      workflowId: route.workflowId,
-      messages,
-      lastRunId: run?.id,
-    });
+    enqueued = true;
+    try {
+      store?.upsertSlackThread?.({
+        threadKey,
+        channelId: channel,
+        threadTs: rootTs,
+        workflowId: route.workflowId,
+        messages,
+        lastRunId: run?.id,
+      });
+    } catch (error) {
+      console.error('[slack] 线程上下文写入失败(任务已入队):', error?.message || error);
+    }
+    } catch (error) {
+      if (!enqueued) store?.releaseSlackEvent?.(eventKey);
+      throw error;
+    }
   };
-  app.message(async ({ message }) => {
+  app.message(async ({ message, body }) => {
     if (!message.bot_id && !message.subtype && message.text) {
-      await handle({ channel: message.channel, ts: message.ts, threadTs: message.thread_ts, channelType: message.channel_type, raw: message.text });
+      await handle({ channel: message.channel, ts: message.ts, threadTs: message.thread_ts, channelType: message.channel_type, raw: message.text, user: message.user, eventId: body?.event_id });
     }
   });
-  app.event('app_mention', async ({ event }) => {
-    await handle({ channel: event.channel, ts: event.ts, threadTs: event.thread_ts, channelType: event.channel_type, raw: event.text });
+  app.event('app_mention', async ({ event, body }) => {
+    await handle({ channel: event.channel, ts: event.ts, threadTs: event.thread_ts, channelType: event.channel_type, raw: event.text, user: event.user, eventId: body?.event_id });
   });
-  await app.start();
   botId = (await app.client.auth.test()).user_id;
+  try { await app.start(); }
+  catch (error) {
+    try { await app.stop(); } catch {}
+    throw error;
+  }
   onReady?.(app);
   return app;
 }

@@ -1,12 +1,4 @@
-import 'dotenv/config';
-import { loadEgressConfig } from '../src/config/index.js';
-import { assertExpectedEgress } from '../src/lib/egress.js';
-
-const config = loadEgressConfig();
-if (!config.enabled) throw new Error('EGRESS_GUARD_ENABLED 未开启');
-
-const guard = await assertExpectedEgress(config);
-console.log(`固定出口校验:通过 (IPv${guard.family})`);
+const timeoutMs = 8000;
 
 const targets = [
   ['Slack', 'https://slack.com/api/api.test', { method: 'POST' }],
@@ -18,7 +10,7 @@ const targets = [
 
 for (const [name, url, init] of targets) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   timer.unref?.();
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
@@ -26,7 +18,10 @@ for (const [name, url, init] of targets) {
     if (response.status >= 500) throw new Error(`HTTP ${response.status}`);
     console.log(`${name}:可达 (HTTP ${response.status})`);
   } catch (error) {
-    console.error(`${name}:不可达 (${error.name === 'AbortError' ? '超时' : error.message})`);
+    const detail = error.name === 'AbortError'
+      ? '超时'
+      : [error.message, error.cause?.code, error.cause?.message].filter(Boolean).join(' · ');
+    console.error(`${name}:不可达 (${detail})`);
     process.exitCode = 1;
   } finally {
     clearTimeout(timer);

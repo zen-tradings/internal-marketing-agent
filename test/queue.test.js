@@ -42,3 +42,29 @@ test('restore 恢复持久化任务但不重复 INSERT', async () => {
   assert.deepEqual(done, ['saved']);
   assert.equal(store.getRun('saved').status, 'queued');
 });
+
+test('有界队列满时拒绝新任务且停止后不再接单', async () => {
+  const store = openStore(':memory:');
+  let release;
+  const blocker = new Promise((resolve) => { release = resolve; });
+  const q = createQueue({
+    store,
+    maxConcurrency: 1,
+    maxQueueSize: 1,
+    handler: async () => blocker,
+  });
+  q.enqueue({ id: 'active', workflowId: 'w', source: 'slack', input: 'a', notify: {} });
+  q.enqueue({ id: 'pending', workflowId: 'w', source: 'slack', input: 'b', notify: {} });
+  assert.throws(
+    () => q.enqueue({ id: 'overflow', workflowId: 'w', source: 'slack', input: 'c', notify: {} }),
+    /队列已满/,
+  );
+  assert.equal(store.getRun('overflow'), undefined);
+  q.stop();
+  assert.throws(
+    () => q.enqueue({ id: 'stopped', workflowId: 'w', source: 'slack', input: 'd', notify: {} }),
+    /正在关闭/,
+  );
+  release();
+  await q.whenIdle();
+});

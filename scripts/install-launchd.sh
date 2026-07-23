@@ -4,13 +4,10 @@
 # 只在本机(有人值守的 Mac)使用。安装后 bot 会作为当前登录用户的 LaunchAgent
 # 在开机/登录时自动拉起，进程崩溃时自动重启，正常退出(exit 0)则不重启。
 #
-# 重要:生成的 plist 里 EnvironmentVariables 只设置 PATH，绝不注入
-# HTTP_PROXY/HTTPS_PROXY/ALL_PROXY 等代理变量。src/index.js 的
-# assertMainProcessDirect() 会在主进程检测到这些代理变量时主动拒绝启动——
-# 这是有意为之的设计:应用层不单独选路,所有 Node/Slack/微信请求统一由
-# Clash TUN 接管；项目自身再用 EXPECTED_EGRESS_IP 做 fail-closed 校验。
-# 如果你的 shell profile 里全局导出了代理变量，不会影响 launchd 启动的进程，
-# 因为 launchd 不会继承交互式 shell 的环境变量。
+# 生成的 plist 只显式设置服务运行所需的 PATH。项目不检查公网出口 IP，
+# 也不因代理环境变量阻止启动或发布；实际出站路由由 macOS 与 Node.js
+# 运行环境决定。launchd 不会自动继承交互式 shell profile 中的环境变量，
+# 如需为服务单独配置网络环境，应在服务配置中明确设置。
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -65,7 +62,7 @@ append_path_part "/usr/sbin"
 append_path_part "/sbin"
 SERVICE_PATH="$(IFS=:; echo "${PATH_PARTS[*]}")"
 
-POPLER_COMMANDS=(pdftotext pdfinfo pdftoppm pdfimages)
+POPLER_COMMANDS=(pdftotext pdfinfo)
 for command_name in "${POPLER_COMMANDS[@]}"; do
   if ! env PATH="$SERVICE_PATH" "$command_name" -v >/dev/null 2>&1; then
     if [ -n "$BREW_PREFIX" ] && brew list --versions poppler >/dev/null 2>&1; then
@@ -82,7 +79,7 @@ done
 echo "    仓库根目录: $REPO"
 echo "    node 路径:   $NODE_BIN"
 echo "    服务 PATH:   $SERVICE_PATH"
-echo "    Poppler:      已验证 pdftotext / pdfinfo / pdftoppm / pdfimages"
+echo "    Poppler:      已验证 pdftotext / pdfinfo"
 
 echo "==> 准备日志目录"
 mkdir -p "$LOG_DIR"

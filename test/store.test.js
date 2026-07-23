@@ -67,7 +67,7 @@ test('recoverRunningWorkflow 只自动恢复指定工作流的运行中任务', 
   assert.equal(s.getRun('wechat').status, 'interrupted');
 });
 
-test('requeueRecoverableTranslation 可恢复中断、出口、发布或网络生成失败的直译', () => {
+test('requeueRecoverableTranslation 可恢复中断、历史出口、发布或网络生成失败的直译', () => {
   const s = openStore(':memory:');
   for (const id of ['egress', 'publish', 'generate', 'content']) {
     s.createRun({ id, workflowId: 'translate', source: 'slack', input: '直译', notify: {} });
@@ -108,4 +108,25 @@ test('Slack 线程上下文按 channel + thread_ts 保存并限制最近 12 条'
   assert.equal(thread.messages.length, 12);
   assert.equal(thread.messages[0].text, '第4条');
   assert.equal(thread.last_run_id, 'run-1');
+});
+
+test('Slack 事件持久化 claim 防止跨进程重复消费,失败前可释放', () => {
+  const s = openStore(':memory:');
+  assert.equal(s.claimSlackEvent('Ev1'), true);
+  assert.equal(s.claimSlackEvent('Ev1'), false);
+  assert.equal(s.releaseSlackEvent('Ev1'), 1);
+  assert.equal(s.claimSlackEvent('Ev1'), true);
+});
+
+test('过期任务只选择终态记录并和数据库清理保持一致', () => {
+  const store = openStore(':memory:');
+  store.createRun({ id: 'done-old', workflowId: 'wechat', source: 'test', input: 'x', notify: {} });
+  store.createRun({ id: 'queued-old', workflowId: 'wechat', source: 'test', input: 'x', notify: {} });
+  store.setStatus('done-old', 'done', { finishedAt: 1 });
+  const expired = store.listPrunableRuns(2);
+  assert.deepEqual(expired, [{ id: 'done-old', workflow_id: 'wechat' }]);
+  const result = store.prune({ runBefore: 2 });
+  assert.equal(result.runs, 1);
+  assert.equal(store.getRun('done-old'), undefined);
+  assert.equal(store.getRun('queued-old').status, 'queued');
 });

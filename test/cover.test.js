@@ -47,7 +47,7 @@ test('generateCover 写 data.json(以 example.json 为默认值,覆盖 title)并
     return emitter;
   };
 
-  const outPath = await generateCover({ title: '我的封面标题', outDir, generatorDir, spawnFn });
+  const outPath = await generateCover({ title: '我的封面标题', outDir, generatorDir, spawnFn, keepTemp: true });
 
   assert.equal(outPath, path.resolve(outDir, 'cover.png'));
   assert.equal(calledArgs.cmd, process.execPath);
@@ -247,7 +247,7 @@ test('generateCover: markdown+writer 且 buildDataFn 返回内容 → 深合并�
   const buildDataFn = async () => builtData;
 
   const outPath = await generateCover({
-    title: '文章标题', outDir, generatorDir, spawnFn, markdown: '正文', writer: { openrouterApiKey: 'k', model: 'm' }, buildDataFn,
+    title: '文章标题', outDir, generatorDir, spawnFn, markdown: '正文', writer: { openrouterApiKey: 'k', model: 'm' }, buildDataFn, keepTemp: true,
   });
   assert.equal(outPath, path.resolve(outDir, 'cover.png'));
 
@@ -272,7 +272,7 @@ test('generateCover: buildDataFn 返回 null → 回退到示例+文章标题(�
   };
 
   await generateCover({
-    title: '回退标题', outDir, generatorDir, spawnFn, markdown: '正文', writer: { openrouterApiKey: 'k', model: 'm' }, buildDataFn: async () => null,
+    title: '回退标题', outDir, generatorDir, spawnFn, markdown: '正文', writer: { openrouterApiKey: 'k', model: 'm' }, buildDataFn: async () => null, keepTemp: true,
   });
 
   const dataPath = calledArgs.args[1];

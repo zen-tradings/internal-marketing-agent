@@ -6,9 +6,11 @@ import { findUnreadableTables } from './mobile-tables.js';
 const SECRET_PATTERNS = [
   { re: /sk-or-[A-Za-z0-9_-]{10,}/, label: 'OpenRouter API key(sk-or-...)' },
   { re: /xox[bap]-[A-Za-z0-9-]{10,}/, label: 'Slack token(xoxb/xoxa/xoxp-...)' },
+  { re: /xapp-[A-Za-z0-9-]{10,}/, label: 'Slack app token(xapp-...)' },
+  { re: /(?:authorization|api[_ -]?key|app[_ -]?secret)\s*[:=]\s*(?:bearer\s+)?[A-Za-z0-9._~+/-]{12,}/i, label: '通用 API 凭据' },
 ];
 
-export function checkArticle(markdown) {
+export function checkArticle(markdown, { secretValues = [] } = {}) {
   const md = String(markdown || '');
   const errors = [];
   const warnings = [];
@@ -31,18 +33,24 @@ export function checkArticle(markdown) {
     }
   }
 
-  if (/\/Users\//.test(markdownWithoutGeneratedCover)) {
-    errors.push('出口拦截:正文包含本地路径 /Users/,模型产出不应出现本地文件路径');
+  for (const secret of secretValues) {
+    const value = String(secret || '').trim();
+    if (value.length >= 8 && md.includes(value)) {
+      errors.push('出口拦截:正文包含当前进程的真实凭据值,不允许发布');
+      break;
+    }
+  }
+
+  if (/(?:\/Users\/|\/home\/|\/srv\/|\/tmp\/|[A-Za-z]:\\Users\\)/.test(markdownWithoutGeneratedCover)) {
+    errors.push('出口拦截:正文包含本地路径,模型产出不应泄漏运行环境路径');
   }
 
   if (/```/.test(md)) {
     errors.push('出口拦截:正文包含代码围栏,公众号固定版式不允许代码卡片');
   }
 
-  // V2 represents source-authored code samples as explicit HTML <pre><code>
-  // blocks. Their internal indentation is intentional content and cannot
-  // accidentally become a Markdown/Mac-style code card, so only inspect text
-  // outside those blocks for unsafe four-space indentation.
+  // 非直译工作流仍可能显式生成 HTML <pre><code>，只在这些块之外检查
+  // 会被 Markdown 误识别为代码卡片的四空格缩进。
   const markdownOutsideExplicitPre = md.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, '');
   if (markdownOutsideExplicitPre.split(/\r?\n/).some((line) => /^ {4,}\S/.test(line))) {
     errors.push('出口拦截:正文包含四空格缩进块,会被渲染为黄色代码框');
