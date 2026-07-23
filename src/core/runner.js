@@ -521,9 +521,9 @@ function buildUserPrompt({ workflow, input, research, writer, sourcePolicy, asOf
 - “引用链接”必须是正文最后一个文字章节；系统会在它后面追加固定尾图
 ${sourcePolicy.requireUserSource ? '- 法律文件分析优先保留用户指定的案卷或文件链接\n' : ''}`
     : '- 使用可点击的 Markdown 链接并紧邻其支持的事实，不要在文末重复来源列表';
-  const officialCitationContract = sourcePolicy.minOfficialCitations > 0
-    ? `- 至少使用 ${sourcePolicy.minOfficialCitations} 个官方/一手来源`
-    : '- 法律案件不按数量硬凑官方网页，证据优先级依次为案卷/诉状/裁定等原始记录、监管材料、精确匹配案号的可靠报道';
+  const officialCitationContract = sourcePolicy.kind === 'legal-document-analysis'
+    ? '- 法律案件不按数量硬凑官方网页，证据优先级依次为案卷/诉状/裁定等原始记录、监管材料、精确匹配案号的可靠报道'
+    : '- 官方/一手来源按相关性使用，不设正文引用数量门槛';
   const legalContract = sourcePolicy.kind === 'legal-document-analysis'
     ? `- 严格区分起诉状中的指控、当事人陈述、法院已经认定的事实和本文推断，不得把指控写成判决结论
 - 只呈现理解案件所必需的公开身份信息，不扩散住址、电话、账户号等无关敏感信息`
@@ -612,7 +612,6 @@ export function sourcePolicyFor({ input, workflow }) {
   const requireOfficial = !nonResearchNewsletter && (configured.officialFirst === true || /官方|一手信源|第一手|primary\s+sources?/i.test(text));
   const requireCitations = !nonResearchNewsletter && (configured.requireCitations === true || /引用|引证|cite|citations?/i.test(text) || requireOfficial);
   const configuredMinOfficialSources = Number(configured.minOfficialSources || workflow?.research?.minOfficialSources || 2);
-  const configuredMinOfficialCitations = Number(configured.minOfficialCitations || workflow?.research?.minOfficialCitations || 2);
   const terminalReferences = workflow?.mode !== 'newsletter';
   return {
     kind: nonResearchNewsletter
@@ -626,18 +625,15 @@ export function sourcePolicyFor({ input, workflow }) {
     requireCitations,
     skipResearch: nonResearchNewsletter,
     referenceStyle: terminalReferences ? 'terminal-list' : 'inline',
-    minReferences: terminalReferences ? 1 : Math.max(1, configuredMinOfficialCitations),
+    minReferences: terminalReferences ? 1 : 0,
     maxReferences: terminalReferences ? 5 : undefined,
     requireUserSource: legalDocumentAnalysis,
     minOfficialSources: legalDocumentAnalysis ? 0 : configuredMinOfficialSources,
-    minOfficialCitations: legalDocumentAnalysis || terminalReferences ? 0 : configuredMinOfficialCitations,
   };
 }
 
 function validateArticleSourceContract(article, research, policy) {
   if (!policy.requireCitations) return;
-  const links = extractArticleUrls(article);
-  const matchedSources = matchResearchSources(links, research);
   if (policy.referenceStyle === 'terminal-list') {
     const terminal = terminalReferenceSection(article);
     if (!terminal) throw new Error('严格引用门禁:缺少文末唯一的“引用链接”');
@@ -660,12 +656,6 @@ function validateArticleSourceContract(article, research, policy) {
       throw new Error('严格引用门禁:文末引用来源未包含用户指定的案卷或文件');
     }
   }
-  const officialUrls = research.filter((source) => source.official && source.url).map((source) => source.url);
-  const citedOfficial = new Set(officialUrls.filter((url) => links.some((link) => normalizeUrl(link) === normalizeUrl(url))));
-  if (citedOfficial.size < policy.minOfficialCitations) {
-    const location = policy.referenceStyle === 'terminal-list' ? '文末引用来源仅包含' : '正文仅引用';
-    throw new Error(`严格引用门禁:${location} ${citedOfficial.size} 个已检索官方来源,至少需要 ${policy.minOfficialCitations} 个`);
-  }
 }
 
 function citationValidationSummary(article, research, policy) {
@@ -678,8 +668,7 @@ function citationValidationSummary(article, research, policy) {
     matchedSourceCount: matched.length,
     matchedOfficialSourceCount: matched.filter((source) => source.official).length,
     passed: !policy.requireCitations
-      || (matched.length >= (policy.minReferences || 0)
-        && matched.filter((source) => source.official).length >= policy.minOfficialCitations),
+      || matched.length >= (policy.minReferences || 0),
   };
 }
 

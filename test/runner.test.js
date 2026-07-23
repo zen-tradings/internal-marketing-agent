@@ -107,7 +107,7 @@ test('关系型 Newsletter:首封问候/需求收集不搜索、不要求引用�
     id: 'email',
     mode: 'newsletter',
     factReview: true,
-    sourcePolicy: { officialFirst: true, requireCitations: true, minOfficialSources: 2, minOfficialCitations: 2 },
+    sourcePolicy: { officialFirst: true, requireCitations: true, minOfficialSources: 2 },
   });
   const input = 'support@zentradings.com作为测试邮箱 发给用户的第一篇newsletter，主要内容是收集用户需求 介绍我们专门的agent对接，发到草稿箱';
   const calls = [];
@@ -325,7 +325,6 @@ test('严格任务:独立检索官方域名,注入当前时间,正文引用已�
       prioritySources: [],
       officialSources: ['sec.gov', 'nasdaq.com'],
       minOfficialSources: 2,
-      minOfficialCitations: 2,
     },
   });
   const searchBodies = [];
@@ -374,13 +373,51 @@ test('严格任务:独立检索官方域名,注入当前时间,正文引用已�
   assert.equal(trace.selectedSources.filter((source) => source.kind === 'official').length, 2);
 });
 
+test('研究型 Newsletter:正文未引用官方链接时不再因数量门禁失败', async () => {
+  const workflow = tempWorkflow({
+    mode: 'newsletter',
+    factReview: false,
+    sourcePolicy: { officialFirst: true, requireCitations: true, minOfficialSources: 2 },
+    research: {
+      prioritySources: [],
+      officialSources: ['sec.gov', 'nasdaq.com'],
+      minOfficialSources: 2,
+    },
+  });
+  const fetchFn = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    if (String(url).endsWith('/search')) {
+      if (body.includeDomains) {
+        return jsonResponse({ results: [
+          { title: 'SEC filing', url: 'https://www.sec.gov/filing', text: 'Official.' },
+          { title: 'Nasdaq event', url: 'https://www.nasdaq.com/event', text: 'Official.' },
+        ] });
+      }
+      return jsonResponse({ results: [] });
+    }
+    return jsonResponse({ choices: [{ message: { content: '---\ntitle: 无链接 Newsletter\n---\n正文没有来源链接。' } }] });
+  };
+
+  const result = await runWriter({
+    workflow,
+    input: '请基于官方一手信源撰写市场分析 Newsletter',
+    config: baseConfig(),
+    fetchFn,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(fs.existsSync(result.articlePath), true);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.citationValidation.matchedOfficialSourceCount, 0);
+  assert.equal(trace.citationValidation.passed, true);
+});
+
 test('严格任务:开放搜索成功但官方来源不足时在生成前失败', async () => {
   const workflow = tempWorkflow({
     research: {
       prioritySources: [],
       officialSources: ['sec.gov', 'nasdaq.com'],
       minOfficialSources: 2,
-      minOfficialCitations: 2,
     },
   });
   let completionCalls = 0;
@@ -406,13 +443,12 @@ test('严格任务:开放搜索成功但官方来源不足时在生成前失败'
   assert.match(result.stderr, /仅检索到 1 个官方\/一手来源,至少需要 2 个/);
 });
 
-test('严格任务:研究素材足够但正文未引用官方链接时拒绝落盘', async () => {
+test('公众号严格任务:缺少文末引用链接章节时拒绝落盘', async () => {
   const workflow = tempWorkflow({
     research: {
       prioritySources: [],
       officialSources: ['sec.gov', 'nasdaq.com'],
       minOfficialSources: 2,
-      minOfficialCitations: 2,
     },
   });
   const fetchFn = async (url, opts) => {
@@ -442,7 +478,7 @@ test('法律案件:先读取用户案卷再按案名案号深搜,不套用公司
   const workflow = tempWorkflow({
     id: 'wechat',
     mode: 'analysis',
-    sourcePolicy: { officialFirst: true, requireCitations: true, minOfficialSources: 2, minOfficialCitations: 2 },
+    sourcePolicy: { officialFirst: true, requireCitations: true, minOfficialSources: 2 },
     research: {
       prioritySources: ['trendforce.com'],
       officialSources: ['sec.gov', 'sse.com.cn', 'szse.cn'],
@@ -486,7 +522,7 @@ test('法律案件:先读取用户案卷再按案名案号深搜,不套用公司
   const policy = sourcePolicyFor({ input: `拆解分析这份法院案件文件 ${caseUrl}`, workflow });
   assert.equal(policy.kind, 'legal-document-analysis');
   assert.equal(policy.minOfficialSources, 0);
-  assert.equal(policy.minOfficialCitations, 0);
+  assert.equal('minOfficialCitations' in policy, false);
   assert.equal(policy.requireUserSource, true);
   assert.equal(policy.maxReferences, 5);
   const domainSearch = searchBodies.find((body) => body.includeDomains);
@@ -515,7 +551,6 @@ test('严格任务:官方域名检索偶发返回站外 URL 时不得计入官�
       prioritySources: [],
       officialSources: ['sec.gov', 'nasdaq.com'],
       minOfficialSources: 2,
-      minOfficialCitations: 2,
     },
   });
   const fetchFn = async (url, opts) => {
@@ -740,7 +775,6 @@ test('严格官方任务允许一次抓取最多 8 个用户指定 URL', async (
       prioritySources: [],
       officialSources: ['sec.gov'],
       minOfficialSources: 8,
-      minOfficialCitations: 8,
     },
   });
   const urls = Array.from({ length: 8 }, (_, i) => `https://www.sec.gov/source-${i + 1}`);

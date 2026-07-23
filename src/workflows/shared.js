@@ -68,7 +68,6 @@ export function sharedResearch() {
     prioritySources: prioritySources(),
     officialSources: officialSources(),
     minOfficialSources: 2,
-    minOfficialCitations: 2,
   };
 }
 
@@ -77,7 +76,6 @@ export function officialFirstPolicy() {
     officialFirst: true,
     requireCitations: true,
     minOfficialSources: 2,
-    minOfficialCitations: 2,
     failClosed: true,
   };
 }
