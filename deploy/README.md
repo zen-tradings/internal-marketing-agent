@@ -12,10 +12,12 @@ manual process with the same Slack tokens or SQLite database.
 /var/lib/zen-content-hub/      SQLite database and per-run artifacts
 ```
 
-Install Node.js 22+, Chrome/Chromium and Poppler. The cover generator is
-versioned in `tools/cover-generator`; run `npm ci` in
-`/opt/zen-content-hub` and set these Linux-specific values (use the actual
-browser executable installed on the host):
+Install Node.js 22+, Chrome/Chromium, Poppler, and a Simplified Chinese font
+package such as Ubuntu's `fonts-noto-cjk`. Without the CJK font, headless Chrome
+renders Chinese cover titles as empty boxes. The cover generator is versioned
+in `tools/cover-generator`; run `npm ci` in `/opt/zen-content-hub` and set these
+Linux-specific values (use the actual browser executable installed on the
+host):
 
 ```dotenv
 WORK_DIR=/var/lib/zen-content-hub/work
