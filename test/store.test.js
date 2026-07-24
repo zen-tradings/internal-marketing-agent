@@ -121,12 +121,18 @@ test('Slack 事件持久化 claim 防止跨进程重复消费,失败前可释放
 test('过期任务只选择终态记录并和数据库清理保持一致', () => {
   const store = openStore(':memory:');
   store.createRun({ id: 'done-old', workflowId: 'wechat', source: 'test', input: 'x', notify: {} });
+  store.createRun({ id: 'cancelled-old', workflowId: 'wechat', source: 'test', input: 'x', notify: {} });
   store.createRun({ id: 'queued-old', workflowId: 'wechat', source: 'test', input: 'x', notify: {} });
   store.setStatus('done-old', 'done', { finishedAt: 1 });
+  store.setStatus('cancelled-old', 'cancelled', { finishedAt: 1 });
   const expired = store.listPrunableRuns(2);
-  assert.deepEqual(expired, [{ id: 'done-old', workflow_id: 'wechat' }]);
+  assert.deepEqual(
+    expired.map((row) => row.id).sort(),
+    ['cancelled-old', 'done-old'],
+  );
   const result = store.prune({ runBefore: 2 });
-  assert.equal(result.runs, 1);
+  assert.equal(result.runs, 2);
   assert.equal(store.getRun('done-old'), undefined);
+  assert.equal(store.getRun('cancelled-old'), undefined);
   assert.equal(store.getRun('queued-old').status, 'queued');
 });

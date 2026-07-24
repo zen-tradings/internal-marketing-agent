@@ -16,6 +16,12 @@ export function createNotifier(postMessage) {
     },
     progress(notify, { message }) { return send(notify, `⏳ ${String(message || '任务处理中')}`); },
     failure(notify, { stage, error }) { return send(notify, `❌ 任务失败(阶段:${stage})\n${String(error).slice(0, 500)}`); },
+    cancelled(notify, { runId, cleaned, cleanupError }) {
+      const cleanup = cleanupError
+        ? `未完成文件清理失败:${String(cleanupError).slice(0, 300)}`
+        : cleaned ? '未完成文件已清理' : '没有需要清理的运行文件';
+      return send(notify, `🛑 任务已停止\n任务:${runId}\n${cleanup}\n未创建新草稿。`);
+    },
     warn(notify, msg) { return send(notify, `⚠️ ${msg}`); },
   };
 }

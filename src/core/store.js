@@ -104,7 +104,7 @@ export function openStore(dbPath) {
       return db.prepare(`
         SELECT id, workflow_id
         FROM runs
-        WHERE status IN ('done', 'failed', 'interrupted')
+        WHERE status IN ('done', 'failed', 'interrupted', 'cancelled')
           AND COALESCE(finished_at, created_at) < ?
         ORDER BY created_at
       `).all(before);
@@ -149,7 +149,7 @@ export function openStore(dbPath) {
         if (Number.isFinite(runBefore)) {
           result.runs = db.prepare(`
             DELETE FROM runs
-            WHERE status IN ('done', 'failed', 'interrupted')
+            WHERE status IN ('done', 'failed', 'interrupted', 'cancelled')
               AND COALESCE(finished_at, created_at) < ?
           `).run(runBefore).changes;
         }

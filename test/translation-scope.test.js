@@ -36,6 +36,17 @@ test('识别单章节和章节区间，未指定范围时返回全文', () => {
   assert.equal(range.end, 'Methodology');
 });
 
+test('英文 translate 指令识别页码与命名章节范围', () => {
+  assert.deepEqual(
+    parseTranslationScope('Please translate the first 11 pages of https://example.com/a.pdf'),
+    { kind: 'pages', startPage: 1, endPage: 11, requestedText: 'first 11 pages' },
+  );
+  const introduction = parseTranslationScope('Translate the Introduction section only https://example.com/a');
+  assert.equal(introduction.kind, 'sections');
+  assert.equal(introduction.start.toLowerCase(), 'introduction');
+  assert.equal(introduction.end.toLowerCase(), 'introduction');
+});
+
 test('章节范围按标题边界截取并保留内部子标题', () => {
   const source = {
     blocks: [

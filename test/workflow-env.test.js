@@ -143,6 +143,7 @@ test('translate 工作流:id、workDir 子目录、channel/research 与其它工
 
     const prompt = translate.promptTemplate('https://example.com/article');
     assert.match(prompt, /Zen Trading 公众号译者/);
+    assert.match(prompt, /翻译为简体中文/);
     assert.match(prompt, /忠实优先/);
     assert.match(prompt, /【写作规范/); // 仍拼装通用约束块
   } finally {

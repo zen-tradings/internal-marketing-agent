@@ -45,6 +45,7 @@ export function parseTranslationScope(input) {
   const namedSection = firstMatch(text, [
     /(?:只\s*)?翻译\s*[“"'《]([^“”"'《》]{1,80})[”"'》]\s*(?:章节|部分)?/i,
     /(?:只\s*)?翻译\s*((?:摘要|引言|介绍|结论|局限性|致谢|参考文献|附录|abstract|introduction|conclusion|limitations?|acknowledg(?:e)?ments?|references?|appendix)(?:\s+[A-Za-z0-9 .:_-]+)?)(?:\s*(?:章节|部分))?/i,
+    /\btranslate\s+(?:the\s+)?(?:section\s+)?["']?((?:abstract|introduction|conclusion|limitations?|acknowledg(?:e)?ments?|references?|appendix)(?:\s+[A-Za-z0-9 .:_-]+?)?)["']?(?:\s+section)?(?:\s+only)?$/i,
   ]);
   if (namedSection) {
     const target = cleanSectionTarget(namedSection[1]);
@@ -149,7 +150,12 @@ function normalizeHeading(value) {
 }
 
 function cleanSectionTarget(value) {
-  return String(value || '').replace(/^(?:第)\s*/i, '').replace(/\s*(?:章节|部分)$/i, '').trim();
+  return String(value || '')
+    .replace(/^(?:第)\s*/i, '')
+    .replace(/\s*(?:章节|部分)$/i, '')
+    .replace(/\s+(?:section|part)(?:\s+only)?$/i, '')
+    .replace(/\s+only$/i, '')
+    .trim();
 }
 
 function sameTarget(left, right) {

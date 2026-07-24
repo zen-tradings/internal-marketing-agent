@@ -1,6 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { renderQuarterlyCharts } from '../lib/quarterly-chart.js';
+import {
+  cancellationErrorFromSignal,
+  isTaskCancelled,
+  throwIfTaskCancelled,
+  withTaskCancellation,
+} from '../lib/task-cancellation.js';
 import { generateStrictTranslation } from '../workflows/translate-engine.js';
 
 const DEFAULT_SYSTEM_PROMPT = `你是 Zen Trading 公众号分析师。你会基于系统提供的调研素材写中文金融分析文章。
@@ -28,7 +34,16 @@ const LEGAL_OFFICIAL_SOURCES = [
   'sec.gov',
 ];
 
-export async function runWriter({ workflow, input, config, fetchFn = globalThis.fetch, onProgress, resumeFromCheckpoint = false }) {
+export async function runWriter({
+  workflow,
+  input,
+  config,
+  fetchFn = globalThis.fetch,
+  onProgress,
+  resumeFromCheckpoint = false,
+  signal,
+}) {
+  fetchFn = withTaskCancellation(fetchFn, signal);
   const articlePath = path.join(workflow.workDir, 'article.md');
   const researchTracePath = path.join(workflow.workDir, 'research-trace.json');
   const trace = {
@@ -43,6 +58,7 @@ export async function runWriter({ workflow, input, config, fetchFn = globalThis.
   try { fs.rmSync(articlePath, { force: true }); } catch {}
 
   try {
+    throwIfTaskCancelled(signal);
     fs.mkdirSync(workflow.workDir, { recursive: true });
     const writer = config.writer || {};
     const model = workflow.model || writer.model;
@@ -57,12 +73,15 @@ export async function runWriter({ workflow, input, config, fetchFn = globalThis.
         fetchWithRetry,
         translationConfig: config.translation || {},
         onProgress: async (progress) => {
+          throwIfTaskCancelled(signal);
           trace.translationProgress = { ...progress, updatedAt: new Date().toISOString() };
           writeResearchTrace(researchTracePath, trace);
           if (onProgress) await onProgress(progress);
         },
         resumeFromCheckpoint,
+        signal,
       });
+      throwIfTaskCancelled(signal);
       trace.finishedAt = new Date().toISOString();
       trace.selectedSources = [{ title: result.manifest?.title || '', url: result.sourceUrl, kind: 'translation-source' }];
       trace.translation = {
@@ -71,6 +90,7 @@ export async function runWriter({ workflow, input, config, fetchFn = globalThis.
       };
       writeResearchTrace(researchTracePath, trace);
       if (!hasTitleFrontmatter(result.article)) throw new Error('直译输出缺少 title frontmatter');
+      throwIfTaskCancelled(signal);
       fs.writeFileSync(articlePath, result.article);
       return { ok: true, articlePath, model, researchTracePath, sources: [result.sourceUrl], completeness: result.completeness };
     }
@@ -79,6 +99,7 @@ export async function runWriter({ workflow, input, config, fetchFn = globalThis.
     if (!writer.exaApiKey && !sourcePolicy.skipResearch) throw new Error('原创研究工作流缺少 Exa API key');
     trace.sourcePolicy = sourcePolicy;
     const research = await searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy });
+    throwIfTaskCancelled(signal);
     trace.selectedSources = research.map(sourceForTrace);
     trace.officialSourceCount = research.filter((source) => source.official).length;
     trace.sourceTiers = {
@@ -101,6 +122,7 @@ export async function runWriter({ workflow, input, config, fetchFn = globalThis.
       timeoutMs: workflow.timeoutMs,
       systemPrompt: workflow.systemPrompt,
     });
+    throwIfTaskCancelled(signal);
     let article = renderQuarterlyCharts(normalizeArticle(content));
     if (!hasTitleFrontmatter(article)) {
       throw new Error('OpenRouter 输出缺少 title frontmatter');
@@ -118,12 +140,14 @@ export async function runWriter({ workflow, input, config, fetchFn = globalThis.
     }
     validateArticleSourceContract(article, research, sourcePolicy);
 
+    throwIfTaskCancelled(signal);
     trace.finishedAt = new Date().toISOString();
     trace.citationValidation = citationValidationSummary(article, research, sourcePolicy);
     writeResearchTrace(researchTracePath, trace);
     fs.writeFileSync(articlePath, article);
     return { ok: true, articlePath, model, researchTracePath, sources: research.map((r) => r.url).filter(Boolean) };
   } catch (e) {
+    if (isTaskCancelled(e, signal)) throw cancellationErrorFromSignal(signal);
     trace.finishedAt = new Date().toISOString();
     trace.error = describeFetchError(e).slice(0, 600);
     writeResearchTrace(researchTracePath, trace);

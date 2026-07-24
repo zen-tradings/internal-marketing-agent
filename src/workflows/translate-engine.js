@@ -11,6 +11,7 @@ export async function generateStrictTranslation({
   onProgress,
   resumeFromCheckpoint = false,
   translationConfig = {},
+  signal,
 }) {
   const result = await generateStructuredTranslation({
     input,
@@ -22,6 +23,7 @@ export async function generateStrictTranslation({
     onProgress,
     translationConfig,
     resumeFromCheckpoint,
+    signal,
   });
   if (trace) {
     trace.translationText = {

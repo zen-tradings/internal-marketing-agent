@@ -11,6 +11,11 @@ import { isTransientSocketModeError } from './lib/slack-resilience.js';
 import { runWorkDir, workflowForRun } from './lib/run-workdir.js';
 import { startHealthServer, stopHealthServer } from './lib/health.js';
 import { assertFixedDraftTemplate } from './lib/draft-template.js';
+import {
+  cancellationErrorFromSignal,
+  isTaskCancelled,
+  throwIfTaskCancelled,
+} from './lib/task-cancellation.js';
 import wechatWorkflow from './workflows/wechat.js';
 import earningsWorkflow from './workflows/earnings.js';
 import sectorWorkflow from './workflows/sector.js';
@@ -35,15 +40,23 @@ const WORKFLOWS = {
 };
 const CHANNELS = { mock: mockChannel, 'wechat-draft': wechatDraft, 'customerio-draft': customerioDraft };
 
-export async function runWithRetry(fn, retries = 0, retryDelayMs = 0, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
+export async function runWithRetry(
+  fn,
+  retries = 0,
+  retryDelayMs = 0,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  signal,
+) {
   let last;
   for (let i = 0; i <= retries; i++) {
+    throwIfTaskCancelled(signal);
     try { return await fn(); }
     catch (e) {
+      if (isTaskCancelled(e, signal)) throw cancellationErrorFromSignal(signal);
       last = e;
       if (i < retries) {
         console.error(`[hub] 执行失败,准备第 ${i + 2}/${retries + 1} 次尝试:${e?.message || e}`);
-        if (retryDelayMs > 0) await sleep(retryDelayMs);
+        if (retryDelayMs > 0) await sleepWithCancellation(sleep, retryDelayMs, signal);
       }
     }
   }
@@ -56,10 +69,12 @@ export async function runWithRetry(fn, retries = 0, retryDelayMs = 0, sleep = (m
 // "调用时才读取当前值" 语义,不在这里提前修复这个时序,只是原样保留。
 export function makeHandler(deps) {
   const { store, runWriter, workflows, channels, config } = deps;
-  return async function handler(run) {
+  return async function handler(run, { signal, setPhase = () => {} } = {}) {
     let notify = {};
     let writerAttempt = 0;
+    let runtimeWorkflow;
     try {
+      throwIfTaskCancelled(signal);
       const persisted = store.getRun(run.id);
       if (!persisted) throw stageError('config', `任务记录不存在:${run.id}`);
       try {
@@ -70,14 +85,19 @@ export function makeHandler(deps) {
       }
       const wf = workflows[run.workflowId];
       if (!wf) throw stageError('config', `未知工作流:${run.workflowId}`);
-      const runtimeWorkflow = wf.workDir ? workflowForRun(wf, run.id) : wf;
+      runtimeWorkflow = wf.workDir ? workflowForRun(wf, run.id) : wf;
       store.setStatus(run.id, 'running', { startedAt: Date.now() });
+      setPhase('generate');
 
       const { title, mediaId, sourceCount, completeness } = await runWithRetry(async () => {
+        throwIfTaskCancelled(signal);
         // 发布幂等:已有 media_id 说明上一轮(重试循环内或重启后重投)已经发布成功过,
         // 跳过重新生成/发布,避免产生重复草稿。
         const existing = store.getRun(run.id);
-        if (existing.media_id) return { title: existing.title, mediaId: existing.media_id };
+        if (existing.media_id) {
+          setPhase('published');
+          return { title: existing.title, mediaId: existing.media_id };
+        }
 
         const resumeFromCheckpoint = Boolean(run.restored || writerAttempt > 0);
         writerAttempt += 1;
@@ -87,8 +107,10 @@ export function makeHandler(deps) {
           config,
           onProgress: (progress) => notifyBestEffort(deps.notifier, 'progress', notify, progress),
           resumeFromCheckpoint,
+          signal,
         });
         if (!res.ok) { const err = new Error(res.stderr); err.stage = 'generate'; throw err; }
+        throwIfTaskCancelled(signal);
 
         // dry-run:HUB_DRY_RUN 置位时,不管 workflow 声明的是哪个渠道,一律强制走 mock,
         // 用于本地/CI 演练全流程而不触碰真实微信 API。严格真值判断,避免 "0"/"false"/空串
@@ -106,6 +128,8 @@ export function makeHandler(deps) {
             total: 1,
           });
         }
+        setPhase('publish');
+        throwIfTaskCancelled(signal);
         const { mediaId, title } = await channel.publish({
           articlePath: res.articlePath,
           config,
@@ -116,18 +140,65 @@ export function makeHandler(deps) {
           resumeFromCheckpoint,
         });
         store.setMediaId(run.id, mediaId, title); // 早写,发布成功后立刻落库,支撑上面的幂等判断
+        setPhase('published');
         return { mediaId, title, sourceCount: res.sources?.length || 0, completeness: res.completeness };
-      }, runtimeWorkflow.retries, runtimeWorkflow.retryDelayMs);
+      }, runtimeWorkflow.retries, runtimeWorkflow.retryDelayMs, undefined, signal);
       store.setStatus(run.id, 'done', { title, mediaId, finishedAt: Date.now() });
       if (deps.notifier) await notifyBestEffort(deps.notifier, 'success', notify, { title, mediaId, channelId: runtimeWorkflow.channel, sourceCount, completeness });
       else console.error('[hub] notifier 未就绪,跳过 success 通知(启动窗口期竞态)', { runId: run.id, title, mediaId });
     } catch (e) {
+      if (isTaskCancelled(e, signal)) {
+        const cleanup = cleanupRunArtifacts(workflows, run);
+        store.setStatus(run.id, 'cancelled', {
+          stage: 'cancelled',
+          error: cancellationErrorFromSignal(signal).message,
+          finishedAt: Date.now(),
+        });
+        if (deps.notifier) {
+          await notifyBestEffort(deps.notifier, 'cancelled', notify, {
+            runId: run.id,
+            cleaned: cleanup.cleaned,
+            cleanupError: cleanup.error,
+          });
+        }
+        return;
+      }
       const stage = e.stage || 'publish';
       store.setStatus(run.id, 'failed', { stage, error: e.message, finishedAt: Date.now() });
       if (deps.notifier) await notifyBestEffort(deps.notifier, 'failure', notify, { stage, error: e.message });
       else console.error('[hub] notifier 未就绪,跳过 failure 通知(启动窗口期竞态)', { runId: run.id, stage, error: e.message });
     }
   };
+}
+
+async function sleepWithCancellation(sleep, ms, signal) {
+  if (!signal) return sleep(ms);
+  throwIfTaskCancelled(signal);
+  let onAbort;
+  try {
+    await Promise.race([
+      Promise.resolve().then(() => sleep(ms)),
+      new Promise((_, reject) => {
+        onAbort = () => reject(cancellationErrorFromSignal(signal));
+        signal.addEventListener('abort', onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
+
+export function cleanupRunArtifacts(workflows, run) {
+  const workflow = workflows?.[run?.workflowId];
+  if (!workflow?.workDir || !run?.id) return { cleaned: false };
+  const artifactDir = runWorkDir(workflow.workDir, run.id);
+  try {
+    fs.rmSync(artifactDir, { recursive: true, force: true });
+    return { cleaned: true, artifactDir };
+  } catch (error) {
+    console.error(`[hub] 已取消任务目录清理失败:${artifactDir}:${error?.message || error}`);
+    return { cleaned: false, artifactDir, error: error?.message || String(error) };
+  }
 }
 
 function stageError(stage, message) {
@@ -204,6 +275,14 @@ export async function start() {
     }
     return result;
   };
+  const cancelTask = ({ runId, channel, user, reason }) => {
+    const result = queue.cancel({ runId, channel, user, reason });
+    if (result.kind === 'pending') {
+      const cleanup = cleanupRunArtifacts(WORKFLOWS, result.run);
+      return { ...result, cleanupError: cleanup.error };
+    }
+    return result;
+  };
   // Slack 连接监督:退避重试首连;并对 @slack/socket-mode 1.x 的瞬时崩溃容忍 + 自动重连,
   // 不让一次套接字断开拖垮整个进程(queue/cron 等仍存活)。
   let currentSlackApp;
@@ -231,7 +310,13 @@ export async function start() {
           try { await currentSlackApp.stop(); } catch {}
           currentSlackApp = undefined;
         }
-        const app = await registerSlack({ config, enqueue, store, workflowIds: Object.keys(WORKFLOWS) });
+        const app = await registerSlack({
+          config,
+          enqueue,
+          cancelTask,
+          store,
+          workflowIds: Object.keys(WORKFLOWS),
+        });
         currentSlackApp = app;
         deps.notifier = createNotifier((m) => app.client.chat.postMessage(m));
         console.log('⚡ Slack 已连接');

@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { makeHandler } from '../src/index.js';
 import { FIXED_DRAFT_TEMPLATE_IDS } from '../src/lib/draft-template.js';
+import { createTaskCancelledError } from '../src/lib/task-cancellation.js';
 
 // 极简 store 桩:内存持有单条 run 记录,记录 setStatus 调用序列供断言。
 function makeStore(initial) {
@@ -24,10 +28,12 @@ function makeStore(initial) {
 function makeNotifier() {
   const successCalls = [];
   const failureCalls = [];
+  const cancelledCalls = [];
   return {
-    successCalls, failureCalls,
+    successCalls, failureCalls, cancelledCalls,
     async success(notify, payload) { successCalls.push({ notify, payload }); },
     async failure(notify, payload) { failureCalls.push({ notify, payload }); },
+    async cancelled(notify, payload) { cancelledCalls.push({ notify, payload }); },
   };
 }
 
@@ -200,4 +206,35 @@ test('服务任务使用 run 级工作目录隔离同工作流并发', async () 
   const { deps } = baseDeps({ workflows, runWriter });
   await makeHandler(deps)(RUN);
   assert.match(actualWorkDir, /^\/tmp\/zen-base\/runs\/r1-/);
+});
+
+test('Slack 取消生成中任务后标记 cancelled 并删除独立运行目录', async () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-handler-cancel-'));
+  let started;
+  const entered = new Promise((resolve) => { started = resolve; });
+  let actualWorkDir;
+  const workflows = { wechat: { id: 'wechat', workDir: baseDir, channel: 'mock', retries: 0 } };
+  const runWriter = async ({ workflow, signal }) => {
+    actualWorkDir = workflow.workDir;
+    fs.mkdirSync(actualWorkDir, { recursive: true });
+    fs.writeFileSync(path.join(actualWorkDir, 'partial.tmp'), 'unfinished');
+    started();
+    await new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+  };
+  const { deps, store, notifier, publishCalls } = baseDeps({ workflows, runWriter });
+  const controller = new AbortController();
+  const pending = makeHandler(deps)(RUN, { signal: controller.signal, setPhase() {} });
+  await entered;
+  controller.abort(createTaskCancelledError('Slack stop'));
+  await pending;
+
+  assert.equal(store._row().status, 'cancelled');
+  assert.equal(store._row().stage, 'cancelled');
+  assert.equal(fs.existsSync(actualWorkDir), false);
+  assert.equal(publishCalls.length, 0);
+  assert.equal(notifier.failureCalls.length, 0);
+  assert.equal(notifier.cancelledCalls.length, 1);
+  assert.equal(notifier.cancelledCalls[0].payload.cleaned, true);
 });

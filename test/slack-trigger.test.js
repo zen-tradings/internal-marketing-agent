@@ -2,15 +2,18 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createSlackIntentClassifier,
+  isSlackStopCommand,
   parseSlackTask,
   resolveNaturalWorkflowTask,
   resolveWorkflowTask,
+  slackStopResponse,
   slackMessageEventKey,
 } from '../src/triggers/slack.js';
 
 test('识别 "任务:" 前缀', () => {
   assert.equal(parseSlackTask('任务:写英伟达', 'B1'), '写英伟达');
   assert.equal(parseSlackTask('任务：写英伟达', 'B1'), '写英伟达');
+  assert.equal(parseSlackTask('Task: analyze Nvidia', 'B1'), 'analyze Nvidia');
 });
 test('识别 @bot 提及并清理链接', () => {
   assert.equal(parseSlackTask('<@B1> 分析 <https://x.com|X>', 'B1'), '分析 https://x.com');
@@ -32,6 +35,19 @@ test('同一条 @Bot 消息的 message 与 app_mention 使用同一个持久化�
   assert.equal(slackMessageEventKey({ eventId: 'EvFallback' }), 'event:EvFallback');
 });
 
+test('中英文停止表达只匹配独立控制指令', () => {
+  for (const command of [
+    '停止', '停止当前任务', '停止进程', '取消任务', '终止当前作业', '别做了', '不要继续了',
+    'stop', 'please stop the current task', 'cancel task', 'abort this job', 'terminate process', 'kill the running task',
+  ]) {
+    assert.equal(isSlackStopCommand(command), true, command);
+  }
+  assert.equal(isSlackStopCommand('停止使用中文破折号'), false);
+  assert.equal(isSlackStopCommand('analyze process technology'), false);
+  assert.match(slackStopResponse({ kind: 'active', run: { id: 'r1' } }), /正在中断任务 r1/);
+  assert.match(slackStopResponse({ kind: 'too-late' }), /草稿创建阶段/);
+});
+
 test('自然语言路由:裸链接是研究素材并默认公众号分析,只有显式翻译才走直译', async () => {
   const ids = ['wechat', 'email', 'translate', 'company', 'earnings', 'sector', 'morning'];
   assert.equal((await resolveNaturalWorkflowTask('https://papers.ssrn.com/abstract=1', { workflowIds: ids })).workflowId, 'wechat');
@@ -48,6 +64,28 @@ test('自然语言路由:用户链接加财务、竞品和上下游要求进入�
   const route = await resolveNaturalWorkflowTask(task, { workflowIds: ids });
   assert.equal(route.workflowId, 'company');
   assert.equal(route.reason, 'natural-rule');
+});
+
+test('英文自然语言与中文使用同一套工作流路由', async () => {
+  const ids = ['wechat', 'email', 'translate', 'company', 'earnings', 'sector', 'morning'];
+  const cases = [
+    ['Please translate the first 11 pages of https://example.com/paper.pdf', 'translate'],
+    ['Translate https://example.com/article into Simplified Chinese', 'translate'],
+    ['Draft a subscriber newsletter about our product update', 'email'],
+    ['Write an earnings review comparing actuals vs consensus and guidance', 'earnings'],
+    ['Prepare a semiconductor industry analysis and market landscape', 'sector'],
+    ['Create a pre-market morning brief covering overnight markets', 'morning'],
+    ['Do an in-depth analysis of Nvidia, including competitors and the supply chain', 'company'],
+    ['Write a WeChat article about AI infrastructure', 'wechat'],
+  ];
+  for (const [task, expected] of cases) {
+    assert.equal((await resolveNaturalWorkflowTask(task, { workflowIds: ids })).workflowId, expected, task);
+  }
+  const machineTranslation = await resolveNaturalWorkflowTask(
+    'Write an industry analysis of the machine translation market using https://example.com/report',
+    { workflowIds: ids },
+  );
+  assert.equal(machineTranslation.workflowId, 'sector');
 });
 
 test('自然语言路由:同线程短补充继承上个工作流,模糊长任务默认微信', async () => {

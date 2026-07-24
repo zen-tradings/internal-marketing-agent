@@ -108,7 +108,7 @@ curl --fail http://127.0.0.1:8787/ready
 
 代码更新不会自动生效。先拉取代码、执行 `npm ci && npm run check`，再重启 systemd；数据库应在停服或使用 SQLite 在线备份机制时备份。生产环境只运行一个实例。
 
-`RUN_RETENTION_DAYS` 控制终态任务记录及其独立运行目录的保留天数，`SLACK_THREAD_RETENTION_DAYS` 控制线程上下文和事件去重记录；清理在启动时执行。调整为更短期限前先备份数据库和 `/var/lib/zen-content-hub`。
+`RUN_RETENTION_DAYS` 控制终态任务记录及其独立运行目录的保留天数，`SLACK_THREAD_RETENTION_DAYS` 控制线程上下文和事件去重记录；清理在启动时执行。`cancelled` 与其它终态记录使用同一保留规则，但被 Slack 主动停止的任务会立即删除自己的未完成运行目录。调整为更短期限前先备份数据库和 `/var/lib/zen-content-hub`。
 
 查看实时 Exa 调用和最近一次 company 调研轨迹：
 
@@ -119,7 +119,11 @@ npm run trace:research -- company
 
 ## Slack 自然语言入口
 
-私聊 Bot 时直接像和 AI 对话一样输入任务即可；公共频道必须 `@Bot`，避免误收普通聊天。`NODE_ENV=production` 时必须通过 `SLACK_ALLOWED_USER_IDS` 和 `SLACK_ALLOWED_CHANNEL_IDS` 限定调用者，并用 `SLACK_RATE_LIMIT_PER_MINUTE` 限流。Slack 事件先持久化去重，再入队；重连或重启不会重复接收同一个 event。显式前缀继续保留，但只是兼容快捷方式。链接只表示用户指定的一级优先研究素材，不自动触发直译；只有明确说“直译、完整翻译、全文翻译”等才走完整直译。裸链接和未明确类型的任务默认微信公众号分析，提到 Newsletter、订阅者、邮件或 Customer.io 时路由到 Customer.io。同一 Slack 线程会继承上一任务，可直接说“换标题”“补充这组数据”。
+私聊 Bot 时直接像和 AI 对话一样输入任务即可；公共频道必须 `@Bot`，避免误收普通聊天。`NODE_ENV=production` 时必须通过 `SLACK_ALLOWED_USER_IDS` 和 `SLACK_ALLOWED_CHANNEL_IDS` 限定调用者，并用 `SLACK_RATE_LIMIT_PER_MINUTE` 限流。Slack 事件先持久化去重，再入队；重连或重启不会重复接收同一个 event。显式前缀继续保留，但只是兼容快捷方式。
+
+中文和英文指令使用同一套路由。`Translate the first 11 pages ...`、`Write an earnings review ...`、`Prepare an industry analysis ...`、`Create a morning brief ...`、`Do an in-depth company analysis ...` 和 `Draft a newsletter ...` 分别进入现有的直译、财报、行业、晨报、公司和 Newsletter 工作流。英文只是指令语言，不改变产物默认语言：公众号与直译结果仍为简体中文，Newsletter 保持自身的语言规则。链接只表示用户指定的一级优先研究素材，不自动触发直译；只有明确使用 `translate`、`full/faithful translation` 或“直译、完整翻译、全文翻译”等表达才走完整直译，讨论 `machine translation market` 不会被误判。裸链接和未明确类型的任务默认微信公众号分析。同一 Slack 线程会继承上一任务，可直接说“换标题”“补充这组数据”或英文短补充。
+
+在原任务线程或同一频道发送 `@ZenBot 停止当前任务`、`停止进程`、`取消任务`、`stop the current task`、`cancel task` 或 `abort this job`，会停止当前生成任务。排队任务会直接移出队列；运行中任务会中断网络请求、标记为 `cancelled` 并删除自己的 `runs/<run-id>/` 目录，ZenBot 服务本身保持在线。任务一旦进入微信或 Customer.io 草稿创建阶段便不再强杀，避免外部草稿已经创建而本地丢失 `media_id`；Bot 会明确回复该状态。任何路径都只创建草稿，不发送或排期。
 
 ## 工作流
 
@@ -135,7 +139,7 @@ npm run trace:research -- company
 
 这些内部工作流由规则优先、模型兜底的自然语言路由隐藏。原创研究型任务都会运行开放检索、优先信源检索、限定官方域名检索，以及 `official-discovery` 官方/一手来源深度发现；`company` 另有季度财报、官方披露和产业链三组专项深搜。`morning` 设置 `MORNING_CRON` 后会增加定时触发。`OPENROUTER_ROUTER_MODEL` 和 `OPENROUTER_REVIEW_MODEL` 可分别覆盖路由与事实审查模型。
 
-直译使用一条固定的结构化链路。程序先识别“前 11 页”“第 3–8 页”“第 2.1 节”“从 Introduction 到 Conclusion”等范围；没有范围时才翻译全文。arXiv 优先读取官方 HTML，普通 HTML 保留标题层级、段落、列表、引用、原图与图注、表格、公式、代码和参考文献；Notion 配置 `NOTION_API_TOKEN` 后优先读取官方 Markdown。PDF 由 Datalab 托管 API 转成结构化 HTML，Poppler 只用于本地页数和元数据校验。
+直译使用一条固定的结构化链路。程序先识别“前 11 页”“第 3–8 页”“第 2.1 节”“从 Introduction 到 Conclusion”以及 `first 11 pages`、`pages 3–8`、`translate the Introduction section only` 等中英文范围；没有范围时才翻译全文。英文指令不会改变目标语言，默认仍把英文原文翻译为简体中文。arXiv 优先读取官方 HTML，普通 HTML 保留标题层级、段落、列表、引用、原图与图注、表格、公式、代码和参考文献；Notion 配置 `NOTION_API_TOKEN` 后优先读取官方 Markdown。PDF 由 Datalab 托管 API 转成结构化 HTML，Poppler 只用于本地页数和元数据校验。
 
 翻译只替换需要翻译的文本节点：标题、正文、列表、图注、表题和表格单元格；原图文件、公式、代码、引文编号、URL 和参考文献结构保持不变。标题不追加“（译）”；文首只保留一个包含原文标题、作者、站点和链接的“原文信息”块，不显示日期或翻译范围，论文标题页中重复的作者与机构列表会在摘要前移除。正文可对真正关键的术语、机制和核心观点做与原创分析一致的克制高亮。模型漏块、改动数字/URL，或产物丢失图片、表格、公式时都会拒绝产稿。原图中的嵌入文字不会 OCR 或重绘。直译以忠实还原为先，不触发原创写作的中文破折号风格提醒；其它安全、完整性、固定模板和排版门禁继续生效。
 

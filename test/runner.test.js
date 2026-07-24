@@ -671,6 +671,30 @@ test('优先路网络 hang(fetchFn 永不返回)时,exaTimeoutMs 超时后按失
   assert.deepEqual(result.sources, ['https://open.example.com/a']);
 });
 
+test('外部取消信号会中断进行中的网络请求且不会写出 article.md', async () => {
+  const workflow = tempWorkflow();
+  const controller = new AbortController();
+  let requestStarted;
+  const entered = new Promise((resolve) => { requestStarted = resolve; });
+  const fetchFn = async (_url, opts) => {
+    requestStarted();
+    return new Promise((_, reject) => {
+      opts.signal.addEventListener('abort', () => reject(opts.signal.reason), { once: true });
+    });
+  };
+  const pending = runWriter({
+    workflow,
+    input: 'Analyze Nvidia',
+    config: baseConfig(),
+    fetchFn,
+    signal: controller.signal,
+  });
+  await entered;
+  controller.abort();
+  await assert.rejects(pending, (error) => error?.name === 'AbortError');
+  assert.equal(fs.existsSync(path.join(workflow.workDir, 'article.md')), false);
+});
+
 test('优先路失败时降级为仅开放路结果,不抛错', async () => {
   const workflow = tempWorkflow({ research: { prioritySources: ['trendforce.com'] } });
   const fetchFn = async (url, opts) => {

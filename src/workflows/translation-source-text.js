@@ -9,6 +9,10 @@ import { Readable } from 'node:stream';
 import { spawnSync } from 'node:child_process';
 import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
+import {
+  cancellationErrorFromSignal,
+  throwIfTaskCancelled,
+} from '../lib/task-cancellation.js';
 import { convertPdfWithDatalab } from './datalab-parser.js';
 import {
   applyTranslationScope,
@@ -51,7 +55,9 @@ export async function generateStructuredTranslation({
   onProgress,
   translationConfig = {},
   resumeFromCheckpoint = false,
+  signal,
 }) {
+  throwIfTaskCancelled(signal);
   const sourceUrl = extractInputUrls(input)[0];
   if (!sourceUrl) throw new Error('直译任务缺少可读取的 http(s) 原文链接');
   const scope = parseTranslationScope(input);
@@ -71,7 +77,9 @@ export async function generateStructuredTranslation({
     dnsLookup: translationConfig.dnsLookup,
     scope,
     onProgress,
+    signal,
   });
+  throwIfTaskCancelled(signal);
   let source = acquired.scope?.kind === 'sections' && acquired.scope.appliedStartHeading
     ? acquired
     : applyTranslationScope(acquired, scope);
@@ -96,7 +104,9 @@ export async function generateStructuredTranslation({
     timeoutMs: workflow.timeoutMs,
     onProgress,
     resumeFromCheckpoint,
+    signal,
   });
+  throwIfTaskCancelled(signal);
   const article = renderTranslatedDocument(translated);
   const completeness = validateTranslationArtifact({ source, translated, article });
   if (completeness.errors.length) {
@@ -137,7 +147,9 @@ export async function acquireSourceDocument({
   dnsLookup = dns.lookup,
   scope = { kind: 'all' },
   onProgress,
+  signal,
 }) {
+  throwIfTaskCancelled(signal);
   const limits = limitsFor(config);
   await assertSafeHttpUrl(sourceUrl, { dnsLookup });
   fs.mkdirSync(workDir, { recursive: true });
@@ -178,6 +190,7 @@ export async function acquireSourceDocument({
       document.acquisition = acquisition;
       return document;
     } catch (error) {
+      throwIfTaskCancelled(signal);
       acquisition.fallbacks.push(`notion-api:${safeError(error)}`);
     }
   }
@@ -194,6 +207,7 @@ export async function acquireSourceDocument({
       accept: 'text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.5',
     });
   } catch (error) {
+    throwIfTaskCancelled(signal);
     if (arxiv && acquisitionUrl === arxiv.html) {
       acquisition.fallbacks.push(`arxiv-html:${safeError(error)}`);
       acquisitionUrl = arxiv.pdf;
@@ -223,6 +237,7 @@ export async function acquireSourceDocument({
         fetchFn,
         fetchWithRetry,
         scope,
+        signal,
       });
     }
   }
@@ -244,6 +259,7 @@ export async function acquireSourceDocument({
       scope,
       onProgress,
     });
+    throwIfTaskCancelled(signal);
     document.acquisition = acquisition;
     return document;
   }
@@ -280,10 +296,12 @@ export async function acquireSourceDocument({
         fetchFn,
         fetchWithRetry,
         scope,
+        signal,
       });
     }
     return document;
   } catch (error) {
+    throwIfTaskCancelled(signal);
     if (config.browserEnabled === false) throw error;
     acquisition.fallbacks.push(`browser:${safeError(error)}`);
     return acquireWithBrowser({
@@ -297,6 +315,7 @@ export async function acquireSourceDocument({
       fetchFn,
       fetchWithRetry,
       scope,
+      signal,
     });
   }
 }
@@ -312,9 +331,12 @@ async function acquireWithBrowser({
   fetchFn,
   fetchWithRetry,
   scope = { kind: 'all' },
+  signal,
 }) {
+  throwIfTaskCancelled(signal);
   acquisition.attempts.push('playwright-structure');
-  const rendered = await renderWithBrowser({ sourceUrl, config, limits, dnsLookup });
+  const rendered = await renderWithBrowser({ sourceUrl, config, limits, dnsLookup, signal });
+  throwIfTaskCancelled(signal);
   assertUsableArticleResponse(rendered.html, rendered.finalUrl);
   const document = await sourceDocumentFromHtml({
     html: rendered.html,
@@ -621,7 +643,9 @@ export async function translateDocument({
   timeoutMs,
   onProgress,
   resumeFromCheckpoint = false,
+  signal,
 }) {
+  throwIfTaskCancelled(signal);
   const units = translationUnits(source);
   if (!units.length) throw new Error('原文没有可翻译的结构化文本');
   const checkpointPath = path.join(workDir, 'translation-checkpoint.json');
@@ -649,6 +673,7 @@ export async function translateDocument({
   });
 
   for (const batch of batches) {
+    throwIfTaskCancelled(signal);
     let translations = await requestTranslationBatch({
       batch, source, model, writer, fetchFn, completeArticle, timeoutMs,
     });
@@ -656,6 +681,7 @@ export async function translateDocument({
     if (invalid.length) {
       const repaired = [];
       for (const unit of invalid) {
+        throwIfTaskCancelled(signal);
         repaired.push(...await requestTranslationBatch({
           batch: [unit],
           source,
@@ -693,6 +719,7 @@ export async function translateDocument({
       total: units.length,
     });
   }
+  throwIfTaskCancelled(signal);
   if (completed.size !== units.length) throw new Error(`结构化翻译缺块:${completed.size}/${units.length}`);
   return applyTranslations(source, completed);
 }
@@ -1089,7 +1116,8 @@ function pinnedHttpFetch(addresses) {
   };
 }
 
-async function renderWithBrowser({ sourceUrl, config, limits, dnsLookup }) {
+async function renderWithBrowser({ sourceUrl, config, limits, dnsLookup, signal }) {
+  throwIfTaskCancelled(signal);
   const resolved = await resolveSafeHttpUrl(sourceUrl, { dnsLookup });
   const sourceHost = resolved.url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
   const pinnedAddress = resolved.addresses[0].address;
@@ -1110,6 +1138,8 @@ async function renderWithBrowser({ sourceUrl, config, limits, dnsLookup }) {
       `--host-resolver-rules=MAP ${sourceHost} ${resolverTarget}, MAP * ~NOTFOUND`,
     ],
   });
+  const abortBrowser = () => { void browser.close().catch(() => {}); };
+  signal?.addEventListener('abort', abortBrowser, { once: true });
   try {
     const page = await browser.newPage();
     page.setDefaultTimeout(limits.browserTimeoutMs);
@@ -1124,11 +1154,17 @@ async function renderWithBrowser({ sourceUrl, config, limits, dnsLookup }) {
       await route.continue();
     });
     await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: limits.browserTimeoutMs });
+    throwIfTaskCancelled(signal);
     try { await page.waitForLoadState('networkidle', { timeout: Math.min(15000, limits.browserTimeoutMs) }); } catch {}
+    throwIfTaskCancelled(signal);
     const finalUrl = page.url();
     await assertSafeHttpUrl(finalUrl, { dnsLookup });
     return { html: await page.content(), finalUrl };
+  } catch (error) {
+    if (signal?.aborted) throw cancellationErrorFromSignal(signal);
+    throw error;
   } finally {
+    signal?.removeEventListener('abort', abortBrowser);
     await browser.close();
   }
 }

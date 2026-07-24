@@ -18,7 +18,9 @@ export function slackMessageEventKey({ channel, ts, eventId } = {}) {
 
 export function parseSlackTask(raw, botUserId, { channelType, channel } = {}) {
   const t = raw.trim();
-  if (/^任务[:：]/.test(t)) return cleanSlackText(t.replace(/^任务[:：]\s*/, ''));
+  if (/^(?:任务|task)\s*[:：]/i.test(t)) {
+    return cleanSlackText(t.replace(/^(?:任务|task)\s*[:：]\s*/i, ''));
+  }
   const m = t.match(/^<@([A-Z0-9]+)>\s+([\s\S]+)/);
   if (m && (m[1] === botUserId || !botUserId)) return cleanSlackText(m[2]);
   // 私聊中不要求“任务:”或 @mention，像普通 AI 对话一样直接接受自然语言。
@@ -62,13 +64,13 @@ export function resolveWorkflowTask(task, workflowIds = [], defaultWorkflowId = 
 }
 
 const NATURAL_RULES = [
-  { id: 'email', re: /(?:newsletter|customer\.?io|订阅者|邮件草稿|邮件通讯|电子报|发邮件)/i },
+  { id: 'email', re: /(?:newsletter|customer\.?io|email\s+(?:draft|campaign|newsletter)|subscriber\s+email|订阅者|邮件草稿|邮件通讯|电子报|发邮件)/i },
   // URL 只是素材，不代表翻译意图。只有用户明确要求翻译时才进入完整直译引擎。
-  { id: 'translate', re: /(?:直译|全文翻译|完整翻译|忠实翻译|逐字翻译|翻译成(?:简体)?中文|(?:请|帮我|需要|要)(?:完整)?翻译(?:这篇|这个|全文|链接|文章))/i },
-  { id: 'morning', re: /(?:晨报|早报|盘前简报|隔夜(?:市场|要闻))/i },
-  { id: 'earnings', re: /(?:财报点评|业绩点评|本季财报|earnings\s+(?:review|analysis)|实际.*预期|指引变化)/i },
-  { id: 'sector', re: /(?:行业综述|产业综述|赛道分析|行业研究|产业研究)/i },
-  { id: 'company', re: /(?:公司深度|个股深度|公司分析|公司研究|个股分析|个股研究|深度分析|财务分析|竞争格局|竞争对手|产业链|上下游|最近[四五六0-9]+个季度)/i },
+  { id: 'translate', re: /(?:\btranslate\b|\b(?:full|complete|faithful|literal|direct)\s+translation\b|\btranslation\s+of\s+(?:this|the)\s+(?:article|paper|pdf|link)\b|直译|全文翻译|完整翻译|忠实翻译|逐字翻译|翻译成(?:简体)?中文|(?:请|帮我|需要|要)(?:完整)?翻译(?:这篇|这个|全文|链接|文章))/i },
+  { id: 'morning', re: /(?:\b(?:morning|daily|pre-?market|overnight)\s+(?:brief|briefing|report|digest)\b|晨报|早报|盘前简报|隔夜(?:市场|要闻))/i },
+  { id: 'earnings', re: /(?:\bearnings\s+(?:review|analysis|recap|update|report)\b|\bquarterly\s+(?:earnings|results?)\b|\bactuals?\s+(?:vs\.?\s+)?(?:consensus|expectations?)\b|\bguidance\s+(?:change|update|revision)\b|财报点评|业绩点评|本季财报|实际.*预期|指引变化)/i },
+  { id: 'sector', re: /(?:\b(?:industry|sector)\s+(?:analysis|research|review|report|overview|deep\s*dive)\b|\bmarket\s+landscape\b|行业综述|产业综述|赛道分析|行业研究|产业研究)/i },
+  { id: 'company', re: /(?:\b(?:company|stock|equity)\s+(?:analysis|research|deep\s*dive)\b|\b(?:in-?depth\s+analysis|company\s+deep\s+dive)\b|\b(?:financial\s+analysis|competitive\s+landscape|competitors?|value\s+chain|supply\s+chain)\b|\b(?:recent|last)\s+(?:four|five|six|[4-6])\s+quarters?\b|公司深度|个股深度|公司分析|公司研究|个股分析|个股研究|深度分析|财务分析|竞争格局|竞争对手|产业链|上下游|最近[四五六0-9]+个季度)/i },
   // 只有一个 URL 且没有任务动词时，按“模糊任务默认公众号分析”处理；绝不猜成直译。
   { id: 'wechat', re: /^\s*https?:\/\/\S+\s*$/i },
 ];
@@ -98,7 +100,7 @@ export async function resolveNaturalWorkflowTask(task, {
 
   // Slack 中最常见的直译用法是自然语言里出现“翻译/直译”并附链接，不一定把
   // 关键词放在句首。URL + 明确翻译词构成稳定的强意图，优先于其它主题词路由。
-  if (/https?:\/\/\S+/i.test(task) && /(?:直译|全文翻译|完整翻译|忠实翻译|逐字翻译|翻译)/i.test(task)) {
+  if (/https?:\/\/\S+/i.test(task) && /(?:\btranslate\b|\b(?:full|complete|faithful|literal|direct)\s+translation\b|\btranslation\s+of\s+(?:this|the)\s+(?:article|paper|pdf|link)\b|直译|全文翻译|完整翻译|忠实翻译|逐字翻译|翻译)/i.test(task)) {
     const matched = workflowIds.find((id) => id.toLowerCase() === 'translate');
     if (matched) return { workflowId: matched, task, reason: 'translation-keyword-with-url' };
   }
@@ -177,7 +179,41 @@ export function workflowRouteLabel(workflowId) {
   })[workflowId] || `${workflowId} → 草稿`;
 }
 
-export async function registerSlack({ config, enqueue, store, onReady, workflowIds = [], defaultWorkflowId = 'wechat' }) {
+export function isSlackStopCommand(task) {
+  const value = String(task || '')
+    .trim()
+    .replace(/[。.!！?？]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+  return /^(?:(?:请|麻烦)(?:你)?\s*)?(?:停止|取消|终止)(?:(?:当前|这个|正在运行的)?(?:任务|作业|进程))?(?:吧|一下)?$/.test(value)
+    || /^(?:停一下|别做了|不要继续(?:了)?|不用继续(?:了)?)$/.test(value)
+    || /^(?:please\s+)?(?:stop|cancel|abort|terminate|kill)(?:\s+(?:the\s+)?(?:current\s+|running\s+|this\s+)?(?:task|job|process))?(?:\s+it)?$/.test(value);
+}
+
+export function slackStopResponse(result) {
+  if (result?.kind === 'active' || result?.kind === 'stopping') {
+    return `🛑 已收到停止指令，正在中断任务 ${result.run?.id || ''}；完成后会在原任务线程确认文件清理结果。`;
+  }
+  if (result?.kind === 'pending') {
+    return result.cleanupError
+      ? `⚠️ 已取消排队任务 ${result.run?.id || ''}，但文件清理失败:${result.cleanupError}`
+      : `🛑 已取消排队任务 ${result.run?.id || ''}；未创建草稿，未完成文件已清理。`;
+  }
+  if (result?.kind === 'too-late') {
+    return '⚠️ 当前任务已经进入草稿创建阶段。为避免出现“草稿已创建但本地没有记录”，此时不再强制中断；本次只会创建草稿，不会发送或排期。';
+  }
+  return 'ℹ️ 当前频道没有可停止的运行中或排队任务。';
+}
+
+export async function registerSlack({
+  config,
+  enqueue,
+  cancelTask,
+  store,
+  onReady,
+  workflowIds = [],
+  defaultWorkflowId = 'wechat',
+}) {
   const app = new App({ token: config.slack.botToken, appToken: config.slack.appToken, socketMode: true, logLevel: 'warn' });
   // bolt 分发层错误(事件处理器抛错等)在此兜底,避免冒泡。注意:socket-mode 状态机
   // 内部的 finity 崩溃不走这里,由 index.js 的进程级守卫容忍并触发重连。
@@ -213,12 +249,36 @@ export async function registerSlack({ config, enqueue, store, onReady, workflowI
     }
     const eventKey = slackMessageEventKey({ channel, ts, eventId });
     if (!dedup(eventKey)) return;
-    if (!withinRateLimit(user)) {
+    const stopCommand = isSlackStopCommand(task);
+    if (!stopCommand && !withinRateLimit(user)) {
       console.error(`[slack] 已限流:user=${user || 'unknown'} 每分钟上限=${rateLimit}`);
       return;
     }
     const claimed = store?.claimSlackEvent ? store.claimSlackEvent(eventKey) : true;
     if (!claimed) return;
+    if (stopCommand) {
+      try {
+        const rootTs = threadTs || ts;
+        const threadRunId = threadTs
+          ? store?.getSlackThread?.(`${channel}:${threadTs}`)?.last_run_id
+          : undefined;
+        const result = await cancelTask?.({
+          runId: threadRunId,
+          channel,
+          user,
+          reason: `Slack 用户 ${user || 'unknown'} 请求停止当前任务`,
+        }) || { kind: 'none' };
+        await app.client.chat.postMessage({
+          channel,
+          thread_ts: rootTs,
+          text: slackStopResponse(result),
+        });
+        return;
+      } catch (error) {
+        store?.releaseSlackEvent?.(eventKey);
+        throw error;
+      }
+    }
     let enqueued = false;
     try {
     const rootTs = threadTs || ts;
@@ -238,7 +298,7 @@ export async function registerSlack({ config, enqueue, store, onReady, workflowI
       workflowId: route.workflowId,
       source: 'slack',
       input,
-      notify: { channel, ts: rootTs, routeLabel: workflowRouteLabel(route.workflowId), threadKey },
+      notify: { channel, ts: rootTs, user, routeLabel: workflowRouteLabel(route.workflowId), threadKey },
     });
     enqueued = true;
     try {

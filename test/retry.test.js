@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runWithRetry } from '../src/index.js';
+import { createTaskCancelledError } from '../src/lib/task-cancellation.js';
 
 test('失败后按 retries 重试', async () => {
   let n = 0;
@@ -30,4 +31,25 @@ test('runWithRetry 可按工作流配置在重试间等待', async () => {
   );
   assert.equal(result, 'ok');
   assert.deepEqual(waits, [15000, 15000]);
+});
+
+test('取消信号会立即打断重试等待且不再发起下一次尝试', async () => {
+  const controller = new AbortController();
+  let attempts = 0;
+  let sleeping;
+  const enteredSleep = new Promise((resolve) => { sleeping = resolve; });
+  const pending = runWithRetry(
+    async () => { attempts++; throw new Error('网络抖动'); },
+    3,
+    15000,
+    () => {
+      sleeping();
+      return new Promise(() => {});
+    },
+    controller.signal,
+  );
+  await enteredSleep;
+  controller.abort(createTaskCancelledError('stop retry'));
+  await assert.rejects(pending, (error) => error?.code === 'TASK_CANCELLED');
+  assert.equal(attempts, 1);
 });

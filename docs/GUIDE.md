@@ -14,7 +14,10 @@
    → enqueue 落库(SQLite runs 表,状态 queued)
 
 ② 排队     src/core/queue.js + src/core/store.js
-   有界队列限流、限并发出队，状态 queued → running。崩溃重启时 running 会被标 interrupted；管理员显式重新排队后，持久化 queued 任务会在下次启动恢复，避免历史中断任务被自动误发。
+   有界队列限流、限并发出队，状态 queued → running。每个活动任务拥有独立 AbortController
+   和 generate/publish 阶段标记；Slack 中英文停止指令可在 generate 阶段取消任务并清理
+   run 目录，进入外部 publish 阶段后拒绝强杀。崩溃重启时 running 会被标 interrupted；
+   管理员显式重新排队后，持久化 queued 任务会在下次启动恢复，避免历史中断任务被自动误发。
 
 ③ 调研+写作  src/core/runner.js  (runWriter)
    标准研究型任务并行运行四路：open-search、priority-search、official-search，
@@ -54,13 +57,13 @@
 | 新增一种文章类型 | 新建 `src/workflows/<name>.js` + `src/index.js` WORKFLOWS 注册 | 照抄 earnings.js 的结构 |
 | 公司深度分析框架 / 专项深搜 | `src/workflows/company.js` | 连续季度、竞争、产业链与趋势图；额外三组 type=deep 查询 |
 | 标准官方深度发现 | `src/core/runner.js` 的 `official-discovery` | 所有研究型任务均运行；只保留官方/一手结果 |
-| Slack 触发前缀/中文别名 | `src/triggers/slack.js` 的 WORKFLOW_ALIASES | 微信/财报/行业/晨报/直译… |
+| Slack 中英文触发、停止指令与自然语言路由 | `src/triggers/slack.js` | 英文指令不改变公众号/直译的默认中文输出；停止只取消当前作业，不停止 Bot 服务 |
 | 直译范围识别 | `src/workflows/translation-scope.js` | 页码和章节范围；用户页码为 1-based，Datalab 请求转换为 0-based |
 | 直译内容提取/结构 | `src/workflows/translation-source-text.js` | arXiv HTML 优先、普通 HTML/Notion；保留标题、段落、图表、公式、代码和引用 |
 | PDF 结构化解析 | `src/workflows/datalab-parser.js` | 托管 Datalab API、异步轮询、质量重试及图片资产落盘；密钥只在 PDF 路径需要 |
 | 直译翻译/完整性/续跑 | `src/workflows/translate-engine.js` | 逐文本节点翻译、确定性重组、图表公式完整性门禁与 checkpoint |
 | 直译抓取配置 | `.env` 的 `TRANSLATION_*` / `NOTION_API_TOKEN` / `DATALAB_*` | 控制来源、图片、PDF 页数、浏览器、解析质量、超时和重定向 |
-| Slack 自然语言意图/裸链接行为 | `src/triggers/slack.js` 的 NATURAL_RULES | URL 只是研究素材；仅显式翻译才走 translate |
+| 单任务取消、发布阶段保护与垃圾目录清理 | `src/core/queue.js`、`src/index.js`、`src/lib/task-cancellation.js` | generate 可取消；publish 后拒绝强杀；取消后状态为 cancelled |
 | 优先信源加减域名 | `workflows/shared.js` 的清单,或 .env EXA_PRIORITY_DOMAINS | 写主域即可,子域自动匹配 |
 | 门禁规则(拦截/提醒) | `src/lib/gate.js` | 注意:投资建议敏感词已按要求移除,勿加回 |
 | 微信宽表可读性与自动拆分 | `src/lib/mobile-tables.js` | 紧凑五列可放行；不可读表先拆分，转换失败才由 gate 拦截 |
