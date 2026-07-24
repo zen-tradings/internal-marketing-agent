@@ -8,6 +8,14 @@ export function cleanSlackText(text) {
     .trim();
 }
 
+// Slack 在公共频道 @Bot 时可能同时投递 message 与 app_mention，两次投递的
+// event_id 不同，但 channel + message ts 相同。任务去重必须使用消息身份，
+// 不能优先使用 event_id，否则同一条指令会进入队列两次并创建重复草稿。
+export function slackMessageEventKey({ channel, ts, eventId } = {}) {
+  if (channel && ts) return `message:${channel}:${ts}`;
+  return eventId ? `event:${eventId}` : '';
+}
+
 export function parseSlackTask(raw, botUserId, { channelType, channel } = {}) {
   const t = raw.trim();
   if (/^任务[:：]/.test(t)) return cleanSlackText(t.replace(/^任务[:：]\s*/, ''));
@@ -203,7 +211,7 @@ export async function registerSlack({ config, enqueue, store, onReady, workflowI
       console.error(`[slack] 已拒绝未授权任务:user=${user || 'unknown'} channel=${channel || 'unknown'}`);
       return;
     }
-    const eventKey = eventId || `${channel}:${ts}`;
+    const eventKey = slackMessageEventKey({ channel, ts, eventId });
     if (!dedup(eventKey)) return;
     if (!withinRateLimit(user)) {
       console.error(`[slack] 已限流:user=${user || 'unknown'} 每分钟上限=${rateLimit}`);

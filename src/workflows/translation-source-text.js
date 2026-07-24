@@ -19,7 +19,7 @@ import {
 
 // 单一现役直译源：保留正文结构与视觉素材，模型只替换可翻译文字单元。
 const DOCUMENT_VERSION = 4;
-const CHECKPOINT_VERSION = 4;
+const CHECKPOINT_VERSION = 5;
 const DEFAULT_LIMITS = {
   maxSourceBytes: 50 * 1024 * 1024,
   maxPdfPages: 120,
@@ -72,10 +72,11 @@ export async function generateStructuredTranslation({
     scope,
     onProgress,
   });
-  const source = acquired.scope?.kind === 'sections' && acquired.scope.appliedStartHeading
+  let source = acquired.scope?.kind === 'sections' && acquired.scope.appliedStartHeading
     ? acquired
     : applyTranslationScope(acquired, scope);
   source.scope = source.scope || scope;
+  source = removeRepeatedSourceMetadata(source);
   assertSourceDocumentComplete(source);
   const manifest = buildDocumentManifest(source);
   await report(onProgress, {
@@ -697,7 +698,7 @@ export async function translateDocument({
 }
 
 export function renderTranslatedDocument(document) {
-  const translatedTitle = ensureTranslatedTitle(document.translatedTitle || document.title || '原文直译');
+  const translatedTitle = normalizeTranslatedTitle(document.translatedTitle || document.title || '原文直译');
   const lines = [
     '---',
     `title: ${JSON.stringify(translatedTitle)}`,
@@ -805,6 +806,40 @@ export function buildDocumentManifest(document) {
     parseQualityScore: document.parseQualityScore,
     parserAttempts: document.parserAttempts,
     scope: document.scope,
+  };
+}
+
+export function removeRepeatedSourceMetadata(document) {
+  const scope = document.scope || { kind: 'all' };
+  if (scope.kind === 'sections' || (scope.kind === 'pages' && scope.startPage > 1)) return document;
+  const blocks = document.blocks || [];
+  const boundary = blocks.findIndex((block) => block.type === 'heading' && isAcademicBodyStart(block.text));
+  if (boundary <= 0) return document;
+
+  const preamble = blocks.slice(0, boundary);
+  const titleRepeated = preamble.some((block) => (
+    ['heading', 'paragraph'].includes(block.type)
+      && sameLooseText(block.text, document.title)
+  ));
+  const preambleText = normalizeComparableText(preamble.map((block) => block.text || '').join(' '));
+  const authorMatches = String(document.author || '')
+    .split(/[;,，；]/)
+    .map((name) => normalizeComparableText(name))
+    .filter((name) => name.length >= 4)
+    .slice(0, 20)
+    .filter((name) => preambleText.includes(name))
+    .length;
+  if (!titleRepeated && authorMatches < 2) return document;
+
+  const visualTypes = new Set(['figure', 'table', 'equation']);
+  const filtered = [
+    ...preamble.filter((block) => visualTypes.has(block.type)),
+    ...blocks.slice(boundary),
+  ].map((block, index) => ({ ...block, order: index }));
+  return {
+    ...document,
+    blocks: filtered,
+    metadataBlocksRemoved: blocks.length - filtered.length,
   };
 }
 
@@ -1149,6 +1184,8 @@ async function requestTranslationBatch({
 - 不改变数字、单位、Ticker 和正文中原有的 URL。
 - 所有 ⟦ZEN_INLINE_NNN⟧ 都是公式、链接或引用占位符，必须原样、原位置、各保留一次。
 - 专有名词首次出现可保留英文，普通叙述必须翻译成中文。
+- 仅对 paragraph、quote、list_item 中真正关键的术语、机制或核心结论使用 Markdown **加粗**：短段最多 1 处，长段最多 2 处，每处只包住短语，不能包住整句。没有值得强调的内容时不要强行加粗。
+- title、heading、figure_caption、table_caption、table_cell 禁止添加 **加粗**；除选择性加粗外不得添加其它 Markdown 格式。
 ${repair ? '- 输入中的 ⟦ZEN_KEEP_N⟧ 是不可翻译占位符，必须原样、原位置、各保留一次。' : ''}
 
 文档标题:${source.title}
@@ -1160,7 +1197,7 @@ ${JSON.stringify({ units })}`,
     writer: { ...writer, temperature: 0 },
     fetchFn,
     timeoutMs,
-    systemPrompt: '你是严谨的结构化文档翻译器。忠实翻译输入的标题、正文、图注和表格文字，绝不改动占位符、数字、链接或结构，只输出合法 JSON。',
+    systemPrompt: '你是严谨的结构化文档翻译器。忠实翻译输入的标题、正文、图注和表格文字；只在正文真正关键的短语上做克制的 Markdown 加粗，绝不改动占位符、数字、链接或结构，只输出合法 JSON。',
   };
   const responseFormat = {
     type: 'json_schema',
@@ -1210,8 +1247,26 @@ function validateBatchTranslations(batch, translations) {
   }
   return batch.filter((unit) => {
     const text = byId.get(unit.id);
-    return !text?.trim() || !sameInvariantTokens(unit.text, text) || isClearlyUntranslated(unit.text, text);
+    return !text?.trim()
+      || !sameInvariantTokens(unit.text, text)
+      || isClearlyUntranslated(unit.text, text)
+      || !hasValidSelectiveHighlights(unit, text);
   });
+}
+
+function hasValidSelectiveHighlights(unit, translated) {
+  const value = String(translated || '');
+  const markers = value.match(/\*\*/g) || [];
+  const highlights = [...value.matchAll(/\*\*([^*\n]+)\*\*/g)].map((match) => match[1].trim());
+  if (markers.length !== highlights.length * 2) return false;
+  const allowed = ['paragraph', 'quote', 'list_item'].includes(unit.kind);
+  if (!allowed) return highlights.length === 0;
+  const maxHighlights = value.replace(/\*\*/g, '').length >= 120 ? 2 : 1;
+  if (highlights.length > maxHighlights) return false;
+  if (highlights.some((text) => text.length < 2 || text.length > 48)) return false;
+  const highlightedCharacters = highlights.reduce((sum, text) => sum + text.length, 0);
+  const visibleCharacters = Math.max(1, value.replace(/\*\*/g, '').length);
+  return highlightedCharacters / visibleCharacters <= 0.3;
 }
 
 function protectInvariantText(value) {
@@ -1781,14 +1836,15 @@ function sourceAttribution(document) {
   return [
     '> **原文信息**',
     `> 原文：《${document.title || '未知标题'}》`,
-    `> 作者：${document.author || '未知'} ｜ 来源：${site} ｜ 日期：${document.publishedDate || '未知'}`,
-    `> 翻译范围：${scopeLabel(document.scope)} ｜ [查看原文](${document.sourceUrl})`,
+    `> 作者：${document.author || '未知'}`,
+    `> 来源：[${site}](${document.sourceUrl})`,
   ].join('\n');
 }
 
-function ensureTranslatedTitle(value) {
-  const title = cleanText(value);
-  return /(?:译文|翻译|（译）|\(译\))$/.test(title) ? title : `${title}（译）`;
+function normalizeTranslatedTitle(value) {
+  return cleanText(value)
+    .replace(/\s*(?:（\s*译(?:文)?\s*）|\(\s*译(?:文)?\s*\)|【\s*译(?:文)?\s*】|\[\s*译(?:文)?\s*\]|译文|翻译)\s*$/i, '')
+    .trim();
 }
 
 function restoreFragments(value, fragments = []) {
@@ -1837,6 +1893,16 @@ function escapeHtml(value) {
 function sameLooseText(left, right) {
   const normalize = (value) => cleanText(value).replace(/[（(]译[）)]$/, '').replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase();
   return normalize(left) === normalize(right);
+}
+
+function normalizeComparableText(value) {
+  return cleanText(value).replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase();
+}
+
+function isAcademicBodyStart(value) {
+  const normalized = normalizeComparableText(value)
+    .replace(/^(?:section)?\d+(?:\d+)*/, '');
+  return /^(?:abstract|摘要|introduction|引言|executivesummary|执行摘要)$/.test(normalized);
 }
 
 export function assertPdfPageLimit(pdfPath, maxPdfPages, spawn = spawnSync) {

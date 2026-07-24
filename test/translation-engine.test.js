@@ -106,6 +106,6 @@ test('断点文件使用结构化版本且可继续翻译', async () => {
   };
   await generateStrictTranslation(args);
   const checkpoint = JSON.parse(fs.readFileSync(path.join(workDir, 'translation-checkpoint.json'), 'utf8'));
-  assert.equal(checkpoint.version, 4);
+  assert.equal(checkpoint.version, 5);
   await assert.doesNotReject(() => generateStrictTranslation({ ...args, resumeFromCheckpoint: true }));
 });

@@ -6,7 +6,9 @@ import { prepareRenderContext, publishToWechatDraft } from '@wenyan-md/core/wrap
 export async function renderAndPublishWithFinalFooter(inputContent, options, getInputContent) {
   const { gzhContent, absoluteDirPath } = await prepareRenderContext(inputContent, options, getInputContent);
   if (!gzhContent?.title) throw new Error('未能找到文章标题');
-  gzhContent.content = styleKeyHighlights(alignTerminalReferences(removeDuplicateReferenceSections(gzhContent.content)));
+  gzhContent.content = normalizeBodyTypography(
+    styleKeyHighlights(alignTerminalReferences(removeDuplicateReferenceSections(gzhContent.content))),
+  );
   if (options.finalFooterPath) {
     gzhContent.content = appendFinalFooter(gzhContent.content, options.finalFooterPath);
   }
@@ -25,6 +27,18 @@ export function validatePreparedWechatHtml(html, { absoluteDirPath } = {}) {
   if (/source-page-\d+\.(?:png|jpe?g|gif|webp)/i.test(value)) errors.push('最终 HTML 含禁止的 PDF 整页截图');
 
   const document = new JSDOM(`<body>${value}</body>`).window.document;
+  const sourceInfoLabels = [...document.querySelectorAll('strong')]
+    .filter((node) => node.textContent.trim() === '原文信息');
+  if (sourceInfoLabels.length > 1) errors.push(`最终 HTML 含 ${sourceInfoLabels.length} 个“原文信息”板块`);
+  const oversizedBodyNodes = [...document.querySelectorAll('p,li,blockquote')]
+    .filter((node) => !node.closest('[data-zen-final-footer-wrapper="true"]'))
+    .filter((node) => {
+      const size = effectiveEmFontSize(node);
+      return size !== undefined && size > 0.9;
+    });
+  if (oversizedBodyNodes.length) {
+    errors.push(`最终 HTML 含 ${oversizedBodyNodes.length} 个大于正文字号的非标题文字块`);
+  }
   for (const [index, image] of [...document.querySelectorAll('img')].entries()) {
     const src = image.getAttribute('src') || image.getAttribute('data-src') || '';
     if (!src) {
@@ -45,6 +59,25 @@ export function validatePreparedWechatHtml(html, { absoluteDirPath } = {}) {
   return { images: document.querySelectorAll('img').length, tables: document.querySelectorAll('table').length };
 }
 
+export function normalizeBodyTypography(html) {
+  const dom = new JSDOM(`<body>${String(html || '')}</body>`);
+  const document = dom.window.document;
+  const bodyFont = '"PingFang SC","PingFang TC",-apple-system,BlinkMacSystemFont,"Hiragino Sans GB","Microsoft YaHei",sans-serif';
+  for (const quote of document.querySelectorAll('blockquote')) {
+    quote.style.fontFamily = bodyFont;
+    quote.style.fontSize = '.88em';
+    quote.style.fontWeight = '300';
+    quote.style.lineHeight = '1.6';
+    for (const paragraph of quote.querySelectorAll('p')) {
+      paragraph.style.fontFamily = bodyFont;
+      paragraph.style.fontSize = '1em';
+      paragraph.style.fontWeight = '300';
+      paragraph.style.lineHeight = '1.6';
+    }
+  }
+  return document.body.innerHTML;
+}
+
 function pathForHtmlAsset(src, absoluteDirPath) {
   if (!absoluteDirPath) return undefined;
   try {
@@ -58,6 +91,25 @@ function pathForHtmlAsset(src, absoluteDirPath) {
 function fsExists(filename) {
   try { return fs.existsSync(filename) && fs.statSync(filename).size > 0; }
   catch { return false; }
+}
+
+function effectiveEmFontSize(node) {
+  let size = 1;
+  let found = false;
+  for (let current = node; current && current.tagName !== 'BODY'; current = current.parentElement) {
+    const raw = current.style?.fontSize?.trim();
+    if (!raw) continue;
+    const em = /^([0-9]*\.?[0-9]+)em$/i.exec(raw);
+    const percent = /^([0-9]*\.?[0-9]+)%$/.exec(raw);
+    if (em) {
+      size *= Number(em[1]);
+      found = true;
+    } else if (percent) {
+      size *= Number(percent[1]) / 100;
+      found = true;
+    }
+  }
+  return found ? size : undefined;
 }
 
 export function removeDuplicateReferenceSections(html) {

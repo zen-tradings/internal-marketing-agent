@@ -10,6 +10,7 @@ import {
   buildDocumentManifest,
   isPrivateIp,
   readResponseBufferWithLimit,
+  removeRepeatedSourceMetadata,
   sourceDocumentFromHtml,
   sourceDocumentFromMarkdown,
   translateDocument,
@@ -226,9 +227,11 @@ test('结构化翻译覆盖标题、正文、图注和表格单元格并保留�
         'table_cell', 'table_cell', 'table_cell', 'table_cell',
       ]);
       assert.match(prompt, /图注和表格单元格/);
+      assert.match(prompt, /真正关键的术语、机制或核心结论/);
       assert.doesNotMatch(JSON.stringify(payload), /x\^2|Author \(2026\)/);
     }),
   });
+  translated.translatedTitle = '结构化译文（译）';
   const article = renderTranslatedDocument(translated);
   const completeness = validateTranslationArtifact({ source, translated, article });
   assert.deepEqual(completeness.errors, []);
@@ -238,6 +241,82 @@ test('结构化翻译覆盖标题、正文、图注和表格单元格并保留�
   assert.match(article, /\$\$\nx\^2\+y\^2=z\^2\n\$\$/);
   assert.match(article, /\[source\]\(https:\/\/example\.com\/source\)/);
   assert.match(article, /## 中文译文：Opening/);
+  assert.match(article, /^title: "结构化译文"$/m);
+  assert.doesNotMatch(article, /（译）|翻译范围|日期：/);
+  assert.equal((article.match(/原文信息/g) || []).length, 1);
+});
+
+test('论文标题页的重复标题、作者和机构列表在摘要前被移除', () => {
+  const document = removeRepeatedSourceMetadata({
+    title: 'Terminal-Bench',
+    author: 'Mike Merrill; Alexander Shaw; Nicholas Carlini',
+    scope: { kind: 'pages', startPage: 1, endPage: 11 },
+    blocks: [
+      { id: 'b1', order: 0, type: 'heading', level: 1, text: 'Terminal-Bench' },
+      { id: 'b2', order: 1, type: 'paragraph', text: 'Mike Merrill, Alexander Shaw, Nicholas Carlini' },
+      { id: 'b3', order: 2, type: 'paragraph', text: '1 Stanford University, 2 Laude Institute' },
+      { id: 'b4', order: 3, type: 'figure', images: [{ localPath: '/tmp/title-figure.png' }] },
+      { id: 'b5', order: 4, type: 'heading', level: 2, text: 'Abstract' },
+      { id: 'b6', order: 5, type: 'paragraph', text: 'Abstract body.' },
+    ],
+  });
+  assert.deepEqual(document.blocks.map((block) => block.id), ['b4', 'b5', 'b6']);
+  assert.deepEqual(document.blocks.map((block) => block.order), [0, 1, 2]);
+  assert.equal(document.metadataBlocksRemoved, 3);
+});
+
+test('正文翻译允许少量关键短语加粗，但拒绝标题和整段加粗', async () => {
+  const source = {
+    version: 4,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a',
+    title: 'Title',
+    author: '',
+    sha256: 'highlight-source',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: 'The benchmark measures difficult realistic tasks and reveals the central performance bottleneck.',
+    }],
+  };
+  const completeArticle = async ({ prompt }) => {
+    const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+    return JSON.stringify({
+      translations: payload.units.map((unit) => ({
+        id: unit.id,
+        text: unit.kind === 'paragraph'
+          ? '该基准衡量困难的现实任务，并揭示**核心性能瓶颈**。'
+          : '标题',
+      })),
+    });
+  };
+  const translated = await translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle,
+  });
+  assert.match(renderTranslatedDocument(translated), /\*\*核心性能瓶颈\*\*/);
+
+  await assert.rejects(() => translateDocument({
+    source: { ...source, sha256: 'invalid-highlight-source' },
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title' ? '**标题**' : '**整段文字全部被错误加粗**',
+        })),
+      });
+    },
+  }), /结构化翻译校验失败/);
 });
 
 test('完整性门禁拒绝额外添加或遗漏图片、表格和公式', () => {

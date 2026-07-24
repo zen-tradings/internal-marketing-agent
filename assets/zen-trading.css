@@ -1,5 +1,5 @@
 /* =====================================================================
-   ZEN TRADING STRATEGIES · 微信公众号主题  (v3 · 相对单位 / 自适应)
+   ZEN TRADING STRATEGIES · 微信公众号主题  (v4 · 相对单位 / 自适应)
    for wenyan-mcp (@wenyan-md/core)  ——  容器选择器 #wenyan
    字号全部用 em（跟随读者字体设置缩放）· 行高用倍数 · 不写固定宽度
    ===================================================================== */
@@ -86,9 +86,10 @@
 
 /* ---- 引用块 ---- */
 #wenyan blockquote{
-  font-family:var(--kai);
-  font-size:1.05em;
-  line-height:1.95;
+  font-family:var(--sans);
+  font-size:.88em;
+  font-weight:300;
+  line-height:1.6;
   color:var(--ink);
   background:#F6F7F4;
   border-left:3px solid var(--up);
@@ -96,7 +97,7 @@
   margin:1.3em 0;
   padding:.9em 1.1em;
 }
-#wenyan blockquote p{margin:0;font-size:1em;color:var(--ink);}
+#wenyan blockquote p{margin:0;font-family:var(--sans);font-size:1em;font-weight:300;line-height:1.6;color:var(--ink);}
 
 /* ---- 列表（菱形/序号项目符号，用字符更稳）---- */
 #wenyan ul,#wenyan ol{margin:1em 0;padding-left:0;}

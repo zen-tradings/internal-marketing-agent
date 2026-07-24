@@ -5,6 +5,7 @@ import {
   parseSlackTask,
   resolveNaturalWorkflowTask,
   resolveWorkflowTask,
+  slackMessageEventKey,
 } from '../src/triggers/slack.js';
 
 test('识别 "任务:" 前缀', () => {
@@ -21,6 +22,14 @@ test('非任务返回 null', () => {
 test('Slack 私聊接受普通自然语言,公共频道仍必须 @Bot 或任务前缀', () => {
   assert.equal(parseSlackTask('帮我写一篇英伟达分析', 'B1', { channelType: 'im', channel: 'D1' }), '帮我写一篇英伟达分析');
   assert.equal(parseSlackTask('帮我写一篇英伟达分析', 'B1', { channelType: 'channel', channel: 'C1' }), null);
+});
+
+test('同一条 @Bot 消息的 message 与 app_mention 使用同一个持久化去重键', () => {
+  const message = slackMessageEventKey({ channel: 'C1', ts: '1784898806.000100', eventId: 'EvMessage' });
+  const mention = slackMessageEventKey({ channel: 'C1', ts: '1784898806.000100', eventId: 'EvMention' });
+  assert.equal(message, 'message:C1:1784898806.000100');
+  assert.equal(mention, message);
+  assert.equal(slackMessageEventKey({ eventId: 'EvFallback' }), 'event:EvFallback');
 });
 
 test('自然语言路由:裸链接是研究素材并默认公众号分析,只有显式翻译才走直译', async () => {

@@ -7,6 +7,7 @@ import path from 'node:path';
 import {
   alignTerminalReferences,
   appendFinalFooter,
+  normalizeBodyTypography,
   removeDuplicateReferenceSections,
   styleKeyHighlights,
   validatePreparedWechatHtml,
@@ -40,6 +41,25 @@ test('微信最终 HTML:Markdown 粗体渲染为克制的关键词高亮', () =>
   assert.equal(strong.getAttribute('data-zen-key-highlight'), 'true');
   assert.match(strong.getAttribute('style'), /linear-gradient/);
   assert.equal(strong.style.color, 'rgb(41, 74, 99)');
+});
+
+test('微信最终 HTML:引用和原文信息字号归一为正文字号', () => {
+  const output = normalizeBodyTypography(
+    '<section><blockquote style="font-size:1.5em"><p style="font-size:1.2em">原文信息</p></blockquote></section>',
+  );
+  const document = new JSDOM(`<body>${output}</body>`).window.document;
+  assert.equal(document.querySelector('blockquote').style.fontSize, '0.88em');
+  assert.equal(document.querySelector('blockquote p').style.fontSize, '1em');
+  assert.doesNotThrow(() => validatePreparedWechatHtml(output));
+  assert.throws(
+    () => validatePreparedWechatHtml('<blockquote style="font-size:1.05em">过大文字</blockquote>'),
+    /大于正文字号/,
+  );
+});
+
+test('微信最终 HTML:重复原文信息板块在发布前被拦截', () => {
+  const html = '<blockquote><strong>原文信息</strong></blockquote><blockquote><strong>原文信息</strong></blockquote>';
+  assert.throws(() => validatePreparedWechatHtml(html), /2 个“原文信息”板块/);
 });
 
 test('微信最终 HTML:Wenyan 自动脚注与手工引用重复时只保留最后一个引用链接板块', () => {
