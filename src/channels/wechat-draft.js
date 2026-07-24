@@ -114,6 +114,7 @@ export function makeChannel({
           config.wechat?.appSecret,
           config.customerio?.appApiKey,
           config.translation?.notionApiToken,
+          config.translation?.datalabApiKey,
         ],
       });
       if (gate.errors.length) {

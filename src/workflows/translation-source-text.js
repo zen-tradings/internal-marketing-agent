@@ -9,22 +9,33 @@ import { Readable } from 'node:stream';
 import { spawnSync } from 'node:child_process';
 import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
+import { convertPdfWithDatalab } from './datalab-parser.js';
+import {
+  applyTranslationScope,
+  datalabPageRange,
+  parseTranslationScope,
+  scopeLabel,
+} from './translation-scope.js';
 
-// 单一现役直译源：只抽取正文文字，不生成或下载正文视觉素材。
-const DOCUMENT_VERSION = 3;
-const CHECKPOINT_VERSION = 3;
+// 单一现役直译源：保留正文结构与视觉素材，模型只替换可翻译文字单元。
+const DOCUMENT_VERSION = 4;
+const CHECKPOINT_VERSION = 4;
 const DEFAULT_LIMITS = {
-  maxSourceBytes: 12 * 1024 * 1024,
+  maxSourceBytes: 50 * 1024 * 1024,
   maxPdfPages: 120,
   browserTimeoutMs: 45000,
   fetchTimeoutMs: 30000,
   maxRedirects: 5,
+  maxAssetCount: 80,
+  maxAssetBytes: 40 * 1024 * 1024,
+  maxSingleAssetBytes: 10 * 1024 * 1024,
 };
-const BODY_BLOCK_TYPES = new Set(['heading', 'paragraph', 'quote', 'list_item']);
+const DOCUMENT_BLOCK_TYPES = new Set([
+  'heading', 'paragraph', 'quote', 'list_item', 'figure', 'table', 'equation', 'code', 'reference',
+]);
 const EXCLUDED_CONTENT_SELECTOR = [
   'script', 'style', 'noscript', 'nav', 'form', 'aside',
-  'body > header', 'body > footer', 'table', 'figure', 'figcaption',
-  'picture', 'img', 'svg', 'canvas', 'video', 'audio', 'iframe', 'pre',
+  'body > header', 'body > footer', 'video', 'audio', 'iframe',
   '[aria-hidden="true"]', '[hidden]', '.advertisement', '.advert', '.ads',
   '.related-posts', '.recommended', '.comments', '#comments', '.cookie-banner',
   '.newsletter-signup', '.social-share',
@@ -43,25 +54,33 @@ export async function generateStructuredTranslation({
 }) {
   const sourceUrl = extractInputUrls(input)[0];
   if (!sourceUrl) throw new Error('直译任务缺少可读取的 http(s) 原文链接');
+  const scope = parseTranslationScope(input);
 
   await report(onProgress, {
     stage: 'source',
-    message: '正在提取链接中的正文文字',
+    message: `正在提取原文结构，翻译范围：${scopeLabel(scope)}`,
     completed: 0,
     total: 1,
   });
-  const source = await acquireSourceDocument({
+  const acquired = await acquireSourceDocument({
     sourceUrl,
     workDir: workflow.workDir,
     fetchFn,
     fetchWithRetry,
     config: translationConfig,
     dnsLookup: translationConfig.dnsLookup,
+    scope,
+    onProgress,
   });
+  const source = acquired.scope?.kind === 'sections' && acquired.scope.appliedStartHeading
+    ? acquired
+    : applyTranslationScope(acquired, scope);
+  source.scope = source.scope || scope;
+  assertSourceDocumentComplete(source);
   const manifest = buildDocumentManifest(source);
   await report(onProgress, {
     stage: 'structure',
-    message: `已提取 ${manifest.blocks} 个正文文字块`,
+    message: `已提取 ${manifest.blocks} 个结构块：${manifest.headings} 个标题、${manifest.figures} 张图、${manifest.tables} 个表格`,
     completed: 1,
     total: 1,
   });
@@ -84,7 +103,7 @@ export async function generateStructuredTranslation({
   }
   await report(onProgress, {
     stage: 'validation',
-    message: `正文文字完整性校验通过：${completeness.blocks} 个内容块`,
+    message: `结构化直译完整性校验通过：${completeness.blocks} 个内容块`,
     completed: 1,
     total: 1,
   });
@@ -102,6 +121,7 @@ export async function generateStructuredTranslation({
       extractor: source.extractor,
       sha256: source.sha256,
       acquisition: source.acquisition,
+      scope: source.scope,
     },
     completeness,
   };
@@ -114,17 +134,27 @@ export async function acquireSourceDocument({
   fetchWithRetry,
   config = {},
   dnsLookup = dns.lookup,
+  scope = { kind: 'all' },
+  onProgress,
 }) {
   const limits = limitsFor(config);
   await assertSafeHttpUrl(sourceUrl, { dnsLookup });
   fs.mkdirSync(workDir, { recursive: true });
   const acquisition = { attempts: [], fallbacks: [] };
+  const arxiv = arxivSourceUrls(sourceUrl);
+  let acquisitionUrl = arxiv
+    ? scope.kind === 'pages' ? arxiv.pdf : arxiv.html
+    : sourceUrl;
+  if (acquisitionUrl !== sourceUrl) acquisition.attempts.push(scope.kind === 'pages' ? 'arxiv-pdf' : 'arxiv-html');
 
-  if (isNotionUrl(sourceUrl) && config.notionApiToken) {
+  if (isNotionUrl(acquisitionUrl) && config.notionApiToken) {
+    if (scope.kind === 'pages') {
+      throw new Error('Notion 网页没有可验证的 PDF 分页；请改用章节范围');
+    }
     acquisition.attempts.push('notion-markdown-api');
     try {
       const notion = await fetchNotionMarkdown({
-        sourceUrl,
+        sourceUrl: acquisitionUrl,
         token: config.notionApiToken,
         fetchFn,
         fetchWithRetry,
@@ -137,6 +167,12 @@ export async function acquireSourceDocument({
         author: notion.author,
         publishedDate: notion.publishedDate,
         extractor: 'notion-markdown-api',
+        workDir,
+        fetchFn,
+        fetchWithRetry,
+        config,
+        dnsLookup,
+        scope,
       });
       document.acquisition = acquisition;
       return document;
@@ -149,7 +185,7 @@ export async function acquireSourceDocument({
   let fetched;
   try {
     fetched = await safeFetchResource({
-      url: sourceUrl,
+      url: acquisitionUrl,
       fetchFn,
       fetchWithRetry,
       limits,
@@ -157,9 +193,37 @@ export async function acquireSourceDocument({
       accept: 'text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.5',
     });
   } catch (error) {
-    if (config.browserEnabled === false || /\.pdf(?:$|[?#])/i.test(sourceUrl)) throw error;
-    acquisition.fallbacks.push(`browser:静态请求失败:${safeError(error)}`);
-    return acquireWithBrowser({ sourceUrl, workDir, config, limits, dnsLookup, acquisition });
+    if (arxiv && acquisitionUrl === arxiv.html) {
+      acquisition.fallbacks.push(`arxiv-html:${safeError(error)}`);
+      acquisitionUrl = arxiv.pdf;
+      acquisition.attempts.push('arxiv-pdf-fallback');
+      fetched = await safeFetchResource({
+        url: acquisitionUrl,
+        fetchFn,
+        fetchWithRetry,
+        limits,
+        dnsLookup,
+        accept: 'application/pdf,*/*;q=0.5',
+      });
+    } else {
+      if (scope.kind === 'pages' && !/\.pdf(?:$|[?#])/i.test(acquisitionUrl)) {
+        throw new Error('该网页没有可验证的 PDF 分页；请提供 PDF 链接或改用章节范围');
+      }
+      if (config.browserEnabled === false || /\.pdf(?:$|[?#])/i.test(acquisitionUrl)) throw error;
+      acquisition.fallbacks.push(`browser:静态请求失败:${safeError(error)}`);
+      return acquireWithBrowser({
+        sourceUrl: acquisitionUrl,
+        attributionUrl: sourceUrl,
+        workDir,
+        config,
+        limits,
+        dnsLookup,
+        acquisition,
+        fetchFn,
+        fetchWithRetry,
+        scope,
+      });
+    }
   }
 
   const contentType = String(fetched.contentType || '').toLowerCase();
@@ -167,15 +231,23 @@ export async function acquireSourceDocument({
     || /\.pdf(?:$|[?#])/i.test(fetched.finalUrl)
     || fetched.buffer.subarray(0, 4).toString() === '%PDF';
   if (isPdf) {
-    acquisition.attempts.push('pdf-text');
-    const document = sourceDocumentFromPdf({
+    acquisition.attempts.push('datalab-pdf');
+    const document = await sourceDocumentFromPdf({
       pdfBuffer: fetched.buffer,
-      sourceUrl: fetched.finalUrl,
+      sourceUrl,
+      resolvedSourceUrl: fetched.finalUrl,
       workDir,
       limits,
+      config,
+      fetchFn,
+      scope,
+      onProgress,
     });
     document.acquisition = acquisition;
     return document;
+  }
+  if (scope.kind === 'pages') {
+    throw new Error('该网页没有可验证的 PDF 分页；请提供 PDF 链接或改用章节范围');
   }
 
   const html = decodeHtmlBuffer(fetched.buffer, fetched.contentType);
@@ -183,19 +255,30 @@ export async function acquireSourceDocument({
   try {
     const document = await sourceDocumentFromHtml({
       html,
-      sourceUrl: fetched.finalUrl,
+      sourceUrl,
+      documentUrl: fetched.finalUrl,
       extractor: 'readability-static',
+      workDir,
+      fetchFn,
+      fetchWithRetry,
+      config,
+      dnsLookup,
+      scope,
     });
     document.acquisition = acquisition;
     if (shouldUseBrowser(document, html) && config.browserEnabled !== false) {
       acquisition.fallbacks.push('browser:静态正文过短或疑似客户端渲染');
       return acquireWithBrowser({
         sourceUrl: fetched.finalUrl,
+        attributionUrl: sourceUrl,
         workDir,
         config,
         limits,
         dnsLookup,
         acquisition,
+        fetchFn,
+        fetchWithRetry,
+        scope,
       });
     }
     return document;
@@ -204,23 +287,45 @@ export async function acquireSourceDocument({
     acquisition.fallbacks.push(`browser:${safeError(error)}`);
     return acquireWithBrowser({
       sourceUrl: fetched.finalUrl,
+      attributionUrl: sourceUrl,
       workDir,
       config,
       limits,
       dnsLookup,
       acquisition,
+      fetchFn,
+      fetchWithRetry,
+      scope,
     });
   }
 }
 
-async function acquireWithBrowser({ sourceUrl, config, limits, dnsLookup, acquisition }) {
-  acquisition.attempts.push('playwright-text');
+async function acquireWithBrowser({
+  sourceUrl,
+  attributionUrl = sourceUrl,
+  workDir,
+  config,
+  limits,
+  dnsLookup,
+  acquisition,
+  fetchFn,
+  fetchWithRetry,
+  scope = { kind: 'all' },
+}) {
+  acquisition.attempts.push('playwright-structure');
   const rendered = await renderWithBrowser({ sourceUrl, config, limits, dnsLookup });
   assertUsableArticleResponse(rendered.html, rendered.finalUrl);
   const document = await sourceDocumentFromHtml({
     html: rendered.html,
-    sourceUrl: rendered.finalUrl,
+    sourceUrl: attributionUrl,
+    documentUrl: rendered.finalUrl,
     extractor: 'readability-playwright',
+    workDir,
+    fetchFn,
+    fetchWithRetry,
+    config,
+    dnsLookup,
+    scope,
   });
   document.acquisition = acquisition;
   return document;
@@ -229,9 +334,17 @@ async function acquireWithBrowser({ sourceUrl, config, limits, dnsLookup, acquis
 export async function sourceDocumentFromHtml({
   html,
   sourceUrl,
+  documentUrl = sourceUrl,
   extractor = 'readability-static',
+  workDir,
+  fetchFn = globalThis.fetch,
+  fetchWithRetry,
+  config = {},
+  dnsLookup = dns.lookup,
+  assetMap = {},
+  scope = { kind: 'all' },
 }) {
-  const sourceDom = new JSDOM(String(html || ''), { url: sourceUrl });
+  const sourceDom = new JSDOM(String(html || ''), { url: documentUrl });
   const sourceDocument = sourceDom.window.document;
   const title = metadata(sourceDocument, [
     'meta[property="og:title"]', 'meta[name="twitter:title"]', 'title', 'h1',
@@ -245,15 +358,32 @@ export async function sourceDocumentFromHtml({
 
   discardExcludedContent(sourceDocument);
   let readable;
-  try {
-    readable = new Readability(sourceDocument, { charThreshold: 80, keepClasses: false }).parse();
-  } catch {}
-  const fallback = sourceDocument.querySelector('article,main,[role="main"]') || sourceDocument.body;
-  const bodyHtml = readable?.content || fallback?.innerHTML || '';
-  const bodyDom = new JSDOM(`<main>${bodyHtml}</main>`, { url: sourceUrl });
+  const structured = sourceDocument.querySelector('article.ltx_document,.ltx_document,article');
+  if (!structured) {
+    try {
+      readable = new Readability(sourceDocument.cloneNode(true), { charThreshold: 80, keepClasses: true }).parse();
+    } catch {}
+  }
+  const fallback = structured || sourceDocument.querySelector('article,main,[role="main"]') || sourceDocument.body;
+  const bodyHtml = structured?.outerHTML || readable?.content || fallback?.innerHTML || '';
+  const bodyDom = new JSDOM(`<main>${bodyHtml}</main>`, { url: documentUrl });
   discardExcludedContent(bodyDom.window.document);
   const root = bodyDom.window.document.querySelector('main');
-  const blocks = blocksFromDom(root);
+  const extractedBlocks = blocksFromDom(root, documentUrl);
+  const scoped = scope.kind === 'sections'
+    ? applyTranslationScope({ blocks: extractedBlocks }, scope)
+    : { blocks: extractedBlocks, scope };
+  const blocks = scoped.blocks;
+  if (workDir) {
+    await localizeFigureAssets(blocks, {
+      workDir,
+      fetchFn,
+      fetchWithRetry,
+      config,
+      dnsLookup,
+      assetMap,
+    });
+  }
   const document = createSourceDocument({
     sourceType: 'html',
     extractor,
@@ -264,6 +394,7 @@ export async function sourceDocumentFromHtml({
     blocks,
     rawHashInput: String(html || ''),
   });
+  document.scope = scoped.scope || scope;
   assertSourceDocumentComplete(document);
   return document;
 }
@@ -275,23 +406,33 @@ export async function sourceDocumentFromMarkdown({
   author,
   publishedDate,
   extractor = 'notion-markdown-api',
+  workDir,
+  fetchFn = globalThis.fetch,
+  fetchWithRetry,
+  config = {},
+  dnsLookup = dns.lookup,
+  scope = { kind: 'all' },
 }) {
   const lines = String(markdown || '').replace(/\r/g, '').split('\n');
   const blocks = [];
   let paragraph = [];
   let blockIndex = 0;
   let inFence = false;
-  let skippingTable = false;
+  let fenceLines = [];
   let referencesStarted = false;
 
   const push = (block) => {
-    if (!block.text?.trim()) return;
+    const hasContent = block.text?.trim()
+      || (block.type === 'figure' && block.images?.length)
+      || (block.type === 'table' && block.rows?.length)
+      || (block.type === 'equation' && block.tex?.trim());
+    if (!hasContent) return;
     blocks.push({ ...block, id: `b${String(++blockIndex).padStart(6, '0')}`, order: blocks.length });
   };
   const flushParagraph = () => {
     const text = cleanMarkdownText(paragraph.join(' '));
     paragraph = [];
-    if (text) push({ type: 'paragraph', text });
+    if (text) push({ type: referencesStarted ? 'reference' : 'paragraph', text });
   };
 
   for (let index = 0; index < lines.length; index += 1) {
@@ -299,25 +440,55 @@ export async function sourceDocumentFromMarkdown({
     const trimmed = raw.trim();
     if (/^```/.test(trimmed)) {
       flushParagraph();
-      inFence = !inFence;
+      if (inFence) {
+        push({ type: 'code', text: fenceLines.join('\n') });
+        fenceLines = [];
+        inFence = false;
+      } else {
+        inFence = true;
+      }
       continue;
     }
-    if (inFence || referencesStarted) continue;
+    if (inFence) {
+      fenceLines.push(raw);
+      continue;
+    }
     if (isMarkdownTableStart(lines, index)) {
       flushParagraph();
-      skippingTable = true;
+      const tableLines = [raw, lines[index + 1]];
+      index += 2;
+      while (index < lines.length && /^\s*\|.*\|\s*$/.test(lines[index])) {
+        tableLines.push(lines[index]);
+        index += 1;
+      }
+      index -= 1;
+      const rows = tableLines
+        .filter((_, rowIndex) => rowIndex !== 1)
+        .map((line) => splitMarkdownTableRow(line).map((text) => ({ text: cleanMarkdownText(text), fragments: [] })));
+      push({ type: 'table', caption: '', captionFragments: [], rows });
       continue;
-    }
-    if (skippingTable) {
-      if (/^\s*\|.*\|\s*$/.test(raw)) continue;
-      skippingTable = false;
     }
     if (!trimmed) {
       flushParagraph();
       continue;
     }
-    if (/^!\[/.test(trimmed) || /^<(?:table|figure|img|picture|svg|canvas)\b/i.test(trimmed)) {
+    const image = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/.exec(trimmed);
+    if (image) {
       flushParagraph();
+      push({
+        type: 'figure',
+        images: [{ src: resolveAssetUrl(image[2], sourceUrl), alt: cleanText(image[1]) }],
+        caption: cleanText(image[3] || image[1]),
+        captionFragments: [],
+      });
+      continue;
+    }
+    if (/^\$\$/.test(trimmed)) {
+      flushParagraph();
+      const equation = [trimmed.replace(/^\$\$/, '')];
+      while (index + 1 < lines.length && !/\$\$\s*$/.test(equation.at(-1))) equation.push(lines[++index]);
+      const tex = equation.join('\n').replace(/\$\$\s*$/, '').trim();
+      if (tex) push({ type: 'equation', tex });
       continue;
     }
     const heading = /^(#{1,6})\s+(.+)$/.exec(trimmed);
@@ -326,7 +497,6 @@ export async function sourceDocumentFromMarkdown({
       const text = cleanMarkdownText(heading[2]);
       if (isReferencesHeading(text)) {
         referencesStarted = true;
-        continue;
       }
       push({ type: 'heading', level: heading[1].length, text });
       continue;
@@ -335,7 +505,7 @@ export async function sourceDocumentFromMarkdown({
     if (list) {
       flushParagraph();
       push({
-        type: 'list_item',
+        type: referencesStarted ? 'reference' : 'list_item',
         ordered: /^\d/.test(list[2]),
         depth: Math.floor(list[1].length / 2),
         text: cleanMarkdownText(list[3]),
@@ -351,8 +521,23 @@ export async function sourceDocumentFromMarkdown({
     paragraph.push(raw);
   }
   flushParagraph();
+  if (inFence && fenceLines.length) push({ type: 'code', text: fenceLines.join('\n') });
 
-  const firstHeading = blocks.find((block) => block.type === 'heading');
+  const scoped = scope.kind === 'sections'
+    ? applyTranslationScope({ blocks }, scope)
+    : { blocks, scope };
+  if (workDir) {
+    await localizeFigureAssets(scoped.blocks, {
+      workDir,
+      fetchFn,
+      fetchWithRetry,
+      config,
+      dnsLookup,
+      assetMap: {},
+    });
+  }
+
+  const firstHeading = scoped.blocks.find((block) => block.type === 'heading');
   const document = createSourceDocument({
     sourceType: 'notion',
     extractor,
@@ -360,60 +545,67 @@ export async function sourceDocumentFromMarkdown({
     title: cleanText(title || firstHeading?.text || new URL(sourceUrl).hostname),
     author,
     publishedDate,
-    blocks,
+    blocks: scoped.blocks,
     rawHashInput: String(markdown || ''),
   });
+  document.scope = scoped.scope || scope;
   assertSourceDocumentComplete(document);
   return document;
 }
 
-function sourceDocumentFromPdf({ pdfBuffer, sourceUrl, workDir, limits }) {
+async function sourceDocumentFromPdf({
+  pdfBuffer,
+  sourceUrl,
+  resolvedSourceUrl,
+  workDir,
+  limits,
+  config,
+  fetchFn,
+  scope,
+  onProgress,
+}) {
   const pdfPath = path.join(workDir, 'translation-source.pdf');
   fs.writeFileSync(pdfPath, pdfBuffer);
   const pages = assertPdfPageLimit(pdfPath, limits.maxPdfPages);
+  if (scope?.kind === 'pages' && scope.endPage > pages) {
+    throw new Error(`指定翻译范围超过 PDF 页数:${scope.endPage}/${pages}`);
+  }
   const info = runCommand('pdfinfo', [pdfPath], { timeout: 15000 });
   const title = cleanPdfMeta(/^Title:\s+(.+)$/mi.exec(info)?.[1])
     || path.basename(new URL(sourceUrl).pathname, '.pdf')
     || 'PDF 原文';
   const author = cleanPdfMeta(/^Author:\s+(.+)$/mi.exec(info)?.[1]);
   const publishedDate = cleanPdfMeta(/^CreationDate:\s+(.+)$/mi.exec(info)?.[1]);
-  const blocks = [];
-  let blockIndex = 0;
-  let referencesStarted = false;
-
-  for (let page = 1; page <= pages && !referencesStarted; page += 1) {
-    const text = runCommand('pdftotext', [
-      '-f', String(page), '-l', String(page), '-raw', '-nopgbrk', pdfPath, '-',
-    ], { timeout: 30000 });
-    for (const paragraph of pdfParagraphs(text)) {
-      const cleaned = cleanText(paragraph);
-      if (!cleaned || isPdfNonBodyBlock(cleaned, page, pages)) continue;
-      if (isReferencesHeading(cleaned)) {
-        referencesStarted = true;
-        break;
-      }
-      const heading = looksLikeHeading(cleaned);
-      blocks.push({
-        id: `b${String(++blockIndex).padStart(6, '0')}`,
-        order: blocks.length,
-        type: heading ? 'heading' : 'paragraph',
-        ...(heading ? { level: 2 } : {}),
-        text: cleaned,
-        sourcePage: page,
-      });
-    }
-  }
-  const document = createSourceDocument({
-    sourceType: 'pdf',
-    extractor: 'poppler-text',
-    sourceUrl,
-    title,
-    author,
-    publishedDate,
-    blocks,
-    rawHashInput: pdfBuffer,
-    pageCount: pages,
+  const converted = await convertPdfWithDatalab({
+    pdfBuffer,
+    filename: path.basename(new URL(resolvedSourceUrl || sourceUrl).pathname) || 'source.pdf',
+    pageRange: datalabPageRange(scope),
+    workDir,
+    config,
+    fetchFn,
+    onProgress,
   });
+  const document = await sourceDocumentFromHtml({
+    html: converted.html,
+    sourceUrl,
+    documentUrl: resolvedSourceUrl || sourceUrl,
+    extractor: 'datalab-marker-html',
+    workDir,
+    fetchFn,
+    config,
+    assetMap: converted.images,
+    scope,
+  });
+  document.sourceType = 'pdf';
+  document.title = cleanText(converted.metadata?.title || document.title || title);
+  document.author = cleanText(converted.metadata?.author || document.author || author);
+  document.publishedDate = cleanText(converted.metadata?.date || document.publishedDate || publishedDate);
+  document.sha256 = crypto.createHash('sha256').update(pdfBuffer).digest('hex');
+  document.pageCount = pages;
+  document.processedPageCount = converted.pageCount;
+  document.parseQualityScore = converted.parseQualityScore;
+  document.parserAttempts = converted.attempts;
+  document.scope = scope;
   assertSourceDocumentComplete(document);
   return document;
 }
@@ -430,8 +622,8 @@ export async function translateDocument({
   resumeFromCheckpoint = false,
 }) {
   const units = translationUnits(source);
-  if (!units.length) throw new Error('原文没有可翻译的正文文字');
-  const checkpointPath = path.join(workDir, 'translation-text-checkpoint.json');
+  if (!units.length) throw new Error('原文没有可翻译的结构化文本');
+  const checkpointPath = path.join(workDir, 'translation-checkpoint.json');
   const checkpointKey = crypto.createHash('sha256')
     .update(JSON.stringify({ version: CHECKPOINT_VERSION, source: source.sha256, model, units }))
     .digest('hex');
@@ -449,8 +641,8 @@ export async function translateDocument({
   await report(onProgress, {
     stage: 'translation',
     message: completed.size
-      ? `从纯文字断点继续翻译 ${completed.size}/${units.length}`
-      : `开始翻译正文文字，共 ${units.length} 个文本单元`,
+      ? `从结构化断点继续翻译 ${completed.size}/${units.length}`
+      : `开始翻译标题、正文、图注和表格，共 ${units.length} 个文本单元`,
     completed: completed.size,
     total: units.length,
   });
@@ -480,11 +672,11 @@ export async function translateDocument({
       invalid = validateBatchTranslations(batch, translations);
     }
     if (invalid.length) {
-      writeJsonAtomic(path.join(workDir, 'translation-text-invalid.json'), {
+      writeJsonAtomic(path.join(workDir, 'translation-invalid.json'), {
         failedAt: new Date().toISOString(),
         units: invalid.map((unit) => ({ id: unit.id, source: unit.text })),
       });
-      throw new Error(`正文文字翻译校验失败:${invalid.map((unit) => unit.id).join(',')}`);
+      throw new Error(`结构化翻译校验失败:${invalid.map((unit) => unit.id).join(',')}`);
     }
     for (const item of translations) completed.set(item.id, item.text.trim());
     writeJsonAtomic(checkpointPath, {
@@ -495,32 +687,57 @@ export async function translateDocument({
     });
     await report(onProgress, {
       stage: 'translation',
-      message: `正文文字翻译进度 ${completed.size}/${units.length}`,
+      message: `结构化翻译进度 ${completed.size}/${units.length}`,
       completed: completed.size,
       total: units.length,
     });
   }
-  if (completed.size !== units.length) throw new Error(`正文文字翻译缺块:${completed.size}/${units.length}`);
+  if (completed.size !== units.length) throw new Error(`结构化翻译缺块:${completed.size}/${units.length}`);
   return applyTranslations(source, completed);
 }
 
 export function renderTranslatedDocument(document) {
+  const translatedTitle = ensureTranslatedTitle(document.translatedTitle || document.title || '原文直译');
   const lines = [
     '---',
-    `title: ${JSON.stringify(document.translatedTitle || document.title || '原文直译')}`,
+    `title: ${JSON.stringify(translatedTitle)}`,
     '---',
     '',
     sourceAttribution(document),
     '',
   ];
+  let figureNumber = 0;
+  let tableNumber = 0;
   for (const block of document.blocks) {
-    const text = block.translatedText ?? block.text ?? '';
-    if (block.type === 'heading') lines.push(`${'#'.repeat(clamp(block.level || 2, 1, 6))} ${text}`, '');
+    const text = restoreFragments(block.translatedText ?? block.text ?? '', block.fragments);
+    if (block.type === 'heading') {
+      if (block.level === 1 && sameLooseText(text, translatedTitle)) continue;
+      lines.push(`${'#'.repeat(clamp(block.level || 2, 2, 4))} ${text}`, '');
+    }
     else if (block.type === 'paragraph') lines.push(text, '');
     else if (block.type === 'quote') lines.push(...String(text).split('\n').map((line) => `> ${line}`), '');
     else if (block.type === 'list_item') {
       const marker = block.ordered ? '1.' : '-';
       lines.push(`${'  '.repeat(block.depth || 0)}${marker} ${text}`, '');
+    } else if (block.type === 'figure') {
+      figureNumber += 1;
+      for (const image of block.images || []) {
+        if (!image.localPath) continue;
+        lines.push(`![${escapeMarkdownAlt(image.alt || `原文图 ${figureNumber}`)}](${image.localPath})`, '');
+      }
+      const caption = restoreFragments(block.translatedCaption ?? block.caption ?? '', block.captionFragments);
+      if (caption) lines.push(captionLine(`图 ${figureNumber}`, caption), '');
+    } else if (block.type === 'table') {
+      tableNumber += 1;
+      const caption = restoreFragments(block.translatedCaption ?? block.caption ?? '', block.captionFragments);
+      if (caption) lines.push(`**表 ${tableNumber}：${caption}**`, '');
+      lines.push(...renderMarkdownTable(block), '');
+    } else if (block.type === 'equation') {
+      lines.push('$$', block.tex, '$$', '');
+    } else if (block.type === 'code') {
+      lines.push(`<pre><code>${escapeHtml(block.text || '')}</code></pre>`, '');
+    } else if (block.type === 'reference') {
+      lines.push(`- ${text}`, '');
     }
   }
   return `${lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`;
@@ -530,9 +747,9 @@ export function validateTranslationArtifact({ source, translated, article }) {
   const errors = [];
   const sourceIds = source.blocks.map((block) => block.id);
   const translatedIds = translated.blocks.map((block) => block.id);
-  if (sourceIds.join('|') !== translatedIds.join('|')) errors.push('正文文字块 ID 或顺序发生变化');
-  if (source.blocks.some((block) => !BODY_BLOCK_TYPES.has(block.type))) errors.push('原文含非正文文字块');
-  if (translated.blocks.some((block) => !BODY_BLOCK_TYPES.has(block.type))) errors.push('译文含非正文文字块');
+  if (sourceIds.join('|') !== translatedIds.join('|')) errors.push('结构块 ID 或顺序发生变化');
+  if (source.blocks.some((block) => !DOCUMENT_BLOCK_TYPES.has(block.type))) errors.push('原文含未知结构块');
+  if (translated.blocks.some((block) => !DOCUMENT_BLOCK_TYPES.has(block.type))) errors.push('译文含未知结构块');
   for (const unit of translationUnits(source)) {
     const target = translatedUnitText(translated, unit.id);
     if (!target?.trim()) errors.push(`译文为空:${unit.id}`);
@@ -541,27 +758,53 @@ export function validateTranslationArtifact({ source, translated, article }) {
   }
   const value = String(article || '');
   if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(value)) errors.push('译文含控制字符');
-  if (/!\[[^\]]*\]\([^)]*\)|<(?:img|picture|svg|canvas|figure)\b/i.test(value)) errors.push('译文含图片内容');
-  if (/^\s*\|.*\|\s*$/m.test(value) || /<table\b/i.test(value)) errors.push('译文含表格内容');
+  const sourceFigures = source.blocks.filter((block) => block.type === 'figure')
+    .reduce((sum, block) => sum + block.images.length, 0);
+  const renderedFigures = (value.match(/^!\[[^\]]*\]\([^)]*\)$/gm) || []).length;
+  if (renderedFigures !== sourceFigures) errors.push(`图片数量不一致:${renderedFigures}/${sourceFigures}`);
+  const sourceTables = source.blocks.filter((block) => block.type === 'table').length;
+  const renderedTables = (value.match(/^\|(?:[^|\n]*\|)+\s*$/gm) || []).filter((line) => /---/.test(line)).length;
+  if (renderedTables !== sourceTables) errors.push(`表格数量不一致:${renderedTables}/${sourceTables}`);
+  const sourceEquations = source.blocks.filter((block) => block.type === 'equation').length;
+  const renderedEquations = (value.match(/^\$\$$/gm) || []).length / 2;
+  if (renderedEquations !== sourceEquations) errors.push(`公式数量不一致:${renderedEquations}/${sourceEquations}`);
+  for (const block of source.blocks.filter((item) => item.type === 'figure')) {
+    for (const image of block.images) {
+      if (!image.localPath || !fs.existsSync(image.localPath) || fs.statSync(image.localPath).size <= 0) {
+        errors.push(`图片资产缺失:${block.id}`);
+      }
+    }
+  }
   return {
     errors,
     blocks: source.blocks.length,
     headings: source.blocks.filter((block) => block.type === 'heading').length,
     paragraphs: source.blocks.filter((block) => ['paragraph', 'quote', 'list_item'].includes(block.type)).length,
+    figures: sourceFigures,
+    tables: sourceTables,
+    equations: sourceEquations,
     sourceCharacters: translationUnits(source).reduce((sum, unit) => sum + unit.text.length, 0),
-    contentMode: 'body-text-only',
+    contentMode: 'structured-document',
+    scope: source.scope,
   };
 }
 
 export function buildDocumentManifest(document) {
   return {
     version: document.version,
-    contentMode: 'body-text-only',
+    contentMode: 'structured-document',
     blocks: document.blocks.length,
     headings: document.blocks.filter((block) => block.type === 'heading').length,
     paragraphs: document.blocks.filter((block) => ['paragraph', 'quote', 'list_item'].includes(block.type)).length,
+    figures: document.blocks.filter((block) => block.type === 'figure').reduce((sum, block) => sum + block.images.length, 0),
+    tables: document.blocks.filter((block) => block.type === 'table').length,
+    equations: document.blocks.filter((block) => block.type === 'equation').length,
     blockOrder: document.blocks.map((block) => `${block.id}:${block.type}`),
     pageCount: document.pageCount || undefined,
+    processedPageCount: document.processedPageCount || undefined,
+    parseQualityScore: document.parseQualityScore,
+    parserAttempts: document.parserAttempts,
+    scope: document.scope,
   };
 }
 
@@ -901,8 +1144,10 @@ async function requestTranslationBatch({
 硬性规则:
 - 只返回合法 JSON，格式严格为 {"translations":[{"id":"原 ID","text":"完整译文"}]}。
 - translations 必须与输入数量相同，ID 必须逐字相同且不得重复、遗漏或新增。
-- 只翻译正文文字，不总结、不改写、不删减，也不要补充任何图、图题、表、表题、表格数据或内容概括。
+- 按 kind 翻译标题、正文、标题层级、图注和表格单元格，不总结、不改写、不删减。
+- 不添加输入中不存在的图、表、公式、引用、分析或内容概括。
 - 不改变数字、单位、Ticker 和正文中原有的 URL。
+- 所有 ⟦ZEN_INLINE_NNN⟧ 都是公式、链接或引用占位符，必须原样、原位置、各保留一次。
 - 专有名词首次出现可保留英文，普通叙述必须翻译成中文。
 ${repair ? '- 输入中的 ⟦ZEN_KEEP_N⟧ 是不可翻译占位符，必须原样、原位置、各保留一次。' : ''}
 
@@ -915,7 +1160,7 @@ ${JSON.stringify({ units })}`,
     writer: { ...writer, temperature: 0 },
     fetchFn,
     timeoutMs,
-    systemPrompt: '你是严谨的正文文字翻译器。只翻译输入的正文文字，不处理或补充图片、图表、表格及其说明，只输出合法 JSON。',
+    systemPrompt: '你是严谨的结构化文档翻译器。忠实翻译输入的标题、正文、图注和表格文字，绝不改动占位符、数字、链接或结构，只输出合法 JSON。',
   };
   const responseFormat = {
     type: 'json_schema',
@@ -972,7 +1217,7 @@ function validateBatchTranslations(batch, translations) {
 function protectInvariantText(value) {
   const tokens = [];
   const text = String(value).replace(
-    /https?:\/\/[^\s)\]}>"']+|[$€£¥]?[-+]?\d+(?:[,.]\d+)*(?:%|‰|[KMBT](?=\b))?/gi,
+    /⟦ZEN_INLINE_\d{3}⟧|https?:\/\/[^\s)\]}>"']+|[$€£¥]?[-+]?\d+(?:[,.]\d+)*(?:%|‰|[KMBT](?=\b))?/gi,
     (token) => `⟦ZEN_KEEP_${tokens.push(token)}⟧`,
   );
   return { text, tokens };
@@ -985,24 +1230,61 @@ function restoreInvariantText(value, tokens) {
 }
 
 function translationUnits(document) {
-  return [
-    { id: 'meta:title', text: document.title || '原文直译', kind: 'title' },
-    ...document.blocks
-      .filter((block) => BODY_BLOCK_TYPES.has(block.type) && block.text?.trim())
-      .map((block) => ({ id: block.id, text: block.text, kind: block.type })),
-  ];
+  const units = [{ id: 'meta:title', text: document.title || '原文直译', kind: 'title' }];
+  for (const block of document.blocks) {
+    if (['heading', 'paragraph', 'quote', 'list_item'].includes(block.type) && block.text?.trim()) {
+      units.push({ id: block.id, text: block.text, kind: block.type });
+    }
+    if (block.type === 'figure' && block.caption?.trim()) {
+      units.push({ id: `${block.id}:caption`, text: block.caption, kind: 'figure_caption' });
+    }
+    if (block.type === 'table') {
+      if (block.caption?.trim()) units.push({ id: `${block.id}:caption`, text: block.caption, kind: 'table_caption' });
+      for (const [rowIndex, row] of block.rows.entries()) {
+        for (const [columnIndex, cell] of row.entries()) {
+          if (!cell.text?.trim()) continue;
+          units.push({
+            id: `${block.id}:r${rowIndex}:c${columnIndex}`,
+            text: cell.text,
+            kind: 'table_cell',
+          });
+        }
+      }
+    }
+  }
+  return units;
 }
 
 function applyTranslations(source, completed) {
   const document = structuredClone(source);
   document.translatedTitle = completed.get('meta:title') || source.title;
-  for (const block of document.blocks) block.translatedText = completed.get(block.id);
+  for (const block of document.blocks) {
+    if (completed.has(block.id)) block.translatedText = completed.get(block.id);
+    if (completed.has(`${block.id}:caption`)) block.translatedCaption = completed.get(`${block.id}:caption`);
+    if (block.type === 'table') {
+      for (const [rowIndex, row] of block.rows.entries()) {
+        for (const [columnIndex, cell] of row.entries()) {
+          const translated = completed.get(`${block.id}:r${rowIndex}:c${columnIndex}`);
+          if (translated !== undefined) cell.translatedText = translated;
+        }
+      }
+    }
+  }
   return document;
 }
 
 function translatedUnitText(document, id) {
   if (id === 'meta:title') return document.translatedTitle;
-  return document.blocks.find((block) => block.id === id)?.translatedText;
+  const direct = document.blocks.find((block) => block.id === id);
+  if (direct) return direct.translatedText;
+  const caption = /^(b\d+):caption$/.exec(id);
+  if (caption) return document.blocks.find((block) => block.id === caption[1])?.translatedCaption;
+  const cell = /^(b\d+):r(\d+):c(\d+)$/.exec(id);
+  if (cell) {
+    return document.blocks.find((block) => block.id === cell[1])
+      ?.rows?.[Number(cell[2])]?.[Number(cell[3])]?.translatedText;
+  }
+  return undefined;
 }
 
 function batchUnits(units, maxChars, maxItems) {
@@ -1024,6 +1306,7 @@ function batchUnits(units, maxChars, maxItems) {
 
 function sameInvariantTokens(source, translated) {
   const tokens = (value) => [
+    ...(String(value).match(/⟦ZEN_INLINE_\d{3}⟧/g) || []),
     ...(String(value).match(/https?:\/\/[^\s)\]}>"']+/gi) || []),
     ...(String(value).match(/\$[A-Z]{1,6}\b|\b(?:NASDAQ|NYSE|AMEX|OTC)\s*:\s*[A-Z]{1,6}\b/g) || []),
   ].sort();
@@ -1075,7 +1358,7 @@ function createSourceDocument({
 }) {
   return {
     version: DOCUMENT_VERSION,
-    contentMode: 'body-text-only',
+    contentMode: 'structured-document',
     sourceType,
     extractor,
     sourceUrl,
@@ -1088,23 +1371,83 @@ function createSourceDocument({
   };
 }
 
-function blocksFromDom(root) {
+function blocksFromDom(root, documentUrl) {
   if (!root) return [];
   const blocks = [];
   let blockIndex = 0;
   let referencesStarted = false;
-  for (const node of root.querySelectorAll('h1,h2,h3,h4,h5,h6,p,blockquote,li')) {
-    if (referencesStarted) break;
+  const selector = [
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'blockquote', 'li',
+    'figure', 'table', 'pre', 'img', '.ltx_equationgroup', '.ltx_equation',
+    'math[display="block"]', '.ltx_bibitem',
+  ].join(',');
+  for (const node of root.querySelectorAll(selector)) {
     if (node.closest(EXCLUDED_CONTENT_SELECTOR)) continue;
+    if (node.matches('img') && node.closest('figure')) continue;
+    if (node.matches('.ltx_equation,math') && node.parentElement?.closest('.ltx_equation,.ltx_equationgroup')) continue;
+    if (node.matches('.ltx_bibitem') && node.parentElement?.closest('.ltx_bibitem')) continue;
+    if (!node.matches('figure,table,pre,.ltx_equationgroup,.ltx_equation,math[display="block"],.ltx_bibitem')
+      && node.closest('figure,table,pre,.ltx_equationgroup,.ltx_equation,.ltx_bibitem')) continue;
     if (node.tagName === 'P' && node.closest('blockquote,li')) continue;
     if (node.tagName === 'BLOCKQUOTE' && node.closest('li')) continue;
-    const text = textFromBodyNode(node);
-    if (!text) continue;
-    if (/^H[1-6]$/.test(node.tagName) && isReferencesHeading(text)) {
-      referencesStarted = true;
+    const id = `b${String(++blockIndex).padStart(6, '0')}`;
+
+    if (node.matches('figure,img')) {
+      const figure = figureFromNode(node, documentUrl);
+      if (!figure.images.length) {
+        blockIndex -= 1;
+        continue;
+      }
+      blocks.push({ id, order: blocks.length, type: 'figure', ...figure });
       continue;
     }
-    let type = 'paragraph';
+    if (node.matches('table')) {
+      const table = tableFromNode(node, documentUrl);
+      if (!table.rows.length) {
+        blockIndex -= 1;
+        continue;
+      }
+      blocks.push({ id, order: blocks.length, type: 'table', ...table });
+      continue;
+    }
+    if (node.matches('pre')) {
+      const code = String(node.textContent || '').replace(/^\n+|\n+$/g, '');
+      if (!code) {
+        blockIndex -= 1;
+        continue;
+      }
+      blocks.push({ id, order: blocks.length, type: 'code', text: code });
+      continue;
+    }
+    if (node.matches('.ltx_equationgroup,.ltx_equation,math[display="block"]')) {
+      const tex = mathTex(node);
+      if (!tex) {
+        blockIndex -= 1;
+        continue;
+      }
+      blocks.push({ id, order: blocks.length, type: 'equation', tex });
+      continue;
+    }
+    if (node.matches('.ltx_bibitem')) {
+      const rich = richTextFromNode(node, documentUrl);
+      if (!rich.text) {
+        blockIndex -= 1;
+        continue;
+      }
+      blocks.push({ id, order: blocks.length, type: 'reference', text: rich.text, fragments: rich.fragments });
+      continue;
+    }
+
+    const rich = richTextFromNode(node, documentUrl);
+    const text = rich.text;
+    if (!text) {
+      blockIndex -= 1;
+      continue;
+    }
+    if (/^H[1-6]$/.test(node.tagName) && isReferencesHeading(text)) {
+      referencesStarted = true;
+    }
+    let type = referencesStarted ? 'reference' : 'paragraph';
     const block = {};
     if (/^H[1-6]$/.test(node.tagName)) {
       type = 'heading';
@@ -1118,21 +1461,258 @@ function blocksFromDom(root) {
       block.depth = depth;
     }
     blocks.push({
-      id: `b${String(++blockIndex).padStart(6, '0')}`,
+      id,
       order: blocks.length,
       type,
       ...block,
       text,
+      fragments: rich.fragments,
     });
   }
   return blocks;
 }
 
-function textFromBodyNode(node) {
+function richTextFromNode(node, documentUrl) {
   const clone = node.cloneNode(true);
   clone.querySelectorAll(EXCLUDED_CONTENT_SELECTOR).forEach((child) => child.remove());
   if (node.tagName === 'LI') clone.querySelectorAll('ol,ul').forEach((child) => child.remove());
-  return cleanText(clone.textContent);
+  const fragments = [];
+  const protect = (value) => {
+    const token = `⟦ZEN_INLINE_${String(fragments.length + 1).padStart(3, '0')}⟧`;
+    fragments.push({ token, value });
+    return token;
+  };
+  for (const math of [...clone.querySelectorAll('math,.MathJax,.katex,.ltx_Math')]) {
+    const tex = mathTex(math);
+    math.replaceWith(clone.ownerDocument.createTextNode(protect(tex ? `$${tex}$` : cleanText(math.textContent))));
+  }
+  for (const link of [...clone.querySelectorAll('a[href]')]) {
+    const label = cleanText(link.textContent);
+    let value = label;
+    try {
+      const resolved = new URL(link.getAttribute('href'), documentUrl);
+      if (['http:', 'https:'].includes(resolved.protocol)) value = `[${label || resolved.href}](${resolved.href})`;
+    } catch {}
+    link.replaceWith(clone.ownerDocument.createTextNode(protect(value)));
+  }
+  for (const br of [...clone.querySelectorAll('br')]) br.replaceWith(clone.ownerDocument.createTextNode('\n'));
+  return { text: cleanTextPreservingLines(clone.textContent), fragments };
+}
+
+function figureFromNode(node, documentUrl) {
+  const images = node.matches('img') ? [node] : [...node.querySelectorAll('img')];
+  const captionNode = node.matches('figure')
+    ? node.querySelector('figcaption,.ltx_caption,[class*="caption"]')
+    : undefined;
+  const caption = captionNode ? richTextFromNode(captionNode, documentUrl) : { text: '', fragments: [] };
+  return {
+    images: images.map((image) => ({
+      src: resolveAssetUrl(image.getAttribute('src') || image.getAttribute('data-src'), documentUrl),
+      alt: cleanText(image.getAttribute('alt') || ''),
+    })).filter((image) => image.src),
+    caption: caption.text,
+    captionFragments: caption.fragments,
+  };
+}
+
+function tableFromNode(node, documentUrl) {
+  const captionNode = node.querySelector('caption') || node.closest('figure')?.querySelector('figcaption,.ltx_caption');
+  const caption = captionNode ? richTextFromNode(captionNode, documentUrl) : { text: '', fragments: [] };
+  const rows = [];
+  const pendingRowspans = new Map();
+  for (const row of node.querySelectorAll('tr')) {
+    const cells = [];
+    let column = 0;
+    const placePending = () => {
+      while (pendingRowspans.has(column)) {
+        const pending = pendingRowspans.get(column);
+        cells[column] = { text: pending.text, fragments: structuredClone(pending.fragments || []) };
+        pending.remaining -= 1;
+        if (pending.remaining <= 0) pendingRowspans.delete(column);
+        column += 1;
+      }
+    };
+    placePending();
+    for (const cell of row.querySelectorAll(':scope > th,:scope > td')) {
+      placePending();
+      const rich = richTextFromNode(cell, documentUrl);
+      const colspan = clamp(cell.getAttribute('colspan') || 1, 1, 50);
+      const rowspan = clamp(cell.getAttribute('rowspan') || 1, 1, 200);
+      for (let span = 0; span < colspan; span += 1) {
+        const value = span === 0 ? rich : { text: '', fragments: [] };
+        cells[column] = { text: value.text, fragments: value.fragments };
+        if (rowspan > 1) {
+          pendingRowspans.set(column, {
+            text: value.text,
+            fragments: structuredClone(value.fragments || []),
+            remaining: rowspan - 1,
+          });
+        }
+        column += 1;
+      }
+    }
+    placePending();
+    if (cells.some((cell) => cell?.text)) rows.push(cells.map((cell) => cell || { text: '', fragments: [] }));
+  }
+  const width = Math.max(0, ...rows.map((row) => row.length));
+  for (const row of rows) while (row.length < width) row.push({ text: '', fragments: [] });
+  return { caption: caption.text, captionFragments: caption.fragments, rows };
+}
+
+function mathTex(node) {
+  const math = node.matches?.('math') ? node : node.querySelector?.('math');
+  return cleanMath(
+    math?.getAttribute('alttext')
+      || math?.querySelector?.('annotation[encoding*="tex" i]')?.textContent
+      || node.getAttribute?.('data-tex')
+      || node.getAttribute?.('aria-label')
+      || math?.textContent
+      || node.textContent,
+  );
+}
+
+function cleanMath(value) {
+  return String(value || '').trim()
+    .replace(/^\\\(|\\\)$/g, '')
+    .replace(/^\\\[|\\\]$/g, '')
+    .replace(/^\$\$?|\$\$?$/g, '')
+    .trim();
+}
+
+function resolveAssetUrl(value, documentUrl) {
+  if (!value) return '';
+  if (/^data:/i.test(value)) return value;
+  try { return new URL(value, documentUrl).toString(); }
+  catch { return String(value); }
+}
+
+async function localizeFigureAssets(blocks, {
+  workDir,
+  fetchFn,
+  fetchWithRetry,
+  config,
+  dnsLookup,
+  assetMap,
+}) {
+  const figures = blocks.filter((block) => block.type === 'figure');
+  const images = figures.flatMap((block) => block.images || []);
+  const limits = limitsFor(config);
+  if (images.length > limits.maxAssetCount) {
+    throw new Error(`原文图片数量超过上限:${images.length}/${limits.maxAssetCount}`);
+  }
+  const assetDir = path.join(workDir, 'translation-assets');
+  fs.mkdirSync(assetDir, { recursive: true });
+  const cache = new Map();
+  let totalBytes = 0;
+
+  for (const [index, image] of images.entries()) {
+    const mapped = mappedAssetPath(image.src, assetMap);
+    if (mapped) {
+      const size = fs.statSync(mapped).size;
+      totalBytes += size;
+      if (totalBytes > limits.maxAssetBytes) {
+        throw new Error(`原文图片总量超过上限:${totalBytes}/${limits.maxAssetBytes}`);
+      }
+      image.localPath = mapped;
+      continue;
+    }
+    if (cache.has(image.src)) {
+      image.localPath = cache.get(image.src);
+      continue;
+    }
+
+    let buffer;
+    let contentType = '';
+    if (/^data:image\//i.test(image.src)) {
+      const decoded = decodeDataImage(image.src);
+      buffer = decoded.buffer;
+      contentType = decoded.contentType;
+    } else {
+      const fetched = await safeFetchResource({
+        url: image.src,
+        fetchFn,
+        fetchWithRetry,
+        limits,
+        dnsLookup,
+        accept: 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml;q=0.9,*/*;q=0.1',
+        maxBytes: limits.maxSingleAssetBytes,
+      });
+      buffer = fetched.buffer;
+      contentType = fetched.contentType;
+    }
+    if (buffer.length > limits.maxSingleAssetBytes) {
+      throw new Error(`原文单张图片超过上限:${buffer.length}/${limits.maxSingleAssetBytes}`);
+    }
+    totalBytes += buffer.length;
+    if (totalBytes > limits.maxAssetBytes) {
+      throw new Error(`原文图片总量超过上限:${totalBytes}/${limits.maxAssetBytes}`);
+    }
+    const kind = detectImageKind(buffer, contentType);
+    if (!kind) throw new Error(`原文图片格式不受支持:${image.src}`);
+    const basename = `figure-${String(index + 1).padStart(3, '0')}`;
+    let target;
+    if (kind.extension === '.svg') {
+      target = path.join(assetDir, `${basename}.png`);
+      await rasterizeSvg(buffer, target, config);
+    } else {
+      target = path.join(assetDir, `${basename}${kind.extension}`);
+      fs.writeFileSync(target, buffer, { mode: 0o600 });
+    }
+    image.localPath = target;
+    cache.set(image.src, target);
+  }
+}
+
+function mappedAssetPath(rawSrc, assetMap) {
+  let pathname = '';
+  try { pathname = decodeURIComponent(new URL(rawSrc).pathname).replace(/^\/+/, ''); }
+  catch { pathname = decodeURIComponent(String(rawSrc || '').split(/[?#]/)[0]).replace(/^\.?\//, ''); }
+  const candidates = [pathname, path.basename(pathname), String(rawSrc || '')];
+  for (const candidate of candidates) {
+    const mapped = assetMap?.[candidate];
+    if (mapped && fs.existsSync(mapped) && fs.statSync(mapped).size > 0) return mapped;
+  }
+  return '';
+}
+
+function decodeDataImage(value) {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/is.exec(String(value || ''));
+  if (!match) throw new Error('原文内嵌图片不是受支持的 base64 格式');
+  return { contentType: match[1].toLowerCase(), buffer: Buffer.from(match[2], 'base64') };
+}
+
+function detectImageKind(buffer, contentType) {
+  if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return { extension: '.png', contentType: 'image/png' };
+  }
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return { extension: '.jpg', contentType: 'image/jpeg' };
+  if (['GIF87a', 'GIF89a'].includes(buffer.subarray(0, 6).toString('ascii'))) return { extension: '.gif', contentType: 'image/gif' };
+  if (buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP') {
+    return { extension: '.webp', contentType: 'image/webp' };
+  }
+  const head = buffer.subarray(0, Math.min(buffer.length, 1024)).toString('utf8').trimStart();
+  if (/image\/svg\+xml/i.test(contentType) || /^<\?xml[\s\S]*?<svg\b/i.test(head) || /^<svg\b/i.test(head)) {
+    return { extension: '.svg', contentType: 'image/svg+xml' };
+  }
+  return undefined;
+}
+
+async function rasterizeSvg(buffer, target, config) {
+  let playwright;
+  try { playwright = await import('playwright-core'); }
+  catch { throw new Error('SVG 图片转 PNG 需要 playwright-core'); }
+  const executablePath = config.browserExecutablePath
+    || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  if (!fs.existsSync(executablePath)) throw new Error(`找不到 SVG 转换浏览器:${executablePath}`);
+  const browser = await playwright.chromium.launch({ executablePath, headless: true, args: ['--disable-network'] });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 }, deviceScaleFactor: 2 });
+    const dataUrl = `data:image/svg+xml;base64,${buffer.toString('base64')}`;
+    await page.setContent(`<style>html,body{margin:0;background:white}img{display:block;max-width:1400px;height:auto}</style><img id="asset" src="${dataUrl}">`);
+    await page.locator('#asset').screenshot({ path: target, omitBackground: false });
+  } finally {
+    await browser.close();
+  }
 }
 
 function discardExcludedContent(document) {
@@ -1140,61 +1720,21 @@ function discardExcludedContent(document) {
 }
 
 function assertSourceDocumentComplete(document) {
-  if (!document.blocks?.length) throw new Error('原文正文文字提取结果为空');
-  if (document.blocks.some((block) => !BODY_BLOCK_TYPES.has(block.type))) {
-    throw new Error('原文提取结果含非正文文字内容');
+  if (!document.blocks?.length) throw new Error('原文结构化提取结果为空');
+  if (document.blocks.some((block) => !DOCUMENT_BLOCK_TYPES.has(block.type))) {
+    throw new Error('原文提取结果含未知结构内容');
   }
   const textLength = translationUnits(document).reduce((sum, unit) => sum + unit.text.length, 0);
-  if (document.sourceType === 'html' && textLength < 300) throw new Error(`网页正文过短:${textLength} 字符`);
+  const visualBlocks = document.blocks.filter((block) => ['figure', 'table', 'equation'].includes(block.type)).length;
+  if (document.sourceType === 'html' && textLength < 120 && visualBlocks === 0) {
+    throw new Error(`网页正文过短:${textLength} 字符`);
+  }
 }
 
 function shouldUseBrowser(document, html) {
   const textLength = translationUnits(document).reduce((sum, unit) => sum + unit.text.length, 0);
   return (textLength < 500 || document.blocks.length < 3)
     && /<(?:script|div)[^>]+id=["'](?:__next|__nuxt|app|root)["']/i.test(html);
-}
-
-function pdfParagraphs(text) {
-  const lines = String(text || '').replace(/\r/g, '').split('\n');
-  const blocks = [];
-  let current = [];
-  for (const line of lines) {
-    if (!line.trim()) {
-      if (current.length) blocks.push(current.join(' '));
-      current = [];
-      continue;
-    }
-    if (isPdfTableLikeLine(line)) {
-      if (current.length) blocks.push(current.join(' '));
-      current = [];
-      continue;
-    }
-    current.push(line.trim());
-  }
-  if (current.length) blocks.push(current.join(' '));
-  return blocks;
-}
-
-function isPdfTableLikeLine(line) {
-  const trimmed = String(line || '').trim();
-  if (!trimmed) return false;
-  if (/^(?:Table|Figure|Fig\.)\s*\d+\b/i.test(trimmed)) return true;
-  if (/^\|.*\|$/.test(trimmed)) return true;
-  const columns = trimmed.split(/\s{2,}/).filter(Boolean);
-  if (columns.length >= 3) return true;
-  if (columns.length >= 2 && columns.filter((value) => /\d/.test(value)).length >= 2) return true;
-  return false;
-}
-
-function isPdfNonBodyBlock(text, page, pages) {
-  if (/^\d{1,4}$/.test(text) && Number(text) >= 1 && Number(text) <= pages) return true;
-  if (new RegExp(`^${page}$`).test(text)) return true;
-  return /^(?:Table|Figure|Fig\.)\s*\d+\b/i.test(text);
-}
-
-function looksLikeHeading(text) {
-  const words = String(text).split(/\s+/);
-  return text.length <= 100 && words.length <= 12 && !/[.!?。！？]$/.test(text);
 }
 
 function isReferencesHeading(text) {
@@ -1204,6 +1744,28 @@ function isReferencesHeading(text) {
 function isMarkdownTableStart(lines, index) {
   return /^\s*\|.*\|\s*$/.test(lines[index] || '')
     && /^\s*\|?\s*:?-{3,}/.test(lines[index + 1] || '');
+}
+
+function splitMarkdownTableRow(line) {
+  const value = String(line || '').trim().replace(/^\|/, '').replace(/\|$/, '');
+  const cells = [];
+  let current = '';
+  let escaped = false;
+  for (const char of value) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+    } else if (char === '\\') {
+      escaped = true;
+    } else if (char === '|') {
+      cells.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
 }
 
 function cleanMarkdownText(value) {
@@ -1216,7 +1778,65 @@ function cleanMarkdownText(value) {
 
 function sourceAttribution(document) {
   const site = (() => { try { return new URL(document.sourceUrl).hostname; } catch { return '未知'; } })();
-  return `来源：《${document.title || '未知标题'}》，作者 ${document.author || '未知'}，发布于 ${site}，原文链接 ${document.sourceUrl}，发布日期 ${document.publishedDate || '未知'}。`;
+  return [
+    '> **原文信息**',
+    `> 原文：《${document.title || '未知标题'}》`,
+    `> 作者：${document.author || '未知'} ｜ 来源：${site} ｜ 日期：${document.publishedDate || '未知'}`,
+    `> 翻译范围：${scopeLabel(document.scope)} ｜ [查看原文](${document.sourceUrl})`,
+  ].join('\n');
+}
+
+function ensureTranslatedTitle(value) {
+  const title = cleanText(value);
+  return /(?:译文|翻译|（译）|\(译\))$/.test(title) ? title : `${title}（译）`;
+}
+
+function restoreFragments(value, fragments = []) {
+  let text = String(value || '');
+  for (const fragment of fragments || []) text = text.replaceAll(fragment.token, fragment.value);
+  return text;
+}
+
+function renderMarkdownTable(block) {
+  const rows = (block.rows || []).map((row) => row.map((cell) => {
+    const value = restoreFragments(cell.translatedText ?? cell.text ?? '', cell.fragments);
+    return escapeTableCell(value);
+  }));
+  if (!rows.length) return [];
+  const width = Math.max(1, ...rows.map((row) => row.length));
+  for (const row of rows) while (row.length < width) row.push('');
+  const header = rows[0];
+  const body = rows.slice(1);
+  return [
+    `| ${header.join(' | ')} |`,
+    `| ${header.map(() => '---').join(' | ')} |`,
+    ...body.map((row) => `| ${row.join(' | ')} |`),
+  ];
+}
+
+function escapeTableCell(value) {
+  return String(value || '').replace(/\|/g, '\\|').replace(/\n+/g, '<br>');
+}
+
+function captionLine(label, caption) {
+  return `<p style="text-align:center;color:#7b8490;font-size:.78em;line-height:1.55;margin:.35em 0 1.2em">${escapeHtml(label)}：${escapeHtml(caption)}</p>`;
+}
+
+function escapeMarkdownAlt(value) {
+  return String(value || '').replace(/[[\]\\]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function sameLooseText(left, right) {
+  const normalize = (value) => cleanText(value).replace(/[（(]译[）)]$/, '').replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase();
+  return normalize(left) === normalize(right);
 }
 
 export function assertPdfPageLimit(pdfPath, maxPdfPages, spawn = spawnSync) {
@@ -1226,7 +1846,7 @@ export function assertPdfPageLimit(pdfPath, maxPdfPages, spawn = spawnSync) {
     maxBuffer: 1024 * 1024,
     killSignal: 'SIGKILL',
   });
-  if (result.error?.code === 'ENOENT') throw new Error('PDF 文字提取缺少 Poppler 命令 pdfinfo');
+  if (result.error?.code === 'ENOENT') throw new Error('PDF 页数校验缺少 Poppler 命令 pdfinfo');
   if (result.error) throw new Error(`PDF 页数检查失败:${safeError(result.error)}`);
   if (result.status !== 0) throw new Error(`PDF 页数检查失败:${String(result.stderr || '').slice(0, 300)}`);
   const pages = Number(/^Pages:\s+(\d+)/mi.exec(result.stdout || '')?.[1] || 0);
@@ -1242,7 +1862,7 @@ function runCommand(command, args, { timeout = 30000 } = {}) {
     maxBuffer: 32 * 1024 * 1024,
     killSignal: 'SIGKILL',
   });
-  if (result.error?.code === 'ENOENT') throw new Error(`PDF 文字提取缺少 Poppler 命令 ${command}`);
+  if (result.error?.code === 'ENOENT') throw new Error(`PDF 元数据校验缺少 Poppler 命令 ${command}`);
   if (result.error) throw new Error(`${command} 执行失败:${safeError(result.error)}`);
   if (result.status !== 0) throw new Error(`${command} 执行失败:${String(result.stderr || '').slice(0, 300)}`);
   return String(result.stdout || '');
@@ -1320,6 +1940,20 @@ function extractInputUrls(text) {
     .map((url) => url.replace(/[.,;:!?)\]}>，。；：！？】【、】【【】）》〉]+$/, ''));
 }
 
+function arxivSourceUrls(rawUrl) {
+  let url;
+  try { url = new URL(rawUrl); } catch { return undefined; }
+  if (!['arxiv.org', 'www.arxiv.org'].includes(url.hostname.toLowerCase())) return undefined;
+  const match = /^\/(?:abs|pdf|html)\/(\d{4}\.\d{4,5}(?:v\d+)?)(?:\.pdf)?(?:\/|$)/i.exec(url.pathname);
+  if (!match) return undefined;
+  const id = match[1];
+  return {
+    id,
+    html: `https://arxiv.org/html/${id}`,
+    pdf: `https://arxiv.org/pdf/${id}`,
+  };
+}
+
 function limitsFor(config) {
   return {
     maxSourceBytes: positive(config.maxSourceBytes, DEFAULT_LIMITS.maxSourceBytes),
@@ -1327,6 +1961,9 @@ function limitsFor(config) {
     browserTimeoutMs: positive(config.browserTimeoutMs, DEFAULT_LIMITS.browserTimeoutMs),
     fetchTimeoutMs: positive(config.fetchTimeoutMs, DEFAULT_LIMITS.fetchTimeoutMs),
     maxRedirects: nonNegative(config.maxRedirects, DEFAULT_LIMITS.maxRedirects),
+    maxAssetCount: positive(config.maxAssetCount, DEFAULT_LIMITS.maxAssetCount),
+    maxAssetBytes: positive(config.maxAssetBytes, DEFAULT_LIMITS.maxAssetBytes),
+    maxSingleAssetBytes: positive(config.maxSingleAssetBytes, DEFAULT_LIMITS.maxSingleAssetBytes),
   };
 }
 
@@ -1345,6 +1982,16 @@ function cleanText(value) {
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cleanTextPreservingLines(value) {
+  return String(value || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/[^\S\n]+/g, ' ')
+    .replace(/\s*\n\s*/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 

@@ -23,6 +23,8 @@ host):
 WORK_DIR=/var/lib/zen-content-hub/work
 DB_PATH=/var/lib/zen-content-hub/runs.db
 TRANSLATION_BROWSER_EXECUTABLE=/usr/bin/google-chrome
+DATALAB_API_KEY=replace-with-datalab-api-key
+DATALAB_MODE=balanced
 CRON_TIMEZONE=America/Los_Angeles
 HEALTH_HOST=127.0.0.1
 HEALTH_PORT=8080
@@ -31,6 +33,14 @@ MAX_QUEUE_SIZE=100
 SLACK_ALLOWED_USER_IDS=U0123456789
 SLACK_ALLOWED_CHANNEL_IDS=C0123456789
 ```
+
+Structured HTML and arXiv HTML translation run directly in this Node.js
+service. PDF translation sends the downloaded PDF to Datalab's hosted
+conversion API, then immediately stores the returned images inside that run's
+artifact directory before translation and rendering continue locally. The
+Droplet therefore does not need Marker/MinerU models; `DATALAB_API_KEY` is
+required only when a translation resolves to PDF. Keep it in the protected
+service environment, never in the repository.
 
 The application does not enforce a public-IP allowlist and does not reject
 proxy environment variables. Outbound routing follows the host and Node.js

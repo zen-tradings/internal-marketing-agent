@@ -60,7 +60,7 @@ export function loadConfig(env = process.env) {
       appTitle: env.OPENROUTER_APP_TITLE || 'Zen Content Hub',
     },
     translation: {
-      // 直译固定为正文文字模式，不提供图片、表格或旧链回退开关。
+      // 直译优先使用原站结构化 HTML；PDF 由 Datalab 托管解析后回到同一结构化链路。
       browserEnabled: env.TRANSLATION_BROWSER_ENABLED === undefined
         ? true
         : booleanFlag(env.TRANSLATION_BROWSER_ENABLED),
@@ -68,10 +68,18 @@ export function loadConfig(env = process.env) {
         || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
       browserTimeoutMs: positiveNumber(env.TRANSLATION_BROWSER_TIMEOUT_MS, 45000, 'TRANSLATION_BROWSER_TIMEOUT_MS'),
       fetchTimeoutMs: positiveNumber(env.TRANSLATION_FETCH_TIMEOUT_MS, 30000, 'TRANSLATION_FETCH_TIMEOUT_MS'),
-      maxSourceBytes: positiveIntegerOrThrow(env.TRANSLATION_MAX_SOURCE_BYTES, 12 * 1024 * 1024, 'TRANSLATION_MAX_SOURCE_BYTES'),
+      maxSourceBytes: positiveIntegerOrThrow(env.TRANSLATION_MAX_SOURCE_BYTES, 50 * 1024 * 1024, 'TRANSLATION_MAX_SOURCE_BYTES'),
       maxPdfPages: positiveIntegerOrThrow(env.TRANSLATION_MAX_PDF_PAGES, 120, 'TRANSLATION_MAX_PDF_PAGES'),
       maxRedirects: nonNegativeInteger(env.TRANSLATION_MAX_REDIRECTS, 5, 'TRANSLATION_MAX_REDIRECTS'),
+      maxAssetCount: positiveIntegerOrThrow(env.TRANSLATION_MAX_ASSET_COUNT, 80, 'TRANSLATION_MAX_ASSET_COUNT'),
+      maxAssetBytes: positiveIntegerOrThrow(env.TRANSLATION_MAX_ASSET_BYTES, 40 * 1024 * 1024, 'TRANSLATION_MAX_ASSET_BYTES'),
+      maxSingleAssetBytes: positiveIntegerOrThrow(env.TRANSLATION_MAX_SINGLE_ASSET_BYTES, 10 * 1024 * 1024, 'TRANSLATION_MAX_SINGLE_ASSET_BYTES'),
       notionApiToken: env.NOTION_API_TOKEN || '',
+      datalabApiKey: env.DATALAB_API_KEY || '',
+      datalabBaseUrl: env.DATALAB_API_BASE_URL || 'https://www.datalab.to/api/v1',
+      datalabMode: translationMode(env.DATALAB_MODE),
+      datalabTimeoutMs: positiveNumber(env.DATALAB_TIMEOUT_MS, 5 * 60 * 1000, 'DATALAB_TIMEOUT_MS'),
+      datalabPollIntervalMs: positiveNumber(env.DATALAB_POLL_INTERVAL_MS, 2000, 'DATALAB_POLL_INTERVAL_MS'),
     },
     slack: {
       botToken: need('SLACK_BOT_TOKEN'),
@@ -164,4 +172,12 @@ function newsletterAudienceStage(value) {
 
 function booleanFlag(value) {
   return /^(1|true|yes|on)$/i.test(String(value || '').trim());
+}
+
+function translationMode(value) {
+  const mode = String(value || 'balanced').trim().toLowerCase();
+  if (!['fast', 'balanced', 'accurate'].includes(mode)) {
+    throw new Error('DATALAB_MODE 必须是 fast、balanced 或 accurate');
+  }
+  return mode;
 }

@@ -27,13 +27,16 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal(c.writer.exaTimeoutMs, 45000); // 默认
   assert.equal(c.translation.browserEnabled, true);
   assert.equal(c.translation.maxPdfPages, 120);
+  assert.equal(c.translation.maxSourceBytes, 50 * 1024 * 1024);
+  assert.equal(c.translation.datalabBaseUrl, 'https://www.datalab.to/api/v1');
+  assert.equal(c.translation.datalabMode, 'balanced');
   assert.match(c.cover.generatorDir, /tools\/cover-generator$/);
   assert.equal('claudeBin' in c, false);
   assert.equal(c.wechat.appId, 'wx');
   assert.match(c.assets.footerImage, /assets\/zen-footer-qr\.png$/);
 });
 
-test('纯文字直译抓取、浏览器、PDF 与 Notion 配置可由 env 覆盖', () => {
+test('结构化直译抓取、浏览器、PDF、图片、Notion 与 Datalab 配置可由 env 覆盖', () => {
   const c = loadConfig({
     SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
     WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec',
@@ -41,12 +44,18 @@ test('纯文字直译抓取、浏览器、PDF 与 Notion 配置可由 env 覆盖
     TRANSLATION_BROWSER_ENABLED: 'false',
     TRANSLATION_BROWSER_EXECUTABLE: '/Applications/Chromium',
     TRANSLATION_MAX_PDF_PAGES: '60',
+    TRANSLATION_MAX_ASSET_COUNT: '30',
     NOTION_API_TOKEN: 'notion-secret',
+    DATALAB_API_KEY: 'datalab-secret',
+    DATALAB_MODE: 'accurate',
   });
   assert.equal(c.translation.browserEnabled, false);
   assert.equal(c.translation.browserExecutablePath, '/Applications/Chromium');
   assert.equal(c.translation.maxPdfPages, 60);
+  assert.equal(c.translation.maxAssetCount, 30);
   assert.equal(c.translation.notionApiToken, 'notion-secret');
+  assert.equal(c.translation.datalabApiKey, 'datalab-secret');
+  assert.equal(c.translation.datalabMode, 'accurate');
 });
 
 test('旧公网出口白名单变量不再生成运行时门禁配置', () => {

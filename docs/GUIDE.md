@@ -43,7 +43,7 @@
 ## 二、配置的三层
 
 1. **`.env`（运行时开关，改完要重启进程）**：密钥、模型、任务目录、队列上限、抓取/外部 API 超时、Slack 允许名单、数据保留期、`HUB_DRY_RUN=1`、头尾图和定时表达式。完整列表和默认值以 `.env.example` 为准。服务不配置或校验公网出口 IP。
-2. **`src/workflows/*.js`(声明式工作流,一等公民)**:每个文件 = 一种文章类型,声明 id、触发器、渠道、promptTemplate、优先信源。公共部分(env getter、信源清单、通用写作规范)在 `workflows/shared.js`；纯文字直译的正文提取在 `translation-source-text.js`，入口、追踪和断点续跑在 `translate-engine.js`。
+2. **`src/workflows/*.js`(声明式工作流,一等公民)**:每个文件 = 一种文章类型,声明 id、触发器、渠道、promptTemplate、优先信源。公共部分(env getter、信源清单、通用写作规范)在 `workflows/shared.js`；结构化直译的范围识别、内容提取和重组在 `translation-scope.js`、`translation-source-text.js`，Datalab PDF 适配在 `datalab-parser.js`，入口、追踪和断点续跑在 `translate-engine.js`。
 3. **`src/config/index.js`(env → config 对象的翻译层)**:新加 env 键时在这里给默认值。
 
 ## 三、想改什么,去哪改
@@ -55,9 +55,11 @@
 | 公司深度分析框架 / 专项深搜 | `src/workflows/company.js` | 连续季度、竞争、产业链与趋势图；额外三组 type=deep 查询 |
 | 标准官方深度发现 | `src/core/runner.js` 的 `official-discovery` | 所有研究型任务均运行；只保留官方/一手结果 |
 | Slack 触发前缀/中文别名 | `src/triggers/slack.js` 的 WORKFLOW_ALIASES | 微信/财报/行业/晨报/直译… |
-| 直译正文提取/结构 | `src/workflows/translation-source-text.js` | Readability → Playwright、Notion、PDF 纯文字适配；图片、图题、表格、表题和代码块在模型调用前删除 |
-| 直译翻译/完整性/续跑 | `src/workflows/translate-engine.js` | 固定纯文字模式，逐 block 翻译、确定性重组、完整性门禁与 checkpoint |
-| 直译抓取配置 | `.env` 的 `TRANSLATION_*` / `NOTION_API_TOKEN` | 只控制正文来源大小、PDF 页数、浏览器、超时和重定向；没有图片/表格处理或旧链开关 |
+| 直译范围识别 | `src/workflows/translation-scope.js` | 页码和章节范围；用户页码为 1-based，Datalab 请求转换为 0-based |
+| 直译内容提取/结构 | `src/workflows/translation-source-text.js` | arXiv HTML 优先、普通 HTML/Notion；保留标题、段落、图表、公式、代码和引用 |
+| PDF 结构化解析 | `src/workflows/datalab-parser.js` | 托管 Datalab API、异步轮询、质量重试及图片资产落盘；密钥只在 PDF 路径需要 |
+| 直译翻译/完整性/续跑 | `src/workflows/translate-engine.js` | 逐文本节点翻译、确定性重组、图表公式完整性门禁与 checkpoint |
+| 直译抓取配置 | `.env` 的 `TRANSLATION_*` / `NOTION_API_TOKEN` / `DATALAB_*` | 控制来源、图片、PDF 页数、浏览器、解析质量、超时和重定向 |
 | Slack 自然语言意图/裸链接行为 | `src/triggers/slack.js` 的 NATURAL_RULES | URL 只是研究素材；仅显式翻译才走 translate |
 | 优先信源加减域名 | `workflows/shared.js` 的清单,或 .env EXA_PRIORITY_DOMAINS | 写主域即可,子域自动匹配 |
 | 门禁规则(拦截/提醒) | `src/lib/gate.js` | 注意:投资建议敏感词已按要求移除,勿加回 |

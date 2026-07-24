@@ -30,7 +30,7 @@ function jsonTranslator(assertPayload) {
     return JSON.stringify({
       translations: payload.units.map((unit) => ({
         id: unit.id,
-        text: unit.id === 'meta:title' ? '纯文字译文' : `这是忠实的中文正文译文，保留原有语义。${unit.id}`,
+        text: unit.id === 'meta:title' ? '结构化译文' : `中文译文：${unit.text}`,
       })),
     });
   };
@@ -60,7 +60,30 @@ test('PDF 页数在文字提取前受硬上限保护', () => {
   assert.throws(() => assertPdfPageLimit('/tmp/source.pdf', 120, spawn), /121\/120/);
 });
 
-test('HTML 只提取正文文字，图片、图题和表格不会进入 SourceDocument', async () => {
+test('arXiv PDF 链接在未指定页码时优先读取官方 HTML', async () => {
+  const calls = [];
+  const paragraph = 'Structured arXiv HTML preserves headings and paragraphs for faithful translation. '.repeat(5);
+  const document = await acquireSourceDocument({
+    sourceUrl: 'https://arxiv.org/pdf/2606.26350',
+    workDir: tempDir(),
+    fetchFn: async (url) => {
+      calls.push(String(url));
+      return new Response(`<article class="ltx_document"><h1>Paper</h1><p>${paragraph}</p></article>`, {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    },
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+    config: { browserEnabled: false },
+    dnsLookup: PUBLIC_DNS,
+    scope: { kind: 'all', requestedText: '' },
+  });
+  assert.equal(calls[0], 'https://arxiv.org/html/2606.26350');
+  assert.equal(document.sourceType, 'html');
+  assert.ok(document.acquisition.attempts.includes('arxiv-html'));
+});
+
+test('HTML 保留标题、段落、图片图注、表格、代码和列表结构', async () => {
   const paragraph = 'This is a complete article paragraph with enough body text for deterministic extraction and translation. '.repeat(4);
   const html = `<!doctype html><html><head><title>Text source</title></head><body>
     <article>
@@ -78,15 +101,49 @@ test('HTML 只提取正文文字，图片、图题和表格不会进入 SourceDo
     html,
     sourceUrl: 'https://example.com/article',
   });
-  assert.deepEqual([...new Set(document.blocks.map((block) => block.type))].sort(), ['heading', 'list_item', 'paragraph']);
-  const extracted = document.blocks.map((block) => block.text).join('\n');
-  assert.doesNotMatch(extracted, /SECRET_IMAGE|SECRET_FIGURE|SECRET_TABLE|SECRET_CODE_BLOCK|999999/);
-  assert.equal(document.contentMode, 'body-text-only');
-  assert.equal('assets' in document, false);
-  assert.equal(buildDocumentManifest(document).contentMode, 'body-text-only');
+  assert.deepEqual(
+    [...new Set(document.blocks.map((block) => block.type))].sort(),
+    ['code', 'figure', 'heading', 'list_item', 'paragraph', 'table'],
+  );
+  assert.equal(document.blocks.find((block) => block.type === 'figure').caption, 'SECRET_FIGURE_CAPTION');
+  assert.equal(document.blocks.find((block) => block.type === 'table').rows[0][0].text, 'SECRET_TABLE_HEADER');
+  assert.equal(document.blocks.find((block) => block.type === 'code').text, 'SECRET_CODE_BLOCK');
+  assert.equal(document.contentMode, 'structured-document');
+  assert.equal(buildDocumentManifest(document).contentMode, 'structured-document');
 });
 
-test('Markdown/Notion 只保留正文段落、小标题和列表', async () => {
+test('章节范围先裁剪结构再下载该范围内的图片', async () => {
+  const calls = [];
+  const html = `<article>
+    <h2>Introduction</h2>
+    <figure><img src="/outside.png"><figcaption>Outside</figcaption></figure>
+    <h2>Results</h2>
+    <p>${'Results body with enough structured source text. '.repeat(4)}</p>
+    <figure><img src="/inside.png"><figcaption>Inside</figcaption></figure>
+    <h2>Conclusion</h2>
+    <p>Conclusion body.</p>
+  </article>`;
+  const document = await sourceDocumentFromHtml({
+    html,
+    sourceUrl: 'https://example.com/article',
+    workDir: tempDir(),
+    scope: { kind: 'sections', start: 'Results', end: 'Results' },
+    dnsLookup: PUBLIC_DNS,
+    fetchFn: async (url) => {
+      calls.push(String(url));
+      if (!String(url).endsWith('/inside.png')) throw new Error('不应下载范围外图片');
+      return new Response(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB', 'base64'), {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      });
+    },
+  });
+  assert.deepEqual(calls, ['https://example.com/inside.png']);
+  assert.deepEqual(document.blocks.map((block) => block.type), ['heading', 'paragraph', 'figure']);
+  assert.equal(document.scope.appliedStartHeading, 'Results');
+});
+
+test('Markdown/Notion 保留图片、表格、代码和参考文献', async () => {
   const document = await sourceDocumentFromMarkdown({
     sourceUrl: 'https://workspace.notion.site/Report-0123456789abcdef0123456789abcdef',
     markdown: `# Report
@@ -110,15 +167,23 @@ const secretCode = true;
 Reference that should not be translated.
 `,
   });
-  assert.deepEqual(document.blocks.map((block) => block.type), ['heading', 'paragraph', 'list_item']);
-  const extracted = document.blocks.map((block) => block.text).join('\n');
-  assert.doesNotMatch(extracted, /SECRET_IMAGE|SECRET_TABLE|secretCode|Reference that/);
+  assert.deepEqual(
+    document.blocks.map((block) => block.type),
+    ['heading', 'paragraph', 'figure', 'table', 'code', 'list_item', 'heading', 'reference'],
+  );
+  assert.equal(document.blocks.find((block) => block.type === 'figure').caption, 'SECRET_IMAGE');
+  assert.equal(document.blocks.find((block) => block.type === 'table').rows[1][1].text, '100');
+  assert.match(document.blocks.find((block) => block.type === 'code').text, /secretCode/);
+  assert.match(document.blocks.find((block) => block.type === 'reference').text, /Reference that/);
 });
 
-test('结构化翻译只把正文文字单元发送给模型', async () => {
+test('结构化翻译覆盖标题、正文、图注和表格单元格并保留公式与图片', async () => {
+  const workDir = tempDir();
+  const imagePath = path.join(workDir, 'figure.png');
+  fs.writeFileSync(imagePath, Buffer.from([1, 2, 3]));
   const source = {
-    version: 3,
-    contentMode: 'body-text-only',
+    version: 4,
+    contentMode: 'structured-document',
     sourceType: 'html',
     extractor: 'fixture',
     sourceUrl: 'https://example.com/a',
@@ -128,29 +193,57 @@ test('结构化翻译只把正文文字单元发送给模型', async () => {
     sha256: 'source-hash',
     blocks: [
       { id: 'b000001', order: 0, type: 'heading', level: 1, text: 'Opening' },
-      { id: 'b000002', order: 1, type: 'paragraph', text: 'Complete body paragraph.' },
+      {
+        id: 'b000002', order: 1, type: 'paragraph',
+        text: 'See ⟦ZEN_INLINE_001⟧ now.',
+        fragments: [{ token: '⟦ZEN_INLINE_001⟧', value: '[source](https://example.com/source)' }],
+      },
+      {
+        id: 'b000003', order: 2, type: 'figure',
+        images: [{ src: 'https://example.com/figure.png', localPath: imagePath, alt: 'Architecture' }],
+        caption: 'System architecture', captionFragments: [],
+      },
+      {
+        id: 'b000004', order: 3, type: 'table', caption: 'Results', captionFragments: [],
+        rows: [
+          [{ text: 'Model', fragments: [] }, { text: 'Score', fragments: [] }],
+          [{ text: 'Baseline', fragments: [] }, { text: 'High', fragments: [] }],
+        ],
+      },
+      { id: 'b000005', order: 4, type: 'equation', tex: 'x^2+y^2=z^2' },
+      { id: 'b000006', order: 5, type: 'reference', text: 'Author (2026). Paper.' },
     ],
+    scope: { kind: 'all', requestedText: '' },
   };
   const translated = await translateDocument({
     source,
-    workDir: tempDir(),
+    workDir,
     model: 'test-model',
     writer: {},
     completeArticle: jsonTranslator((payload, prompt) => {
-      assert.deepEqual(payload.units.map((unit) => unit.kind), ['title', 'heading', 'paragraph']);
-      assert.match(prompt, /不要补充任何图/);
+      assert.deepEqual(payload.units.map((unit) => unit.kind), [
+        'title', 'heading', 'paragraph', 'figure_caption', 'table_caption',
+        'table_cell', 'table_cell', 'table_cell', 'table_cell',
+      ]);
+      assert.match(prompt, /图注和表格单元格/);
+      assert.doesNotMatch(JSON.stringify(payload), /x\^2|Author \(2026\)/);
     }),
   });
   const article = renderTranslatedDocument(translated);
   const completeness = validateTranslationArtifact({ source, translated, article });
   assert.deepEqual(completeness.errors, []);
-  assert.doesNotMatch(article, /!\[|<img|<table|^\|/m);
+  assert.match(article, /!\[Architecture\]\(/);
+  assert.match(article, /\*\*表 1：中文译文：Results\*\*/);
+  assert.match(article, /^\| 中文译文：Model \| 中文译文：Score \|$/m);
+  assert.match(article, /\$\$\nx\^2\+y\^2=z\^2\n\$\$/);
+  assert.match(article, /\[source\]\(https:\/\/example\.com\/source\)/);
+  assert.match(article, /## 中文译文：Opening/);
 });
 
-test('完整性门禁拒绝模型重新添加图片或表格', () => {
+test('完整性门禁拒绝额外添加或遗漏图片、表格和公式', () => {
   const source = {
-    version: 3,
-    contentMode: 'body-text-only',
+    version: 4,
+    contentMode: 'structured-document',
     sourceType: 'html',
     extractor: 'fixture',
     sourceUrl: 'https://example.com/a',
@@ -166,10 +259,10 @@ test('完整性门禁拒绝模型重新添加图片或表格', () => {
   const result = validateTranslationArtifact({
     source,
     translated,
-    article: '---\ntitle: 标题\n---\n![图](x.png)\n| A | B |\n',
+    article: '---\ntitle: 标题\n---\n![图](x.png)\n| A | B |\n| --- | --- |\n',
   });
-  assert.match(result.errors.join(';'), /图片内容/);
-  assert.match(result.errors.join(';'), /表格内容/);
+  assert.match(result.errors.join(';'), /图片数量不一致/);
+  assert.match(result.errors.join(';'), /表格数量不一致/);
 });
 
 test('URL 安全拦截 localhost、私网和保留地址', async () => {
@@ -206,6 +299,12 @@ test('Notion 授权页面优先调用官方 Markdown 接口并过滤非正文内
     workDir: tempDir(),
     fetchFn: async (url) => {
       calls.push(String(url));
+      if (String(url).endsWith('/x.png')) {
+        return new Response(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB', 'base64'), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        });
+      }
       return new Response(JSON.stringify({
         markdown: '# Full report\n\nComplete body text.\n\n![ignored](x.png)',
         title: 'Full report',
@@ -218,5 +317,7 @@ test('Notion 授权页面优先调用官方 Markdown 接口并过滤非正文内
   });
   assert.equal(document.extractor, 'notion-markdown-api');
   assert.match(calls[0], /api\.notion\.com\/v1\/pages\/01234567-89ab-cdef-0123-456789abcdef\/markdown/);
-  assert.doesNotMatch(document.blocks.map((block) => block.text).join(' '), /ignored/);
+  const figure = document.blocks.find((block) => block.type === 'figure');
+  assert.equal(figure.caption, 'ignored');
+  assert.ok(fs.existsSync(figure.images[0].localPath));
 });

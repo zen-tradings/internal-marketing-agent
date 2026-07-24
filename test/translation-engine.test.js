@@ -18,7 +18,7 @@ function translator(onPayload) {
     return JSON.stringify({
       translations: payload.units.map((unit) => ({
         id: unit.id,
-        text: unit.id === 'meta:title' ? '正文直译' : `这是完整的中文正文译文。${unit.id}`,
+        text: unit.id === 'meta:title' ? '结构化直译' : `中文译文：${unit.text}`,
       })),
     });
   };
@@ -33,7 +33,7 @@ test('直译任务没有链接时直接失败', async () => {
   }), /缺少可读取的 http\(s\) 原文链接/);
 });
 
-test('所有直译请求固定走纯正文文字模式，不再依赖用户额外声明', async () => {
+test('所有直译请求走结构化文档模式并保留图片、图注和表格', async () => {
   const paragraph = 'This is a full body paragraph with enough source prose for strict text extraction and faithful translation. '.repeat(4);
   const html = `<article>
     <h1>Text-only translation</h1>
@@ -48,26 +48,32 @@ test('所有直译请求固定走纯正文文字模式，不再依赖用户额�
     input: '完整直译 https://example.com/article 并保留原图和表格',
     workflow: { workDir: tempDir(), model: 'test-model', timeoutMs: 1000 },
     writer: { model: 'test-model' },
-    fetchFn: async () => new Response(html, {
-      status: 200,
-      headers: { 'content-type': 'text/html; charset=utf-8' },
-    }),
+    fetchFn: async (url) => String(url).endsWith('/secret.png')
+      ? new Response(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB', 'base64'), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        })
+      : new Response(html, {
+          status: 200,
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        }),
     fetchWithRetry: async (fetch, url, options) => fetch(url, options),
     completeArticle: translator((payload) => {
       const input = JSON.stringify(payload);
-      assert.doesNotMatch(input, /SECRET_FIGURE|SECRET_TABLE/);
+      assert.match(input, /SECRET_FIGURE|SECRET_TABLE/);
     }),
     trace,
     translationConfig: { browserEnabled: false, dnsLookup: PUBLIC_DNS },
   });
-  assert.equal(result.manifest.contentMode, 'body-text-only');
-  assert.equal(result.completeness.contentMode, 'body-text-only');
-  assert.equal(trace.translationText.contentMode, 'body-text-only');
-  assert.doesNotMatch(result.article, /SECRET_FIGURE|SECRET_TABLE|!\[|^\|/m);
-  assert.equal('assets' in result, false);
+  assert.equal(result.manifest.contentMode, 'structured-document');
+  assert.equal(result.completeness.contentMode, 'structured-document');
+  assert.equal(trace.translationText.contentMode, 'structured-document');
+  assert.match(result.article, /!\[/);
+  assert.match(result.article, /^\|/m);
+  assert.match(result.article, /中文译文：SECRET_FIGURE/);
 });
 
-test('模型漏掉正文文字块时拒绝生成译文', async () => {
+test('模型漏掉结构化文本块时拒绝生成译文', async () => {
   const paragraph = 'This is a complete source paragraph containing enough text for deterministic article extraction. '.repeat(5);
   await assert.rejects(() => generateStrictTranslation({
     input: '直译 https://example.com/article',
@@ -80,10 +86,10 @@ test('模型漏掉正文文字块时拒绝生成译文', async () => {
     fetchWithRetry: async (fetch, url, options) => fetch(url, options),
     completeArticle: async () => '{"translations":[]}',
     translationConfig: { browserEnabled: false, dnsLookup: PUBLIC_DNS },
-  }), /正文文字翻译校验失败/);
+  }), /结构化翻译校验失败/);
 });
 
-test('断点文件使用纯文字版本且可继续翻译', async () => {
+test('断点文件使用结构化版本且可继续翻译', async () => {
   const workDir = tempDir();
   const paragraph = 'This is a complete body paragraph for checkpoint verification and faithful translation. '.repeat(5);
   const args = {
@@ -99,7 +105,7 @@ test('断点文件使用纯文字版本且可继续翻译', async () => {
     translationConfig: { browserEnabled: false, dnsLookup: PUBLIC_DNS },
   };
   await generateStrictTranslation(args);
-  const checkpoint = JSON.parse(fs.readFileSync(path.join(workDir, 'translation-text-checkpoint.json'), 'utf8'));
-  assert.equal(checkpoint.version, 3);
+  const checkpoint = JSON.parse(fs.readFileSync(path.join(workDir, 'translation-checkpoint.json'), 'utf8'));
+  assert.equal(checkpoint.version, 4);
   await assert.doesNotReject(() => generateStrictTranslation({ ...args, resumeFromCheckpoint: true }));
 });
