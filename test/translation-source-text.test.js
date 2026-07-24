@@ -31,10 +31,19 @@ function jsonTranslator(assertPayload) {
     return JSON.stringify({
       translations: payload.units.map((unit) => ({
         id: unit.id,
-        text: unit.id === 'meta:title' ? '结构化译文' : `中文译文：${unit.text}`,
+        text: translatedFixture(unit),
       })),
     });
   };
+}
+
+function translatedFixture(unit) {
+  if (unit.id === 'meta:title') return '结构化译文';
+  const value = `中文译文：${unit.text}`;
+  if (!['paragraph', 'quote', 'list_item'].includes(unit.kind) || value.length < 30) return value;
+  const phrases = ['核心观点', '关键机制', '重要结论', '性能瓶颈', '实证结果', '系统能力'];
+  const count = Math.max(1, Math.ceil(value.length / 120));
+  return `${Array.from({ length: count }, (_, index) => `**${phrases[index % phrases.length]}**`).join('，')}：${value}`;
 }
 
 test('流式响应超过大小上限时立即取消', async () => {
@@ -178,12 +187,14 @@ Reference that should not be translated.
   assert.match(document.blocks.find((block) => block.type === 'reference').text, /Reference that/);
 });
 
-test('结构化翻译覆盖标题、正文、图注和表格单元格并保留公式与图片', async () => {
+test('结构化翻译覆盖标题、正文和图表标题，表格正文保留为原文图片', async () => {
   const workDir = tempDir();
   const imagePath = path.join(workDir, 'figure.png');
+  const tablePath = path.join(workDir, 'table.png');
   fs.writeFileSync(imagePath, Buffer.from([1, 2, 3]));
+  fs.writeFileSync(tablePath, Buffer.from([4, 5, 6]));
   const source = {
-    version: 4,
+    version: 5,
     contentMode: 'structured-document',
     sourceType: 'html',
     extractor: 'fixture',
@@ -206,6 +217,7 @@ test('结构化翻译覆盖标题、正文、图注和表格单元格并保留�
       },
       {
         id: 'b000004', order: 3, type: 'table', caption: 'Results', captionFragments: [],
+        localPath: tablePath,
         rows: [
           [{ text: 'Model', fragments: [] }, { text: 'Score', fragments: [] }],
           [{ text: 'Baseline', fragments: [] }, { text: 'High', fragments: [] }],
@@ -224,10 +236,10 @@ test('结构化翻译覆盖标题、正文、图注和表格单元格并保留�
     completeArticle: jsonTranslator((payload, prompt) => {
       assert.deepEqual(payload.units.map((unit) => unit.kind), [
         'title', 'heading', 'paragraph', 'figure_caption', 'table_caption',
-        'table_cell', 'table_cell', 'table_cell', 'table_cell',
       ]);
-      assert.match(prompt, /图注和表格单元格/);
-      assert.match(prompt, /真正关键的术语、机制或核心结论/);
+      assert.match(prompt, /表格正文直接保留原文截图/);
+      assert.match(prompt, /每约 200 个汉字至少 1 处/);
+      assert.doesNotMatch(JSON.stringify(payload), /Model|Score|Baseline|High/);
       assert.doesNotMatch(JSON.stringify(payload), /x\^2|Author \(2026\)/);
     }),
   });
@@ -237,7 +249,8 @@ test('结构化翻译覆盖标题、正文、图注和表格单元格并保留�
   assert.deepEqual(completeness.errors, []);
   assert.match(article, /!\[Architecture\]\(/);
   assert.match(article, /\*\*表 1：中文译文：Results\*\*/);
-  assert.match(article, /^\| 中文译文：Model \| 中文译文：Score \|$/m);
+  assert.match(article, /!\[原文表 1\]\(/);
+  assert.doesNotMatch(article, /^\|/m);
   assert.match(article, /\$\$\nx\^2\+y\^2=z\^2\n\$\$/);
   assert.match(article, /\[source\]\(https:\/\/example\.com\/source\)/);
   assert.match(article, /## 中文译文：Opening/);
@@ -265,9 +278,9 @@ test('论文标题页的重复标题、作者和机构列表在摘要前被移�
   assert.equal(document.metadataBlocksRemoved, 3);
 });
 
-test('正文翻译允许少量关键短语加粗，但拒绝标题和整段加粗', async () => {
+test('正文翻译保持高亮密度，但拒绝标题和整段加粗', async () => {
   const source = {
-    version: 4,
+    version: 5,
     contentMode: 'structured-document',
     sourceType: 'html',
     extractor: 'fixture',
@@ -319,29 +332,78 @@ test('正文翻译允许少量关键短语加粗，但拒绝标题和整段加�
   }), /结构化翻译校验失败/);
 });
 
-test('完整性门禁拒绝额外添加或遗漏图片、表格和公式', () => {
+test('长段落高亮不足时拒绝产稿，避免再次出现几乎没有高亮的译文', async () => {
   const source = {
-    version: 4,
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a',
+    title: 'Title',
+    author: '',
+    sha256: 'low-highlight-density',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: 'The benchmark evaluates realistic agent tasks and identifies the decisive system bottleneck. '.repeat(4),
+    }],
+  };
+  await assert.rejects(() => translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title'
+            ? '标题'
+            : `这是一段只包含一处**核心观点**、但整体长度已经超过两百字的中文译文。${'系统需要在真实任务中持续验证能力边界与性能瓶颈。'.repeat(10)}`,
+        })),
+      });
+    },
+  }), /结构化翻译校验失败/);
+});
+
+test('完整性门禁拒绝额外添加或遗漏图片、表格和公式', () => {
+  const tablePath = path.join(tempDir(), 'table.png');
+  fs.writeFileSync(tablePath, Buffer.from([1]));
+  const source = {
+    version: 5,
     contentMode: 'structured-document',
     sourceType: 'html',
     extractor: 'fixture',
     sourceUrl: 'https://example.com/a',
     title: 'Title',
     sha256: 'hash',
-    blocks: [{ id: 'b000001', order: 0, type: 'paragraph', text: 'Body.' }],
+    blocks: [
+      { id: 'b000001', order: 0, type: 'paragraph', text: 'Body.' },
+      {
+        id: 'b000002',
+        order: 1,
+        type: 'table',
+        caption: '',
+        captionFragments: [],
+        rows: [[{ text: 'A', fragments: [] }]],
+        localPath: tablePath,
+      },
+    ],
   };
   const translated = {
     ...source,
     translatedTitle: '标题',
-    blocks: [{ ...source.blocks[0], translatedText: '正文。' }],
+    blocks: [{ ...source.blocks[0], translatedText: '正文。' }, source.blocks[1]],
   };
   const result = validateTranslationArtifact({
     source,
     translated,
     article: '---\ntitle: 标题\n---\n![图](x.png)\n| A | B |\n| --- | --- |\n',
   });
-  assert.match(result.errors.join(';'), /图片数量不一致/);
-  assert.match(result.errors.join(';'), /表格数量不一致/);
+  assert.match(result.errors.join(';'), /原文图片数量不一致/);
+  assert.match(result.errors.join(';'), /原文表格图片数量不一致/);
 });
 
 test('URL 安全拦截 localhost、私网和保留地址', async () => {

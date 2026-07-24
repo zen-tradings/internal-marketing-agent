@@ -61,7 +61,7 @@
 | 直译范围识别 | `src/workflows/translation-scope.js` | 页码和章节范围；用户页码为 1-based，Datalab 请求转换为 0-based |
 | 直译内容提取/结构 | `src/workflows/translation-source-text.js` | arXiv HTML 优先、普通 HTML/Notion；保留标题、段落、图表、公式、代码和引用 |
 | PDF 结构化解析 | `src/workflows/datalab-parser.js` | 托管 Datalab API、异步轮询、质量重试及图片资产落盘；密钥只在 PDF 路径需要 |
-| 直译翻译/完整性/续跑 | `src/workflows/translate-engine.js` | 逐文本节点翻译、确定性重组、图表公式完整性门禁与 checkpoint |
+| 直译翻译/完整性/续跑 | `src/workflows/translate-engine.js` | 逐文本节点翻译、原文表格转图片、确定性重组、高亮密度、图表公式完整性门禁与 checkpoint |
 | 直译抓取配置 | `.env` 的 `TRANSLATION_*` / `NOTION_API_TOKEN` / `DATALAB_*` | 控制来源、图片、PDF 页数、浏览器、解析质量、超时和重定向 |
 | 单任务取消、发布阶段保护与垃圾目录清理 | `src/core/queue.js`、`src/index.js`、`src/lib/task-cancellation.js` | generate 可取消；publish 后拒绝强杀；取消后状态为 cancelled |
 | 优先信源加减域名 | `workflows/shared.js` 的清单,或 .env EXA_PRIORITY_DOMAINS | 写主域即可,子域自动匹配 |

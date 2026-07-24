@@ -91,17 +91,10 @@ test('直译工作流不触发中文破折号风格提醒', () => {
   const { errors, warnings } = checkArticle(md, { workflowMode: 'translation' });
   assert.equal(errors.length, 0);
   assert.equal(warnings.some((w) => /破折号/.test(w)), false);
-  assert.equal(warnings.some((w) => /美元符号/.test(w)), true);
 });
 
-test('warnings: 含美元符号后跟数字', () => {
+test('美元符号后跟数字不再触发风格提醒', () => {
   const md = '---\ntitle: T\n---\n营收达 $12 亿美元。';
-  const { warnings } = checkArticle(md);
-  assert.ok(warnings.some((w) => /美元符号/.test(w)));
-});
-
-test('warnings: 美元符号后不跟数字不命中', () => {
-  const md = '---\ntitle: T\n---\n价格用 $ 符号表示,不接数字。';
   const { warnings } = checkArticle(md);
   assert.equal(warnings.some((w) => /美元符号/.test(w)), false);
 });
@@ -112,13 +105,13 @@ test('不再要求固定结尾板块:缺结尾板块不产生 warning', () => {
   assert.equal(warnings.some((w) => /结尾板块|ZEN TRADING/.test(w)), false);
 });
 
-test('errors 与 warnings 互不干扰:同时命中多类问题时都各自出现', () => {
+test('errors 与 warnings 互不干扰:同时命中多类问题时分别出现', () => {
   const md = '---\nfoo: bar\n---\n正文含破折号——,还有 /Users/x 路径,金额 $5 亿美元。';
   const { errors, warnings } = checkArticle(md);
   assert.ok(errors.some((e) => /title/.test(e)));
   assert.ok(errors.some((e) => /本地路径/.test(e)));
   assert.ok(warnings.some((w) => /破折号/.test(w)));
-  assert.ok(warnings.some((w) => /美元符号/.test(w)));
+  assert.equal(warnings.some((w) => /美元符号/.test(w)), false);
 });
 
 test('信息具体可读:破折号 warning 提示规范要求', () => {

@@ -22,8 +22,8 @@ import {
 } from './translation-scope.js';
 
 // 单一现役直译源：保留正文结构与视觉素材，模型只替换可翻译文字单元。
-const DOCUMENT_VERSION = 4;
-const CHECKPOINT_VERSION = 5;
+const DOCUMENT_VERSION = 5;
+const CHECKPOINT_VERSION = 6;
 const DEFAULT_LIMITS = {
   maxSourceBytes: 50 * 1024 * 1024,
   maxPdfPages: 120,
@@ -186,6 +186,7 @@ export async function acquireSourceDocument({
         config,
         dnsLookup,
         scope,
+        signal,
       });
       document.acquisition = acquisition;
       return document;
@@ -258,6 +259,7 @@ export async function acquireSourceDocument({
       fetchFn,
       scope,
       onProgress,
+      signal,
     });
     throwIfTaskCancelled(signal);
     document.acquisition = acquisition;
@@ -281,6 +283,7 @@ export async function acquireSourceDocument({
       config,
       dnsLookup,
       scope,
+      signal,
     });
     document.acquisition = acquisition;
     if (shouldUseBrowser(document, html) && config.browserEnabled !== false) {
@@ -349,6 +352,7 @@ async function acquireWithBrowser({
     config,
     dnsLookup,
     scope,
+    signal,
   });
   document.acquisition = acquisition;
   return document;
@@ -366,6 +370,7 @@ export async function sourceDocumentFromHtml({
   dnsLookup = dns.lookup,
   assetMap = {},
   scope = { kind: 'all' },
+  signal,
 }) {
   const sourceDom = new JSDOM(String(html || ''), { url: documentUrl });
   const sourceDocument = sourceDom.window.document;
@@ -406,6 +411,11 @@ export async function sourceDocumentFromHtml({
       dnsLookup,
       assetMap,
     });
+    await localizeTableAssets(blocks, {
+      workDir,
+      config,
+      signal,
+    });
   }
   const document = createSourceDocument({
     sourceType: 'html',
@@ -435,6 +445,7 @@ export async function sourceDocumentFromMarkdown({
   config = {},
   dnsLookup = dns.lookup,
   scope = { kind: 'all' },
+  signal,
 }) {
   const lines = String(markdown || '').replace(/\r/g, '').split('\n');
   const blocks = [];
@@ -488,7 +499,13 @@ export async function sourceDocumentFromMarkdown({
       const rows = tableLines
         .filter((_, rowIndex) => rowIndex !== 1)
         .map((line) => splitMarkdownTableRow(line).map((text) => ({ text: cleanMarkdownText(text), fragments: [] })));
-      push({ type: 'table', caption: '', captionFragments: [], rows });
+      push({
+        type: 'table',
+        caption: '',
+        captionFragments: [],
+        rows,
+        sourceHtml: tableHtmlFromRows(rows),
+      });
       continue;
     }
     if (!trimmed) {
@@ -558,6 +575,11 @@ export async function sourceDocumentFromMarkdown({
       dnsLookup,
       assetMap: {},
     });
+    await localizeTableAssets(scoped.blocks, {
+      workDir,
+      config,
+      signal,
+    });
   }
 
   const firstHeading = scoped.blocks.find((block) => block.type === 'heading');
@@ -586,6 +608,7 @@ async function sourceDocumentFromPdf({
   fetchFn,
   scope,
   onProgress,
+  signal,
 }) {
   const pdfPath = path.join(workDir, 'translation-source.pdf');
   fs.writeFileSync(pdfPath, pdfBuffer);
@@ -618,6 +641,7 @@ async function sourceDocumentFromPdf({
     config,
     assetMap: converted.images,
     scope,
+    signal,
   });
   document.sourceType = 'pdf';
   document.title = cleanText(converted.metadata?.title || document.title || title);
@@ -667,7 +691,7 @@ export async function translateDocument({
     stage: 'translation',
     message: completed.size
       ? `从结构化断点继续翻译 ${completed.size}/${units.length}`
-      : `开始翻译标题、正文、图注和表格，共 ${units.length} 个文本单元`,
+      : `开始翻译标题、正文及图表标题，共 ${units.length} 个文本单元`,
     completed: completed.size,
     total: units.length,
   });
@@ -759,7 +783,9 @@ export function renderTranslatedDocument(document) {
       tableNumber += 1;
       const caption = restoreFragments(block.translatedCaption ?? block.caption ?? '', block.captionFragments);
       if (caption) lines.push(`**表 ${tableNumber}：${caption}**`, '');
-      lines.push(...renderMarkdownTable(block), '');
+      if (block.localPath) {
+        lines.push(`![原文表 ${tableNumber}](${block.localPath})`, '');
+      }
     } else if (block.type === 'equation') {
       lines.push('$$', block.tex, '$$', '');
     } else if (block.type === 'code') {
@@ -789,10 +815,14 @@ export function validateTranslationArtifact({ source, translated, article }) {
   const sourceFigures = source.blocks.filter((block) => block.type === 'figure')
     .reduce((sum, block) => sum + block.images.length, 0);
   const renderedFigures = (value.match(/^!\[[^\]]*\]\([^)]*\)$/gm) || []).length;
-  if (renderedFigures !== sourceFigures) errors.push(`图片数量不一致:${renderedFigures}/${sourceFigures}`);
   const sourceTables = source.blocks.filter((block) => block.type === 'table').length;
-  const renderedTables = (value.match(/^\|(?:[^|\n]*\|)+\s*$/gm) || []).filter((line) => /---/.test(line)).length;
-  if (renderedTables !== sourceTables) errors.push(`表格数量不一致:${renderedTables}/${sourceTables}`);
+  const renderedTableImages = (value.match(/^!\[原文表 \d+\]\([^)]*\)$/gm) || []).length;
+  if (renderedTableImages !== sourceTables) {
+    errors.push(`原文表格图片数量不一致:${renderedTableImages}/${sourceTables}`);
+  }
+  if (renderedFigures - renderedTableImages !== sourceFigures) {
+    errors.push(`原文图片数量不一致:${renderedFigures - renderedTableImages}/${sourceFigures}`);
+  }
   const sourceEquations = source.blocks.filter((block) => block.type === 'equation').length;
   const renderedEquations = (value.match(/^\$\$$/gm) || []).length / 2;
   if (renderedEquations !== sourceEquations) errors.push(`公式数量不一致:${renderedEquations}/${sourceEquations}`);
@@ -801,6 +831,11 @@ export function validateTranslationArtifact({ source, translated, article }) {
       if (!image.localPath || !fs.existsSync(image.localPath) || fs.statSync(image.localPath).size <= 0) {
         errors.push(`图片资产缺失:${block.id}`);
       }
+    }
+  }
+  for (const block of source.blocks.filter((item) => item.type === 'table')) {
+    if (!block.localPath || !fs.existsSync(block.localPath) || fs.statSync(block.localPath).size <= 0) {
+      errors.push(`原文表格图片缺失:${block.id}`);
     }
   }
   return {
@@ -1215,13 +1250,14 @@ async function requestTranslationBatch({
 硬性规则:
 - 只返回合法 JSON，格式严格为 {"translations":[{"id":"原 ID","text":"完整译文"}]}。
 - translations 必须与输入数量相同，ID 必须逐字相同且不得重复、遗漏或新增。
-- 按 kind 翻译标题、正文、标题层级、图注和表格单元格，不总结、不改写、不删减。
+- 按 kind 翻译标题、正文、标题层级、图注和表题，不总结、不改写、不删减。表格正文直接保留原文截图，不进入翻译输入。
 - 不添加输入中不存在的图、表、公式、引用、分析或内容概括。
 - 不改变数字、单位、Ticker 和正文中原有的 URL。
 - 所有 ⟦ZEN_INLINE_NNN⟧ 都是公式、链接或引用占位符，必须原样、原位置、各保留一次。
 - 专有名词首次出现可保留英文，普通叙述必须翻译成中文。
-- 仅对 paragraph、quote、list_item 中真正关键的术语、机制或核心结论使用 Markdown **加粗**：短段最多 1 处，长段最多 2 处，每处只包住短语，不能包住整句。没有值得强调的内容时不要强行加粗。
-- title、heading、figure_caption、table_caption、table_cell 禁止添加 **加粗**；除选择性加粗外不得添加其它 Markdown 格式。
+- paragraph、quote、list_item 必须提高关键词和核心观点高亮密度：正文每约 200 个汉字至少 1 处，目标 2–3 处；优先高亮关键术语、核心机制、中心句或开头关键句。
+- 每处使用 Markdown **加粗**，可包住 2–64 个字符的关键短语或短句，不能把整段全部加粗，也不能改动原意。
+- title、heading、figure_caption、table_caption 禁止添加 **加粗**；除正文高亮外不得添加其它 Markdown 格式。
 ${repair ? '- 输入中的 ⟦ZEN_KEEP_N⟧ 是不可翻译占位符，必须原样、原位置、各保留一次。' : ''}
 
 文档标题:${source.title}
@@ -1233,7 +1269,7 @@ ${JSON.stringify({ units })}`,
     writer: { ...writer, temperature: 0 },
     fetchFn,
     timeoutMs,
-    systemPrompt: '你是严谨的结构化文档翻译器。忠实翻译输入的标题、正文、图注和表格文字；只在正文真正关键的短语上做克制的 Markdown 加粗，绝不改动占位符、数字、链接或结构，只输出合法 JSON。',
+    systemPrompt: '你是严谨的结构化文档翻译器。忠实翻译输入的标题、正文及图表标题；按要求在正文关键术语和核心观点上稳定添加 Markdown 高亮，绝不改动占位符、数字、链接或结构，只输出合法 JSON。',
   };
   const responseFormat = {
     type: 'json_schema',
@@ -1297,12 +1333,14 @@ function hasValidSelectiveHighlights(unit, translated) {
   if (markers.length !== highlights.length * 2) return false;
   const allowed = ['paragraph', 'quote', 'list_item'].includes(unit.kind);
   if (!allowed) return highlights.length === 0;
-  const maxHighlights = value.replace(/\*\*/g, '').length >= 120 ? 2 : 1;
-  if (highlights.length > maxHighlights) return false;
-  if (highlights.some((text) => text.length < 2 || text.length > 48)) return false;
-  const highlightedCharacters = highlights.reduce((sum, text) => sum + text.length, 0);
   const visibleCharacters = Math.max(1, value.replace(/\*\*/g, '').length);
-  return highlightedCharacters / visibleCharacters <= 0.3;
+  const minHighlights = visibleCharacters < 30 ? 0 : Math.max(1, Math.ceil(visibleCharacters / 120));
+  const maxHighlights = visibleCharacters < 30 ? 1 : Math.max(minHighlights, Math.ceil(visibleCharacters / 65));
+  if (highlights.length < minHighlights) return false;
+  if (highlights.length > maxHighlights) return false;
+  if (highlights.some((text) => text.length < 2 || text.length > 64)) return false;
+  const highlightedCharacters = highlights.reduce((sum, text) => sum + text.length, 0);
+  return highlightedCharacters / visibleCharacters <= 0.45;
 }
 
 function protectInvariantText(value) {
@@ -1331,16 +1369,6 @@ function translationUnits(document) {
     }
     if (block.type === 'table') {
       if (block.caption?.trim()) units.push({ id: `${block.id}:caption`, text: block.caption, kind: 'table_caption' });
-      for (const [rowIndex, row] of block.rows.entries()) {
-        for (const [columnIndex, cell] of row.entries()) {
-          if (!cell.text?.trim()) continue;
-          units.push({
-            id: `${block.id}:r${rowIndex}:c${columnIndex}`,
-            text: cell.text,
-            kind: 'table_cell',
-          });
-        }
-      }
     }
   }
   return units;
@@ -1352,14 +1380,6 @@ function applyTranslations(source, completed) {
   for (const block of document.blocks) {
     if (completed.has(block.id)) block.translatedText = completed.get(block.id);
     if (completed.has(`${block.id}:caption`)) block.translatedCaption = completed.get(`${block.id}:caption`);
-    if (block.type === 'table') {
-      for (const [rowIndex, row] of block.rows.entries()) {
-        for (const [columnIndex, cell] of row.entries()) {
-          const translated = completed.get(`${block.id}:r${rowIndex}:c${columnIndex}`);
-          if (translated !== undefined) cell.translatedText = translated;
-        }
-      }
-    }
   }
   return document;
 }
@@ -1370,11 +1390,6 @@ function translatedUnitText(document, id) {
   if (direct) return direct.translatedText;
   const caption = /^(b\d+):caption$/.exec(id);
   if (caption) return document.blocks.find((block) => block.id === caption[1])?.translatedCaption;
-  const cell = /^(b\d+):r(\d+):c(\d+)$/.exec(id);
-  if (cell) {
-    return document.blocks.find((block) => block.id === cell[1])
-      ?.rows?.[Number(cell[2])]?.[Number(cell[3])]?.translatedText;
-  }
   return undefined;
 }
 
@@ -1647,7 +1662,12 @@ function tableFromNode(node, documentUrl) {
   }
   const width = Math.max(0, ...rows.map((row) => row.length));
   for (const row of rows) while (row.length < width) row.push({ text: '', fragments: [] });
-  return { caption: caption.text, captionFragments: caption.fragments, rows };
+  return {
+    caption: caption.text,
+    captionFragments: caption.fragments,
+    rows,
+    sourceHtml: node.outerHTML,
+  };
 }
 
 function mathTex(node) {
@@ -1752,6 +1772,131 @@ async function localizeFigureAssets(blocks, {
     image.localPath = target;
     cache.set(image.src, target);
   }
+}
+
+async function localizeTableAssets(blocks, {
+  workDir,
+  config = {},
+  signal,
+}) {
+  const tables = blocks.filter((block) => block.type === 'table');
+  if (!tables.length) return;
+  const figures = blocks.filter((block) => block.type === 'figure')
+    .flatMap((block) => block.images || []);
+  const limits = limitsFor(config);
+  if (figures.length + tables.length > limits.maxAssetCount) {
+    throw new Error(`原文图表数量超过上限:${figures.length + tables.length}/${limits.maxAssetCount}`);
+  }
+  const rasterize = config.tableRasterizer || rasterizeTableHtml;
+  const assetDir = path.join(workDir, 'translation-assets');
+  fs.mkdirSync(assetDir, { recursive: true });
+  const uniqueFigurePaths = new Set(figures.map((image) => image.localPath).filter(Boolean));
+  let totalBytes = [...uniqueFigurePaths].reduce((sum, file) => {
+    try { return sum + fs.statSync(file).size; }
+    catch { return sum; }
+  }, 0);
+
+  for (const [index, table] of tables.entries()) {
+    throwIfTaskCancelled(signal);
+    const target = path.join(assetDir, `table-${String(index + 1).padStart(3, '0')}.png`);
+    await rasterize({
+      html: table.sourceHtml || tableHtmlFromRows(table.rows),
+      target,
+      config,
+      signal,
+    });
+    throwIfTaskCancelled(signal);
+    if (!fs.existsSync(target) || fs.statSync(target).size <= 0) {
+      throw new Error(`原文表格图片生成失败:${table.id}`);
+    }
+    const size = fs.statSync(target).size;
+    if (size > limits.maxSingleAssetBytes) {
+      throw new Error(`原文单个表格图片超过上限:${size}/${limits.maxSingleAssetBytes}`);
+    }
+    totalBytes += size;
+    if (totalBytes > limits.maxAssetBytes) {
+      throw new Error(`原文图表总量超过上限:${totalBytes}/${limits.maxAssetBytes}`);
+    }
+    const kind = detectImageKind(fs.readFileSync(target), 'image/png');
+    if (!kind) throw new Error(`原文表格图片格式无效:${table.id}`);
+    table.localPath = target;
+  }
+}
+
+async function rasterizeTableHtml({ html, target, config = {}, signal }) {
+  if (config.browserEnabled === false) {
+    throw new Error('原文表格转图片需要启用 TRANSLATION_BROWSER_ENABLED');
+  }
+  let playwright;
+  try { playwright = await import('playwright-core'); }
+  catch { throw new Error('原文表格转图片需要 playwright-core'); }
+  const executablePath = browserExecutable(config);
+  if (!executablePath) throw new Error('找不到用于原文表格转图片的 Chrome/Chromium');
+  const browser = await playwright.chromium.launch({
+    executablePath,
+    headless: true,
+    args: ['--disable-background-networking', '--disable-default-apps', '--disable-extensions', '--disable-network-service'],
+  });
+  const abortBrowser = () => { void browser.close().catch(() => {}); };
+  signal?.addEventListener('abort', abortBrowser, { once: true });
+  try {
+    const context = await browser.newContext({
+      viewport: { width: 1600, height: 1000 },
+      deviceScaleFactor: 2,
+      javaScriptEnabled: false,
+    });
+    const page = await context.newPage();
+    await page.route('**/*', (route) => route.abort('blockedbyclient'));
+    await page.setContent(`<!doctype html>
+<html><head><meta charset="utf-8"><style>
+html,body{margin:0;padding:0;background:#fff}
+#zen-table-shell{display:inline-block;box-sizing:border-box;max-width:1560px;padding:20px;background:#fff}
+#zen-table-shell table{border-collapse:collapse;table-layout:auto;width:auto;max-width:1520px;color:#263445;background:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",Arial,sans-serif;font-size:22px;line-height:1.45}
+#zen-table-shell th,#zen-table-shell td{border:1px solid #d7dce2;padding:10px 14px;vertical-align:middle;text-align:left;white-space:normal;overflow-wrap:normal;word-break:normal}
+#zen-table-shell th{font-weight:650;background:#f3f6f8}
+#zen-table-shell img{max-width:100%;height:auto}
+</style></head><body><div id="zen-table-shell">${String(html || '')}</div></body></html>`, {
+      waitUntil: 'domcontentloaded',
+      timeout: positive(config.browserTimeoutMs, DEFAULT_LIMITS.browserTimeoutMs),
+    });
+    throwIfTaskCancelled(signal);
+    const table = page.locator('#zen-table-shell table').first();
+    if (await table.count() !== 1) throw new Error('原文表格 HTML 缺少 table 元素');
+    await page.locator('#zen-table-shell').screenshot({
+      path: target,
+      type: 'png',
+      animations: 'disabled',
+      caret: 'hide',
+      omitBackground: false,
+      timeout: positive(config.browserTimeoutMs, DEFAULT_LIMITS.browserTimeoutMs),
+    });
+  } catch (error) {
+    if (signal?.aborted) throw cancellationErrorFromSignal(signal);
+    throw error;
+  } finally {
+    signal?.removeEventListener('abort', abortBrowser);
+    await browser.close().catch(() => {});
+  }
+}
+
+function browserExecutable(config = {}) {
+  const candidates = [
+    config.browserExecutablePath,
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+  ];
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate));
+}
+
+function tableHtmlFromRows(rows = []) {
+  const body = rows.map((row, rowIndex) => {
+    const tag = rowIndex === 0 ? 'th' : 'td';
+    return `<tr>${row.map((cell) => `<${tag}>${escapeHtml(cell?.text || '')}</${tag}>`).join('')}</tr>`;
+  }).join('');
+  return `<table>${body}</table>`;
 }
 
 function mappedAssetPath(rawSrc, assetMap) {
@@ -1887,27 +2032,6 @@ function restoreFragments(value, fragments = []) {
   let text = String(value || '');
   for (const fragment of fragments || []) text = text.replaceAll(fragment.token, fragment.value);
   return text;
-}
-
-function renderMarkdownTable(block) {
-  const rows = (block.rows || []).map((row) => row.map((cell) => {
-    const value = restoreFragments(cell.translatedText ?? cell.text ?? '', cell.fragments);
-    return escapeTableCell(value);
-  }));
-  if (!rows.length) return [];
-  const width = Math.max(1, ...rows.map((row) => row.length));
-  for (const row of rows) while (row.length < width) row.push('');
-  const header = rows[0];
-  const body = rows.slice(1);
-  return [
-    `| ${header.join(' | ')} |`,
-    `| ${header.map(() => '---').join(' | ')} |`,
-    ...body.map((row) => `| ${row.join(' | ')} |`),
-  ];
-}
-
-function escapeTableCell(value) {
-  return String(value || '').replace(/\|/g, '\\|').replace(/\n+/g, '<br>');
 }
 
 function captionLine(label, caption) {

@@ -75,9 +75,5 @@ export function checkArticle(markdown, { secretValues = [], workflowMode = '' } 
     warnings.push('风格:出现中文破折号——,规范要求用逗号或冒号代替');
   }
 
-  if (/\$\s?\d/.test(md)) {
-    warnings.push('风格:出现美元符号后跟数字($+数字),规范要求用中文单位(如亿美元)');
-  }
-
   return { errors, warnings };
 }

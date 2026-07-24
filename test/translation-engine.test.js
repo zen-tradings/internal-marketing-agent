@@ -6,6 +6,7 @@ import path from 'node:path';
 import { generateStrictTranslation } from '../src/workflows/translate-engine.js';
 
 const PUBLIC_DNS = async () => [{ address: '93.184.216.34', family: 4 }];
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB', 'base64');
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'zen-translate-text-'));
@@ -18,10 +19,19 @@ function translator(onPayload) {
     return JSON.stringify({
       translations: payload.units.map((unit) => ({
         id: unit.id,
-        text: unit.id === 'meta:title' ? '结构化直译' : `中文译文：${unit.text}`,
+        text: translatedFixture(unit),
       })),
     });
   };
+}
+
+function translatedFixture(unit) {
+  if (unit.id === 'meta:title') return '结构化直译';
+  const value = `中文译文：${unit.text}`;
+  if (!['paragraph', 'quote', 'list_item'].includes(unit.kind) || value.length < 30) return value;
+  const phrases = ['核心观点', '关键机制', '重要结论', '性能瓶颈', '实证结果', '系统能力'];
+  const count = Math.max(1, Math.ceil(value.length / 120));
+  return `${Array.from({ length: count }, (_, index) => `**${phrases[index % phrases.length]}**`).join('，')}：${value}`;
 }
 
 test('直译任务没有链接时直接失败', async () => {
@@ -33,7 +43,7 @@ test('直译任务没有链接时直接失败', async () => {
   }), /缺少可读取的 http\(s\) 原文链接/);
 });
 
-test('所有直译请求走结构化文档模式并保留图片、图注和表格', async () => {
+test('所有直译请求走结构化文档模式并把原文表格作为图片保留', async () => {
   const paragraph = 'This is a full body paragraph with enough source prose for strict text extraction and faithful translation. '.repeat(4);
   const html = `<article>
     <h1>Text-only translation</h1>
@@ -60,16 +70,22 @@ test('所有直译请求走结构化文档模式并保留图片、图注和表�
     fetchWithRetry: async (fetch, url, options) => fetch(url, options),
     completeArticle: translator((payload) => {
       const input = JSON.stringify(payload);
-      assert.match(input, /SECRET_FIGURE|SECRET_TABLE/);
+      assert.match(input, /SECRET_FIGURE/);
+      assert.doesNotMatch(input, /SECRET_TABLE/);
     }),
     trace,
-    translationConfig: { browserEnabled: false, dnsLookup: PUBLIC_DNS },
+    translationConfig: {
+      browserEnabled: false,
+      dnsLookup: PUBLIC_DNS,
+      tableRasterizer: async ({ target }) => fs.writeFileSync(target, PNG),
+    },
   });
   assert.equal(result.manifest.contentMode, 'structured-document');
   assert.equal(result.completeness.contentMode, 'structured-document');
   assert.equal(trace.translationText.contentMode, 'structured-document');
   assert.match(result.article, /!\[/);
-  assert.match(result.article, /^\|/m);
+  assert.match(result.article, /!\[原文表 1\]\(/);
+  assert.doesNotMatch(result.article, /^\|/m);
   assert.match(result.article, /中文译文：SECRET_FIGURE/);
 });
 
@@ -106,6 +122,6 @@ test('断点文件使用结构化版本且可继续翻译', async () => {
   };
   await generateStrictTranslation(args);
   const checkpoint = JSON.parse(fs.readFileSync(path.join(workDir, 'translation-checkpoint.json'), 'utf8'));
-  assert.equal(checkpoint.version, 5);
+  assert.equal(checkpoint.version, 6);
   await assert.doesNotReject(() => generateStrictTranslation({ ...args, resumeFromCheckpoint: true }));
 });
