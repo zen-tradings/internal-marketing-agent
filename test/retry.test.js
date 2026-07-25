@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runWithRetry } from '../src/index.js';
+import { createTaskCancelledError } from '../src/lib/task-cancellation.js';
 
 test('失败后按 retries 重试', async () => {
   let n = 0;
@@ -17,4 +18,38 @@ test('恰好在最后一次允许的尝试(第 retries+1 次)成功', async () =
   const r = await runWithRetry(async () => { n++; if (n < 3) throw new Error('x'); return 'ok'; }, 2);
   assert.equal(r, 'ok');
   assert.equal(n, 3, 'retries=2 允许 3 次尝试,应恰好在第 3 次成功');
+});
+
+test('runWithRetry 可按工作流配置在重试间等待', async () => {
+  const waits = [];
+  let n = 0;
+  const result = await runWithRetry(
+    async () => { n++; if (n < 3) throw new Error('网络抖动'); return 'ok'; },
+    2,
+    15000,
+    async (ms) => waits.push(ms),
+  );
+  assert.equal(result, 'ok');
+  assert.deepEqual(waits, [15000, 15000]);
+});
+
+test('取消信号会立即打断重试等待且不再发起下一次尝试', async () => {
+  const controller = new AbortController();
+  let attempts = 0;
+  let sleeping;
+  const enteredSleep = new Promise((resolve) => { sleeping = resolve; });
+  const pending = runWithRetry(
+    async () => { attempts++; throw new Error('网络抖动'); },
+    3,
+    15000,
+    () => {
+      sleeping();
+      return new Promise(() => {});
+    },
+    controller.signal,
+  );
+  await enteredSleep;
+  controller.abort(createTaskCancelledError('stop retry'));
+  await assert.rejects(pending, (error) => error?.code === 'TASK_CANCELLED');
+  assert.equal(attempts, 1);
 });

@@ -1,14 +1,16 @@
 # Customer.io newsletter 发布工作流
 
-## 当前配置
+## 当前配置与历史记录
 
-- 命名格式：`Zen Trading Newsletter · Vol. N`
-- Slack 入口：`邮件：<本期主题>` 或 `email: <topic>`
+本节中的发送结果和人数是当时的运维记录，不是 Customer.io 的实时状态。每次创建或扩容前都必须运行 `npm run check:customerio`，并以 Customer.io Review 页显示的人数为最终依据。
+
+- 命名格式：`Zen Research from Zen Trading · Vol. N`
+- Slack 入口：私聊自然语言或频道 `@Bot`；`邮件：<本期主题>`、`email: <topic>` 继续兼容。
 - 本地工作流只在 Customer.io 创建草稿，不会自动发送或排期。
 - Customer.io 内部测试分组：`Newsletter · Internal Beta`，segment ID `17`。
 - Customer.io Pilot 分组：`Newsletter · Pilot`，segment ID `18`。这是第二批扩容名单，当前为空，加入人员前不能创建 Pilot 草稿。
 - 全量候选分组：`Valid Email Address`，segment ID `6`。切换前仍要在 Review 页核对订阅偏好与预计人数。
-- 现有 Design Studio 内容已用于 `Vol. 1`，主题和邮件内标题均为 `Zen Trading Newsletter · Vol. 1`。
+- 新生成草稿的主题和邮件内品牌统一为 `Zen Research from Zen Trading · Vol. N`；不自动改写历史草稿或已发送邮件。
 - Design Studio 模板已发布版号标题、内部体验内容、官网链接、反馈入口、退订链接和 Customer.io 账户中登记的公司地址；原始 demo 文案、`[Address]` 与错误链接已移除。
 - `Vol. 1` 已向内部 segment `17` 发送体验版：修正版 newsletter ID `5` 的 3 条消息全部 delivered，failed/suppressed 均为 0。
 - newsletter ID `1` 的首次尝试因退订链接误用变量语法，在 Customer.io 渲染阶段 3 条全部失败；没有错误邮件离开平台。保留该记录用于审计，不复用或扩容。
@@ -17,14 +19,16 @@
 Customer.io 的 App API 不能改写由 Design Studio 创建的邮件正文，因此保留两条发布路径：
 
 1. 现有 `Vol. 1` 使用 Customer.io Design Studio 模板，人工替换内容并试发。
-2. Slack `email:` 工作流使用仓库内的邮件 HTML 模板创建新的 Customer.io 草稿，适合后续稳定自动化。
+2. Slack `email:` 工作流固定使用仓库内 `zen-customerio/zen-research@1` 邮件 HTML 模板创建新的 Customer.io 草稿，适合后续稳定自动化。
 
 两条路径都必须经过 Customer.io Review 页，任何发送或排期都由人工确认。
+
+Bot 自动化路径不接受单次任务或工作流覆盖模板。真实渠道会在调用 Customer.io 前核对中央登记的模板 ID、锁定状态和最终 HTML 模板标识；任一不匹配都会拒绝创建草稿。后续改版必须升级模板版本并更新离线渲染测试。
 
 ## 每一期的发布步骤
 
 1. 设置 `NEWSLETTER_EDITION=Vol. N`。
-2. 在 Slack 提交 `邮件：<主题、核心判断、必须覆盖的链接>`。
+2. 在 Slack 私聊自然描述“给订阅者写一期 Newsletter，主题、核心判断、必须覆盖的链接……”，或在公共频道 `@Bot`；无需记忆固定前缀。
 3. Bot 完成调研和写作，在 Customer.io 创建 newsletter 草稿。
 4. 编辑复核：标题、主题、preheader、链接、数字、来源、移动端、暗色模式、退订链接和公司地址。
 5. 内部阶段保持 `NEWSLETTER_AUDIENCE_STAGE=internal`，只向手工加入 segment `17` 的人员发送。
@@ -34,7 +38,7 @@ Customer.io 的 App API 不能改写由 Design Studio 创建的邮件正文，�
 
 ## 三阶段受众门禁
 
-| Stage | Customer.io segment | 当前人数 | 默认人数上限 | 额外门禁 |
+| Stage | Customer.io segment | 文档记录人数（非实时） | 默认人数上限 | 额外门禁 |
 |---|---|---:|---:|---|
 | `internal` | `Newsletter · Internal Beta`（17） | 3 | 10 | 默认阶段 |
 | `pilot` | `Newsletter · Pilot`（18） | 0 | 50 | 空名单拒绝创建草稿 |
@@ -72,12 +76,24 @@ CUSTOMERIO_PILOT_SEGMENT_ID=18
 CUSTOMERIO_FULL_SEGMENT_ID=6
 CUSTOMERIO_INTERNAL_MAX_RECIPIENTS=10
 CUSTOMERIO_PILOT_MAX_RECIPIENTS=50
+# 可选：full 阶段的额外人数上限；留空时不额外限制。
+CUSTOMERIO_FULL_MAX_RECIPIENTS=
 CUSTOMERIO_ALLOW_FULL_AUDIENCE=false
-CUSTOMERIO_NEWSLETTER_FROM=
+CUSTOMERIO_NEWSLETTER_FROM="Zen Trading <support@zentradings.com>"
 CUSTOMERIO_COMPANY_ADDRESS=
 CUSTOMERIO_NEWSLETTER_FEEDBACK_URL=
+CUSTOMERIO_NEWSLETTER_HEADER_IMAGE_URL=
+CUSTOMERIO_NEWSLETTER_CONTACT_EMAIL=
 NEWSLETTER_EDITION="Vol. 1"
 ```
+
+`CUSTOMERIO_NEWSLETTER_HEADER_IMAGE_URL` 是开头品牌图的公开图片 URL(用 Customer.io 图床里的 https 地址,不要用仓库本地图);留空则不渲染顶部图。`CUSTOMERIO_NEWSLETTER_CONTACT_EMAIL` 是页脚展示的联系邮件，也是没有公开反馈页时满意度按钮的 `mailto:` 目标。配置 `CUSTOMERIO_NEWSLETTER_FEEDBACK_URL` 后，满意/不满意按钮会改为带 `rating=positive|negative` 和 `edition` 的网页链接。仓库模板保留法律强制的 `{% unsubscribe_url %}` 与公司实体地址。发送前可用 `npm run preview:newsletter` 生成本地 HTML 预览(不调用外部 API、不创建草稿)核对排版。
+
+所有新建 Newsletter 的可见发件人固定为 `Zen Trading <support@zentradings.com>`；发布渠道会在创建草稿前校验邮箱，防止环境变量漂移到其他发件地址。
+
+核心自动化使用 App API，只创建 Newsletter 草稿。Customer.io MCP 可供人工管理草稿使用，但不进入 Bot 的核心链，也不为 Bot 配置发送所需的 `write:live` 权限。
+
+内容门禁按类型执行：研究型 Newsletter 强制官方/一手来源、紧邻引用和事实审查；欢迎、首封问候、需求收集、产品或 Agent 介绍、通知公告等关系型邮件跳过外部研究与引用门禁，只使用任务中给出的材料。明确要求官方数据或市场分析时仍按研究型处理。
 
 `CUSTOMERIO_APP_API_KEY` 使用 workspace 级 App API key；不要提交到 Git。旧的 `CUSTOMERIO_NEWSLETTER_SEGMENT_ID` 只作为 `internal` 的兼容回退，新配置应使用三个明确的阶段 segment。`CUSTOMERIO_COMPANY_ADDRESS` 在创建草稿前强制要求，避免生成缺少实体地址的可发送邮件。带空格的版号值必须加引号，否则 shell 读取 `.env` 时会把 `1` 当成命令。
 

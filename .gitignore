@@ -5,7 +5,12 @@
 node_modules/
 *.log
 *.pid
+*.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 coverage/
 .cache/
+output/
+tmp/

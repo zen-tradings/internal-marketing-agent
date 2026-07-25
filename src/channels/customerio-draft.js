@@ -1,5 +1,12 @@
 import fs from 'node:fs/promises';
-import { parseNewsletterArticle, renderNewsletterEmail } from '../lib/newsletter-email.js';
+import {
+  NEWSLETTER_TEMPLATE_ID,
+  parseNewsletterArticle,
+  renderNewsletterEmail,
+} from '../lib/newsletter-email.js';
+import { assertRenderedTemplateMarker } from '../lib/draft-template.js';
+
+export const NEWSLETTER_SENDER_EMAIL = 'support@zentradings.com';
 
 async function defaultReadArticle(articlePath) {
   return fs.readFile(articlePath, 'utf8');
@@ -8,11 +15,16 @@ async function defaultReadArticle(articlePath) {
 export function makeChannel({ readArticle = defaultReadArticle, fetchFn = globalThis.fetch } = {}) {
   return {
     id: 'customerio-draft',
+    templateId: NEWSLETTER_TEMPLATE_ID,
+    templateLocked: true,
     async publish({ articlePath, config, workflow }) {
       const cio = config.customerio || {};
       if (!cio.appApiKey) throw publishError('缺少 CUSTOMERIO_APP_API_KEY');
       const audience = resolveAudience(cio);
       if (!cio.from) throw publishError('缺少 CUSTOMERIO_NEWSLETTER_FROM');
+      if (senderEmail(cio.from) !== NEWSLETTER_SENDER_EMAIL) {
+        throw publishError(`Customer.io 发件邮箱必须统一为 ${NEWSLETTER_SENDER_EMAIL}`);
+      }
       if (!cio.companyAddress) throw publishError('缺少 CUSTOMERIO_COMPANY_ADDRESS');
 
       const baseUrl = String(cio.baseUrl || 'https://api.customer.io').replace(/\/+$/, '');
@@ -21,6 +33,7 @@ export function makeChannel({ readArticle = defaultReadArticle, fetchFn = global
         appApiKey: cio.appApiKey,
         segmentId: audience.segmentId,
         fetchFn,
+        timeoutMs: cio.timeoutMs,
       });
       validateAudienceCount(audience, audienceCount);
 
@@ -29,8 +42,9 @@ export function makeChannel({ readArticle = defaultReadArticle, fetchFn = global
       catch (error) { const wrapped = new Error(`读取 newsletter 失败:${error.message}`); wrapped.stage = 'render'; throw wrapped; }
 
       const article = parseNewsletterArticle(markdown, workflow?.edition || cio.edition || 'Vol. 1');
-      const name = `Zen Trading Newsletter · ${article.edition}`;
+      const name = `Zen Research from Zen Trading · ${article.edition}`;
       const body = renderNewsletterEmail(article, cio);
+      assertRenderedTemplateMarker(body, NEWSLETTER_TEMPLATE_ID);
       const payload = {
         name,
         type: 'email',
@@ -48,22 +62,29 @@ export function makeChannel({ readArticle = defaultReadArticle, fetchFn = global
       };
 
       let response;
+      let data;
+      let detail = '';
       try {
-        response = await fetchFn(`${baseUrl}/v1/newsletters`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${cio.appApiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        });
-      } catch (error) { throw publishError(`Customer.io 请求失败:${error.message}`); }
+        ({ response, data, detail } = await withRequestTimeout(cio.timeoutMs, async (signal) => {
+          const current = await fetchFn(`${baseUrl}/v1/newsletters`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${cio.appApiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+            signal,
+          });
+          if (!current.ok) return { response: current, detail: await safeText(current) };
+          return { response: current, data: await current.json(), detail: '' };
+        }));
+      } catch (error) { throw publishError(`Customer.io 请求失败:${requestErrorMessage(error)}`); }
 
       if (!response.ok) {
-        const detail = await safeText(response);
+        const domainError = unverifiedSendingDomainError(response.status, detail, cio.from);
+        if (domainError) throw publishError(domainError);
         throw publishError(`Customer.io 创建草稿失败:${response.status} ${response.statusText || ''} ${detail}`.trim());
       }
-      const data = await response.json();
       const newsletterId = data?.newsletter?.id;
       if (!newsletterId) throw publishError('Customer.io 返回成功但缺少 newsletter.id');
       return {
@@ -75,6 +96,39 @@ export function makeChannel({ readArticle = defaultReadArticle, fetchFn = global
       };
     },
   };
+}
+
+function senderEmail(value) {
+  const text = String(value || '').trim();
+  const bracketed = text.match(/<([^<>]+)>\s*$/)?.[1];
+  return String(bracketed || text).trim().toLowerCase();
+}
+
+function senderDomain(value) {
+  const email = senderEmail(value);
+  return email.includes('@') ? email.split('@').pop() : '';
+}
+
+export function unverifiedSendingDomainError(status, detail, from) {
+  if (Number(status) !== 422) return '';
+
+  let messages = String(detail || '');
+  try {
+    const parsed = JSON.parse(messages);
+    messages = Array.isArray(parsed?.errors)
+      ? parsed.errors.map((item) => item?.detail || '').join(' ')
+      : messages;
+  } catch {
+    // Customer.io occasionally returns plain text; inspect it below as-is.
+  }
+
+  if (!/domain\s+.+has not been verified|unverified.+domain|verify.+domain/i.test(messages)) return '';
+  const domain = senderDomain(from) || '发件域名';
+  return [
+    `Customer.io 发件域名 ${domain} 尚未在当前 workspace 完成验证。`,
+    '已保留 support@zentradings.com，未自动改用其他发件人。',
+    '请在 Customer.io 的 Settings → Workspace Settings → Email 中添加并验证 Sending Domain，DNS 生效后重试原任务。',
+  ].join('\n');
 }
 
 export function resolveAudience(cio = {}) {
@@ -99,21 +153,26 @@ export function resolveAudience(cio = {}) {
   return { stage, segmentId, maxRecipients };
 }
 
-async function fetchAudienceCount({ baseUrl, appApiKey, segmentId, fetchFn }) {
+async function fetchAudienceCount({ baseUrl, appApiKey, segmentId, fetchFn, timeoutMs }) {
   let response;
+  let data;
+  let detail = '';
   try {
-    response = await fetchFn(`${baseUrl}/v1/segments/${segmentId}/customer_count`, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${appApiKey}` },
-    });
+    ({ response, data, detail } = await withRequestTimeout(timeoutMs, async (signal) => {
+      const current = await fetchFn(`${baseUrl}/v1/segments/${segmentId}/customer_count`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${appApiKey}` },
+        signal,
+      });
+      if (!current.ok) return { response: current, detail: await safeText(current) };
+      return { response: current, data: await current.json(), detail: '' };
+    }));
   } catch (error) {
-    throw publishError(`Customer.io 受众预检失败:${error.message}`);
+    throw publishError(`Customer.io 受众预检失败:${requestErrorMessage(error)}`);
   }
   if (!response.ok) {
-    const detail = await safeText(response);
     throw publishError(`Customer.io 受众预检失败:${response.status} ${response.statusText || ''} ${detail}`.trim());
   }
-  const data = await response.json();
   if (!Number.isInteger(data?.count) || data.count < 0) {
     throw publishError('Customer.io 受众预检返回无效人数');
   }
@@ -138,6 +197,25 @@ function publishError(message) {
 async function safeText(response) {
   try { return (await response.text()).slice(0, 1000); }
   catch { return ''; }
+}
+
+async function withRequestTimeout(timeoutMs = 30000, operation) {
+  const controller = new AbortController();
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      const error = new Error('请求超时');
+      error.name = 'AbortError';
+      reject(error);
+    }, timeoutMs);
+  });
+  try { return await Promise.race([operation(controller.signal), timeout]); }
+  finally { clearTimeout(timer); }
+}
+
+function requestErrorMessage(error) {
+  return error?.name === 'AbortError' ? '请求超时' : (error?.message || String(error));
 }
 
 export default makeChannel();

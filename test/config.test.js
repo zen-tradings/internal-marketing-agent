@@ -15,6 +15,7 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal(c.workDir, '/srv/zen');
   assert.equal(c.maxConcurrency, 1);              // 默认
   assert.equal(c.defaultTimeoutMs, 600000);       // 默认 10min
+  assert.equal('egress' in c, false);
   assert.equal(c.writer.openrouterApiKey, 'or-key');
   assert.equal(c.writer.model, 'deepseek/deepseek-chat');
   assert.equal(c.writer.baseUrl, 'https://openrouter.ai/api/v1');
@@ -24,8 +25,48 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal(c.writer.exaBaseUrl, 'https://api.exa.ai');
   assert.equal(c.writer.exaPriorityResults, 4); // 默认
   assert.equal(c.writer.exaTimeoutMs, 45000); // 默认
+  assert.equal(c.translation.browserEnabled, true);
+  assert.equal(c.translation.maxPdfPages, 120);
+  assert.equal(c.translation.maxSourceBytes, 50 * 1024 * 1024);
+  assert.equal(c.translation.datalabBaseUrl, 'https://www.datalab.to/api/v1');
+  assert.equal(c.translation.datalabMode, 'balanced');
+  assert.match(c.cover.generatorDir, /tools\/cover-generator$/);
   assert.equal('claudeBin' in c, false);
   assert.equal(c.wechat.appId, 'wx');
+  assert.match(c.assets.footerImage, /assets\/zen-footer-qr\.png$/);
+});
+
+test('结构化直译抓取、浏览器、PDF、图片、Notion 与 Datalab 配置可由 env 覆盖', () => {
+  const c = loadConfig({
+    SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
+    WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec',
+    OPENROUTER_API_KEY: 'or-key',
+    TRANSLATION_BROWSER_ENABLED: 'false',
+    TRANSLATION_BROWSER_EXECUTABLE: '/Applications/Chromium',
+    TRANSLATION_MAX_PDF_PAGES: '60',
+    TRANSLATION_MAX_ASSET_COUNT: '30',
+    NOTION_API_TOKEN: 'notion-secret',
+    DATALAB_API_KEY: 'datalab-secret',
+    DATALAB_MODE: 'accurate',
+  });
+  assert.equal(c.translation.browserEnabled, false);
+  assert.equal(c.translation.browserExecutablePath, '/Applications/Chromium');
+  assert.equal(c.translation.maxPdfPages, 60);
+  assert.equal(c.translation.maxAssetCount, 30);
+  assert.equal(c.translation.notionApiToken, 'notion-secret');
+  assert.equal(c.translation.datalabApiKey, 'datalab-secret');
+  assert.equal(c.translation.datalabMode, 'accurate');
+});
+
+test('旧公网出口白名单变量不再生成运行时门禁配置', () => {
+  const c = loadConfig({
+    SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
+    WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec',
+    OPENROUTER_API_KEY: 'or-key', EXA_API_KEY: 'exa-key',
+    EGRESS_GUARD_ENABLED: 'true', EXPECTED_EGRESS_IP: '203.0.113.8',
+    EXPECTED_EGRESS_IPS: '198.51.100.4, 203.0.113.8, 2001:db8::1',
+  });
+  assert.equal('egress' in c, false);
 });
 
 test('OpenRouter 生成预算与 reasoning 可由 env 覆盖', () => {
@@ -111,4 +152,42 @@ test('缺 OpenRouter key 抛错', () => {
     EXA_API_KEY: 'exa-key',
   };
   assert.throws(() => loadConfig(env), /OPENROUTER_API_KEY/);
+});
+
+test('EXA key 对配置加载可选,由原创研究工作流在执行时门禁', () => {
+  const c = loadConfig({
+    SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
+    WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec',
+    OPENROUTER_API_KEY: 'or-key',
+  });
+  assert.equal(c.writer.exaApiKey, '');
+});
+
+test('危险数字配置在启动时 fail-fast', () => {
+  const base = {
+    SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
+    WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec',
+    OPENROUTER_API_KEY: 'or-key',
+  };
+  assert.throws(() => loadConfig({ ...base, MAX_CONCURRENCY: '0' }), /MAX_CONCURRENCY 必须是正整数/);
+  assert.throws(() => loadConfig({ ...base, DEFAULT_TIMEOUT_MS: 'NaN' }), /DEFAULT_TIMEOUT_MS 必须是正数/);
+  assert.throws(() => loadConfig({ ...base, TRANSLATION_MAX_REDIRECTS: '-1' }), /TRANSLATION_MAX_REDIRECTS 必须是非负整数/);
+  assert.throws(() => loadConfig({ ...base, TRANSLATION_MAX_PDF_PAGES: '0' }), /TRANSLATION_MAX_PDF_PAGES 必须是正整数/);
+  assert.throws(() => loadConfig({ ...base, HEALTH_PORT: '70000' }), /HEALTH_PORT 必须在 0 到 65535 之间/);
+});
+
+test('生产环境强制 Slack 用户和频道允许名单', () => {
+  const base = {
+    NODE_ENV: 'production',
+    SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
+    WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec',
+    OPENROUTER_API_KEY: 'or-key',
+  };
+  assert.throws(() => loadConfig(base), /SLACK_ALLOWED_USER_IDS/);
+  assert.throws(() => loadConfig({ ...base, SLACK_ALLOWED_USER_IDS: 'U1' }), /SLACK_ALLOWED_CHANNEL_IDS/);
+  assert.doesNotThrow(() => loadConfig({
+    ...base,
+    SLACK_ALLOWED_USER_IDS: 'U1',
+    SLACK_ALLOWED_CHANNEL_IDS: 'C1',
+  }));
 });

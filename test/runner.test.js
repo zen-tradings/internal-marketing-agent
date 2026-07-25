@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runWriter } from '../src/core/runner.js';
+import { runWriter, sourcePolicyFor } from '../src/core/runner.js';
 import { loadConfig } from '../src/config/index.js';
 
 function tempWorkflow(overrides = {}) {
@@ -100,6 +100,43 @@ test('工作流可覆盖 system prompt 与最终产出指令', async () => {
   assert.equal(completionBody.messages[0].content, 'CUSTOM NEWSLETTER SYSTEM');
   assert.match(completionBody.messages[1].content, /CREATE CUSTOMER\.IO NEWSLETTER MARKDOWN/);
   assert.doesNotMatch(completionBody.messages[1].content, /微信公众号草稿箱/);
+});
+
+test('关系型 Newsletter:首封问候/需求收集不搜索、不要求引用、不运行金融事实审查', async () => {
+  const workflow = tempWorkflow({
+    id: 'email',
+    mode: 'newsletter',
+    factReview: true,
+    sourcePolicy: { officialFirst: true, requireCitations: true, minOfficialSources: 2 },
+  });
+  const input = 'support@zentradings.com作为测试邮箱 发给用户的第一篇newsletter，主要内容是收集用户需求 介绍我们专门的agent对接，发到草稿箱';
+  const calls = [];
+  const fetchFn = async (url, opts) => {
+    calls.push({ url: String(url), body: JSON.parse(opts.body) });
+    return jsonResponse({ choices: [{ message: { content: '---\ntitle: Welcome to Zen Research\n---\nTell us what you need.' } }] });
+  };
+  const config = baseConfig();
+  config.writer.exaApiKey = '';
+
+  const result = await runWriter({ workflow, input, config, fetchFn });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1, '只应调用一次写作模型，不应调用 Exa 或事实审查模型');
+  assert.match(calls[0].body.messages[1].content, /关系\/通知型 Newsletter/);
+  assert.doesNotMatch(calls[0].body.messages[1].content, /至少引用 2 个官方/);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.sourcePolicy.kind, 'relationship-newsletter');
+  assert.equal(trace.sourcePolicy.skipResearch, true);
+  assert.deepEqual(trace.factReview, { skipped: true, reason: 'non-research-newsletter' });
+});
+
+test('研究型 Newsletter:即使同时提到首封，明确要求市场分析时仍保留官方来源门禁', () => {
+  const workflow = { mode: 'newsletter', sourcePolicy: { officialFirst: true, requireCitations: true } };
+  const policy = sourcePolicyFor({ input: '第一篇 newsletter，请做 AI 基建市场分析并使用官方数据', workflow });
+  assert.equal(policy.kind, 'research-newsletter');
+  assert.equal(policy.skipResearch, false);
+  assert.equal(policy.requireOfficial, true);
+  assert.equal(policy.requireCitations, true);
 });
 
 test('OpenRouter 首次空正文时强制关闭 reasoning 重试并成功', async () => {
@@ -288,7 +325,6 @@ test('严格任务:独立检索官方域名,注入当前时间,正文引用已�
       prioritySources: [],
       officialSources: ['sec.gov', 'nasdaq.com'],
       minOfficialSources: 2,
-      minOfficialCitations: 2,
     },
   });
   const searchBodies = [];
@@ -332,9 +368,48 @@ test('严格任务:独立检索官方域名,注入当前时间,正文引用已�
   const prompt = completionBody.messages[1].content;
   assert.match(prompt, /America\/Los_Angeles/);
   assert.match(prompt, /周末要明确对应最近一个交易日/);
-  assert.match(prompt, /【官方\/一手信源】SEC filing/);
+  assert.match(prompt, /【一级优先·官方\/一手信源】SEC filing/);
   const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
   assert.equal(trace.selectedSources.filter((source) => source.kind === 'official').length, 2);
+});
+
+test('研究型 Newsletter:正文未引用官方链接时不再因数量门禁失败', async () => {
+  const workflow = tempWorkflow({
+    mode: 'newsletter',
+    factReview: false,
+    sourcePolicy: { officialFirst: true, requireCitations: true, minOfficialSources: 2 },
+    research: {
+      prioritySources: [],
+      officialSources: ['sec.gov', 'nasdaq.com'],
+      minOfficialSources: 2,
+    },
+  });
+  const fetchFn = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    if (String(url).endsWith('/search')) {
+      if (body.includeDomains) {
+        return jsonResponse({ results: [
+          { title: 'SEC filing', url: 'https://www.sec.gov/filing', text: 'Official.' },
+          { title: 'Nasdaq event', url: 'https://www.nasdaq.com/event', text: 'Official.' },
+        ] });
+      }
+      return jsonResponse({ results: [] });
+    }
+    return jsonResponse({ choices: [{ message: { content: '---\ntitle: 无链接 Newsletter\n---\n正文没有来源链接。' } }] });
+  };
+
+  const result = await runWriter({
+    workflow,
+    input: '请基于官方一手信源撰写市场分析 Newsletter',
+    config: baseConfig(),
+    fetchFn,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(fs.existsSync(result.articlePath), true);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.citationValidation.matchedOfficialSourceCount, 0);
+  assert.equal(trace.citationValidation.passed, true);
 });
 
 test('严格任务:开放搜索成功但官方来源不足时在生成前失败', async () => {
@@ -343,7 +418,6 @@ test('严格任务:开放搜索成功但官方来源不足时在生成前失败'
       prioritySources: [],
       officialSources: ['sec.gov', 'nasdaq.com'],
       minOfficialSources: 2,
-      minOfficialCitations: 2,
     },
   });
   let completionCalls = 0;
@@ -369,13 +443,12 @@ test('严格任务:开放搜索成功但官方来源不足时在生成前失败'
   assert.match(result.stderr, /仅检索到 1 个官方\/一手来源,至少需要 2 个/);
 });
 
-test('严格任务:研究素材足够但正文未引用官方链接时拒绝落盘', async () => {
+test('公众号严格任务:缺少文末引用链接章节时拒绝落盘', async () => {
   const workflow = tempWorkflow({
     research: {
       prioritySources: [],
       officialSources: ['sec.gov', 'nasdaq.com'],
       minOfficialSources: 2,
-      minOfficialCitations: 2,
     },
   });
   const fetchFn = async (url, opts) => {
@@ -395,8 +468,81 @@ test('严格任务:研究素材足够但正文未引用官方链接时拒绝落�
   const result = await runWriter({ workflow, input: '请充分引用官方与一手信源', config: baseConfig(), fetchFn });
 
   assert.equal(result.ok, false);
-  assert.match(result.stderr, /正文仅引用 0 个已检索官方来源,至少需要 2 个/);
+  assert.match(result.stderr, /缺少文末唯一的“引用链接”/);
   assert.equal(fs.existsSync(result.articlePath), false);
+});
+
+test('法律案件:先读取用户案卷再按案名案号深搜,不套用公司官方域名,引用统一移到文末并去重', async () => {
+  const caseUrl = 'https://www.pacermonitor.com/public/case/65430363/example';
+  const complaintUrl = 'https://assets.example.com/complaint.pdf';
+  const workflow = tempWorkflow({
+    id: 'wechat',
+    mode: 'analysis',
+    sourcePolicy: { officialFirst: true, requireCitations: true, minOfficialSources: 2 },
+    research: {
+      prioritySources: ['trendforce.com'],
+      officialSources: ['sec.gov', 'sse.com.cn', 'szse.cn'],
+    },
+  });
+  const searchBodies = [];
+  const fetchFn = async (url, opts) => {
+    const body = JSON.parse(opts.body || '{}');
+    if (String(url).endsWith('/contents')) {
+      return jsonResponse({ results: [{
+        title: 'Susquehanna Securities, LLC v. John Does, 1:26-cv-05474',
+        url: caseUrl,
+        text: 'Docket and party information for the exact case.',
+      }] });
+    }
+    if (String(url).endsWith('/search')) {
+      searchBodies.push(body);
+      if (/Find materials about this exact case only/.test(body.systemPrompt || '')) {
+        return jsonResponse({ results: [{ title: 'Complaint PDF', url: complaintUrl, text: 'Susquehanna v. John Does, 1:26-cv-05474, filed complaint allegations.' }] });
+      }
+      if (body.includeDomains) return jsonResponse({ results: [] });
+      return jsonResponse({ results: [] });
+    }
+    return jsonResponse({ choices: [{ message: { content: [
+      '---',
+      'title: 案件拆解',
+      '---',
+      `根据[公开案卷](${caseUrl})，案件已经立案。起诉方在[起诉状](${complaintUrl})中提出相关指控，但这不是法院认定。`,
+      `重复引用[公开案卷](${caseUrl})。`,
+    ].join('\n') } }] });
+  };
+
+  const result = await runWriter({
+    workflow,
+    input: `拆解分析这份法院案件文件 ${caseUrl}`,
+    config: baseConfig(),
+    fetchFn,
+  });
+
+  assert.equal(result.ok, true);
+  const policy = sourcePolicyFor({ input: `拆解分析这份法院案件文件 ${caseUrl}`, workflow });
+  assert.equal(policy.kind, 'legal-document-analysis');
+  assert.equal(policy.minOfficialSources, 0);
+  assert.equal('minOfficialCitations' in policy, false);
+  assert.equal(policy.requireUserSource, true);
+  assert.equal(policy.maxReferences, 5);
+  const domainSearch = searchBodies.find((body) => body.includeDomains);
+  assert.deepEqual(domainSearch.includeDomains, [
+    'pacer.uscourts.gov', 'uscourts.gov', 'nysd.uscourts.gov', 'justice.gov', 'sec.gov',
+  ]);
+  assert.ok(searchBodies.some((body) => /1:26-cv-05474/.test(body.query)));
+  assert.ok(searchBodies.every((body) => !/重点解释案情/.test(body.query)));
+  assert.ok(searchBodies.some((body) => /Find materials about this exact case only/.test(body.systemPrompt || '')));
+
+  const article = fs.readFileSync(result.articlePath, 'utf8');
+  const [body, references] = article.split('## 引用链接');
+  assert.doesNotMatch(body, /https?:\/\//);
+  assert.match(references, new RegExp(caseUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(references, new RegExp(complaintUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.equal((references.match(/https?:\/\//g) || []).length, 2);
+  assert.equal((article.match(new RegExp(caseUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 1);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.ok(trace.researchLanes.includes('legal-record-search'));
+  assert.equal(trace.models.writer, 'm');
 });
 
 test('严格任务:官方域名检索偶发返回站外 URL 时不得计入官方来源', async () => {
@@ -405,7 +551,6 @@ test('严格任务:官方域名检索偶发返回站外 URL 时不得计入官�
       prioritySources: [],
       officialSources: ['sec.gov', 'nasdaq.com'],
       minOfficialSources: 2,
-      minOfficialCitations: 2,
     },
   });
   const fetchFn = async (url, opts) => {
@@ -526,6 +671,30 @@ test('优先路网络 hang(fetchFn 永不返回)时,exaTimeoutMs 超时后按失
   assert.deepEqual(result.sources, ['https://open.example.com/a']);
 });
 
+test('外部取消信号会中断进行中的网络请求且不会写出 article.md', async () => {
+  const workflow = tempWorkflow();
+  const controller = new AbortController();
+  let requestStarted;
+  const entered = new Promise((resolve) => { requestStarted = resolve; });
+  const fetchFn = async (_url, opts) => {
+    requestStarted();
+    return new Promise((_, reject) => {
+      opts.signal.addEventListener('abort', () => reject(opts.signal.reason), { once: true });
+    });
+  };
+  const pending = runWriter({
+    workflow,
+    input: 'Analyze Nvidia',
+    config: baseConfig(),
+    fetchFn,
+    signal: controller.signal,
+  });
+  await entered;
+  controller.abort();
+  await assert.rejects(pending, (error) => error?.name === 'AbortError');
+  assert.equal(fs.existsSync(path.join(workflow.workDir, 'article.md')), false);
+});
+
 test('优先路失败时降级为仅开放路结果,不抛错', async () => {
   const workflow = tempWorkflow({ research: { prioritySources: ['trendforce.com'] } });
   const fetchFn = async (url, opts) => {
@@ -630,7 +799,6 @@ test('严格官方任务允许一次抓取最多 8 个用户指定 URL', async (
       prioritySources: [],
       officialSources: ['sec.gov'],
       minOfficialSources: 8,
-      minOfficialCitations: 8,
     },
   });
   const urls = Array.from({ length: 8 }, (_, i) => `https://www.sec.gov/source-${i + 1}`);
@@ -703,7 +871,7 @@ test('/contents 抓取失败时降级,不影响两路搜索结果且不报错', 
   assert.deepEqual(result.sources, ['https://open.example.com/a']);
 });
 
-test('素材顺序:用户指定 > 优先信源 > 开放搜索,formatResearch 标签正确', async () => {
+test('素材顺序:用户指定 > 优先信源 > 开放搜索,用户链接并入一级优先层', async () => {
   const workflow = tempWorkflow({ research: { prioritySources: ['trendforce.com'] } });
   const fetchFn = async (url, opts) => {
     const body = JSON.parse(opts.body || '{}');
@@ -736,9 +904,13 @@ test('素材顺序:用户指定 > 优先信源 > 开放搜索,formatResearch 标
   ]);
   const completionCall = calls.find((c) => c.url.endsWith('/chat/completions'));
   const prompt = JSON.parse(completionCall.opts.body).messages[1].content;
-  assert.match(prompt, /【用户指定素材】用户贴的推文/);
-  assert.match(prompt, /【优先信源】TrendForce 报告/);
-  assert.match(prompt, /### 来源 3: 公开报道/); // 开放搜索无前缀标签
+  assert.match(prompt, /【一级优先·用户指定素材】用户贴的推文/);
+  assert.match(prompt, /【一级优先·既定优先信源】TrendForce 报告/);
+  assert.match(prompt, /【三级·开放检索】公开报道/);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.deepEqual(trace.sourceTiers, { firstPriority: 2, specialist: 0, open: 1 });
+  assert.equal(trace.selectedSources[0].priorityTier, 1);
+  assert.equal(trace.selectedSources[0].userSpecified, true);
 });
 
 test('用户指定素材全文(< 24000 字符默认上限)不截断,原样进入 prompt', async () => {

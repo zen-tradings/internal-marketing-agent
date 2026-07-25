@@ -1,0 +1,12 @@
+[Unit]
+Description=Create a daily Zen Content Hub SQLite snapshot
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 America/Los_Angeles
+Persistent=true
+RandomizedDelaySec=10m
+Unit=zen-content-hub-backup.service
+
+[Install]
+WantedBy=timers.target
+

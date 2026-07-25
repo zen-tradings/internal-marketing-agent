@@ -33,6 +33,10 @@ const DEFAULT_PRIORITY_SOURCES = [
 const DEFAULT_OFFICIAL_SOURCES = [
   'sec.gov',
   'nasdaq.com',
+  'csrc.gov.cn',
+  'sse.com.cn',
+  'szse.cn',
+  'cninfo.com.cn',
   'krx.co.kr',
   'fsc.go.kr',
   'fss.or.kr',
@@ -41,6 +45,7 @@ const DEFAULT_OFFICIAL_SOURCES = [
   'samsung.com',
   'micron.com',
   'nvidia.com',
+  'cxmt.com',
 ];
 
 export function prioritySources() {
@@ -63,7 +68,15 @@ export function sharedResearch() {
     prioritySources: prioritySources(),
     officialSources: officialSources(),
     minOfficialSources: 2,
-    minOfficialCitations: 2,
+  };
+}
+
+export function officialFirstPolicy() {
+  return {
+    officialFirst: true,
+    requireCitations: true,
+    minOfficialSources: 2,
+    failClosed: true,
   };
 }
 
@@ -90,8 +103,12 @@ export const COMMON_CONSTRAINTS_BLOCK = `【写作规范 — 严格执行】
 
 【调研素材 — 严格遵守】
 - 调研由系统通过 Exa 完成,你只能使用系统提供的素材与任务内容
+- 用户在 Slack 中提供的链接属于一级优先研究素材,必须与官方/一手来源和系统既定优先信源共同分析;它不是自动翻译对象,也不因用户提供就自动视为官方事实
 - 不编造素材中没有的事实、数字、日期或来源
 - 如果素材不足,明确说明信息不足,不要猜测
+- 正文不放引用脚标、脚注或来源链接。文章末尾只生成一次“## 引用链接”,精选 1-5 个最相关、最具支持力的可点击链接;以相关性为准,不凑数,不要再生成“引用来源”或罗列全部检索结果
+- “引用链接”必须是最后一个文字章节且左对齐;系统会在其后追加固定二维码尾图,不要在尾图后追加任何内容
+- 每个主要章节用 Markdown 粗体突出 1-2 个核心观点或关键词,高亮必须克制且不能改变原意
 
 【产出 — 必须执行】
 把完成的文章写入当前工作目录下的 article.md,文件顶部用 YAML frontmatter 给出:

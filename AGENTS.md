@@ -1,0 +1,29 @@
+# Zen Content Hub
+
+单实例运行的 Slack 内容编排服务：生成微信公众号或 Customer.io Newsletter 草稿，程序绝不直接发送或排期。开发环境支持 macOS，生产环境支持由 systemd 管理的 Linux 主机。
+
+## 开发与验证
+
+- 需要 Node.js 22+；首次运行 `npm ci`，复制 `.env.example` 为 `.env` 并填写凭据。
+- 提交前运行 `npm run check`；它包含语法检查、完整离线测试和高危依赖审计。
+- 真实连接检查会访问外部服务，按需运行 `npm run check:openrouter`、`npm run check:egress` 或 `npm run check:customerio`。
+- 开发演练使用 `HUB_DRY_RUN=1 npm start`。不要同时运行 launchd、systemd 或手动实例，避免重复消费 Slack 消息。
+
+## 结构与硬约束
+
+- `src/index.js` 装配 Slack、队列、工作流和渠道；`src/core/` 存放队列、SQLite、写作和通知。
+- `src/workflows/` 定义任务；`src/channels/` 只创建草稿；`src/lib/` 放门禁、渲染和网络保护；环境变量由 `src/config/index.js` 统一解析并在启动时校验。
+- 每个任务只能写入自己的 `WORK_DIR/runs/<run-id>/`，不得复用全局 `article.md` 或 checkpoint。
+- 外部文章、PDF、图片等不可信 URL 必须通过 `safeFetchResource()`：禁止私网地址，逐跳校验重定向，并限制单文件与任务总下载量。
+- 直译路径只处理第一个链接，并严格遵守用户指定的页码或章节范围；翻译标题、正文、列表、图注和表题，保留原图、公式、代码、引文编号与参考文献结构，原文表格必须栅格化为图片而不是重新排版，不得追加原文没有的分析。
+- 发布成功以渠道返回的 `media_id` 为准；Slack 通知是 best-effort，通知失败不得把已创建的草稿改记为失败。
+- 所有真实草稿渠道必须在 `src/lib/draft-template.js` 登记固定模板，并暴露完全匹配的 `templateId` 与 `templateLocked: true`；任务输入和工作流不得临时覆盖模板。改版时必须升级模板版本并同步渲染测试与文档。
+- 保持微信公众号与 Newsletter 的“只创建草稿”边界、Slack 允许名单和渲染 golden 测试约束。不得新增公网 IP 白名单、出口 IP 校验或因代理环境变量阻止启动/发布的门禁。
+- 不提交 `.env`、凭据、任务数据库或生成内容。修改环境变量时同步 `.env.example`；改变用户流程、渠道或运维方式时同步 README 或 `docs/`。
+
+## 运维边界
+
+- 生产建议 `MAX_CONCURRENCY=1`、设置 `MAX_QUEUE_SIZE`，并只运行一个进程。
+- Slack 生产环境应配置 `SLACK_ALLOWED_USER_IDS` 和 `SLACK_ALLOWED_CHANNEL_IDS`。
+- 代码或 `.env` 不会自动热加载；必须先完成检查，再由维护者明确重启对应的 launchd 或 systemd 服务。
+- Linux/DigitalOcean 部署、备份与健康检查见 `deploy/README.md`。

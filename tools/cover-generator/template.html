@@ -1,0 +1,53 @@
+<meta charset="utf-8">
+<style>
+  /* Zen Trading fixed white cover background · 900×383 */
+  :root{
+    --ink:#294a63;
+    --muted:#62798a;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:900px;height:383px}
+  body{
+    position:relative;overflow:hidden;background:#f7f8f9;color:var(--ink);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .background{position:absolute;inset:0;width:900px;height:383px;object-fit:fill}
+  .main{position:absolute;left:44px;top:137px;width:600px;text-align:left}
+  .edition{margin-bottom:12px;font-size:10px;line-height:1;letter-spacing:.22em;
+    font-weight:600;color:var(--muted);text-transform:uppercase}
+  h1{max-width:600px;font-size:48px;line-height:1.12;letter-spacing:.01em;font-weight:650;color:var(--ink)}
+  .subtitle{max-width:545px;margin-top:14px;font-family:Georgia,"Songti SC","STSong",serif;
+    font-size:18px;line-height:1.35;letter-spacing:.01em;font-weight:600;color:var(--ink)}
+  .subtitle:empty{display:none}
+</style>
+
+<img class="background" src="__ZEN_COVER_BACKGROUND__" alt="">
+
+<main class="main">
+  <div class="edition">Zen Research</div>
+  <h1 id="title"></h1>
+  <div class="subtitle" id="subtitle"></div>
+</main>
+
+<script>
+  const DATA = window.DATA || {
+    title:"长鑫科技",
+    key_takeaway:"Innovating Memory. Powering Intelligence."
+  };
+  const title = String(DATA.title || '').trim();
+  const subtitle = String(DATA.key_takeaway || 'Zen Research from Zen Trading').trim();
+  const titleEl = document.getElementById('title');
+  const subtitleEl = document.getElementById('subtitle');
+  titleEl.textContent = title;
+  subtitleEl.textContent = subtitle;
+
+  // 长标题保持单一视觉层级，按字数自适应，不遮挡背景右侧球体。
+  const length = [...title].length;
+  if (length > 28) titleEl.style.fontSize = '28px';
+  else if (length > 20) titleEl.style.fontSize = '34px';
+  else if (length > 13) titleEl.style.fontSize = '40px';
+  const subtitleLength = [...subtitle].length;
+  if (subtitleLength > 38) subtitleEl.style.fontSize = '14px';
+  else if (subtitleLength > 28) subtitleEl.style.fontSize = '16px';
+</script>

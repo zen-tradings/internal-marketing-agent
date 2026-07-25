@@ -1,4 +1,4 @@
-import { sharedResearch, envChannel, envModel, envTimeoutMs, workDirFor, buildPromptTemplate } from './shared.js';
+import { sharedResearch, officialFirstPolicy, envChannel, envModel, envTimeoutMs, workDirFor, buildPromptTemplate } from './shared.js';
 
 const METHODOLOGY = `【行业综述框架 — 专属要求】
 围绕给定行业或细分赛道撰写综述,遵循以下结构展开:
@@ -12,6 +12,9 @@ const METHODOLOGY = `【行业综述框架 — 专属要求】
 
 export default {
   id: 'sector',
+  mode: 'analysis',
+  sourcePolicy: officialFirstPolicy(),
+  factReview: true,
   triggers: ['slack'],
   get workDir() { return workDirFor('sector'); },
   get model() { return envModel(); },

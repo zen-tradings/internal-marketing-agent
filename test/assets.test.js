@@ -1,10 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { injectFixedImages } from '../src/lib/assets.js';
 
 const HEADER = '/repo/assets/zen-header-banner.gif';
 const FOOTER = '/repo/assets/zen-footer-qr.png';
 const alwaysExists = () => true;
+
+test('固定封底使用最新四二维码原图', () => {
+  const footer = new URL('../assets/zen-footer-qr.png', import.meta.url);
+  const digest = crypto.createHash('sha256').update(fs.readFileSync(footer)).digest('hex');
+  assert.equal(digest, '6c52ad1bb87775e10700fd23333ddb11b7d618d584e0f6c4e44feb3b14b99cab');
+});
 
 test('有 frontmatter 时头图插在第二个 --- 之后空一行处,尾图追加到文末', () => {
   const md = '---\ntitle: T\n---\n正文第一行。';

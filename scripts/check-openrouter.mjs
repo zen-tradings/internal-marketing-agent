@@ -5,6 +5,7 @@ dotenv.config({ override: true });
 const key = process.env.OPENROUTER_API_KEY || '';
 const baseUrl = String(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
 const model = process.env.OPENROUTER_MODEL || 'qwen/qwen3-235b-a22b';
+const timeoutMs = positiveInteger(process.env.OPENROUTER_CHECK_TIMEOUT_MS, 60000);
 
 if (!key) {
   console.error('OPENROUTER_API_KEY is missing. Add it to the project .env file.');
@@ -35,6 +36,16 @@ if (!models.ok) {
   console.error(models.body.slice(0, 300));
   process.exit(1);
 }
+try {
+  const available = JSON.parse(models.body)?.data || [];
+  if (!available.some((item) => item?.id === model)) {
+    console.error(`OpenRouter model is not available: ${model}`);
+    process.exit(1);
+  }
+} catch {
+  console.error('OpenRouter /models returned invalid JSON.');
+  process.exit(1);
+}
 
 const completion = await request(`${baseUrl}/chat/completions`, {
   method: 'POST',
@@ -42,7 +53,8 @@ const completion = await request(`${baseUrl}/chat/completions`, {
   body: JSON.stringify({
     model,
     messages: [{ role: 'user', content: 'Reply with exactly: ok' }],
-    max_tokens: 64,
+    // 部分模型即使 reasoning=none 也会消耗少量隐藏 token；64 容易得到空正文假失败。
+    max_tokens: 256,
     reasoning: { effort: 'none', exclude: true },
     temperature: 0,
   }),
@@ -65,10 +77,22 @@ try {
 console.log('OpenRouter auth and completion check passed.');
 
 async function request(url, options) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, options);
+    const res = await fetch(url, { ...options, signal: controller.signal });
     return { ok: res.ok, status: res.status, statusText: res.statusText, body: await res.text() };
   } catch (e) {
-    return { ok: false, status: 'NETWORK', statusText: e.message || String(e), body: '' };
+    const statusText = e?.name === 'AbortError'
+      ? `request timed out after ${timeoutMs}ms`
+      : e.message || String(e);
+    return { ok: false, status: 'NETWORK', statusText, body: '' };
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+function positiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }

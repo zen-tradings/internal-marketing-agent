@@ -1,4 +1,7 @@
+import { FIXED_DRAFT_TEMPLATE_IDS } from './draft-template.js';
+
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?/;
+export const NEWSLETTER_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['customerio-draft'];
 
 export function normalizeEdition(value = 'Vol. 1') {
   const raw = String(value || 'Vol. 1').trim();
@@ -20,35 +23,45 @@ export function parseNewsletterArticle(markdown, defaultEdition = 'Vol. 1') {
   const body = source.replace(FRONTMATTER_RE, '').trim();
   const title = meta.title || 'Untitled newsletter';
   const edition = normalizeEdition(meta.edition || defaultEdition);
-  const subject = meta.subject || `Zen Trading Newsletter · ${edition} | ${title}`;
+  const subject = meta.subject || `Zen Research from Zen Trading · ${edition} | ${title}`;
   const preheader = (meta.preheader || plainText(body)).slice(0, 140);
   return { title, edition, subject, preheader, body };
 }
 
 export function renderNewsletterEmail(article, options = {}) {
   const siteUrl = safeUrl(options.siteUrl) || 'https://zentradings.com';
+  const siteLabel = siteUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '');
   const feedbackUrl = safeUrl(options.feedbackUrl);
+  const headerImageUrl = safeUrl(options.headerImageUrl);
+  const contactEmail = safeEmail(options.contactEmail);
   const address = escapeHtml(options.companyAddress || 'Company address required before sending');
   const content = renderMarkdown(article.body);
-  const feedback = feedbackUrl
-    ? `<p style="margin:28px 0 0;text-align:center"><a href="${escapeAttr(feedbackUrl)}" style="display:inline-block;background:#08272b;color:#f7f4ec;text-decoration:none;padding:12px 20px;border-radius:999px;font-weight:600">Share feedback</a></p>`
+  const feedback = renderFeedback({ feedbackUrl, contactEmail, edition: article.edition });
+  // 开头品牌图:仅在配置了公开图片 URL 时渲染,顶部与卡片圆角对齐,自适应宽度。
+  const headerImage = headerImageUrl
+    ? `<tr><td style="padding:0"><img src="${escapeAttr(headerImageUrl)}" alt="Zen Research from Zen Trading" width="620" style="display:block;width:100%;max-width:620px;height:auto;border:0;border-top-left-radius:12px;border-top-right-radius:12px"></td></tr>`
     : '';
+  // 页脚只保留公司信息(网址 + 邮件)与法律强制项(退订 + 实体地址)。
+  const contact = contactEmail
+    ? `<p style="margin:0 0 8px"><a href="${escapeAttr(siteUrl)}" style="color:#173f43">${escapeHtml(siteLabel)}</a> · <a href="mailto:${escapeAttr(contactEmail)}" style="color:#173f43">${escapeHtml(contactEmail)}</a></p>`
+    : `<p style="margin:0 0 8px"><a href="${escapeAttr(siteUrl)}" style="color:#173f43">${escapeHtml(siteLabel)}</a></p>`;
 
   return `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(article.subject)}</title></head>
-<body style="margin:0;background:#f0edeb;color:#08272b;font-family:Arial,Helvetica,sans-serif">
+<body data-zen-draft-template="${NEWSLETTER_TEMPLATE_ID}" style="margin:0;background:#f0edeb;color:#08272b;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-weight:300">
   <div style="display:none;max-height:0;overflow:hidden;opacity:0">${escapeHtml(article.preheader)}</div>
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f0edeb"><tr><td align="center" style="padding:24px 12px">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#fffdf8;border:1px solid #dcd8d5;border-radius:12px">
-      <tr><td style="padding:32px">
-        <p style="margin:0 0 18px;font-size:13px;letter-spacing:.14em;font-weight:700;color:#66787a">ZEN TRADING NEWSLETTER · ${escapeHtml(article.edition.toUpperCase())}</p>
-        <h1 style="margin:0 0 28px;font-size:32px;line-height:1.16;color:#08272b">${escapeHtml(article.title)}</h1>
-        <div style="font-size:16px;line-height:1.65;color:#173f43">${content}</div>
+      ${headerImage}
+      <tr><td style="padding:28px 32px">
+        <p style="margin:0 0 14px;font-size:11px;letter-spacing:.12em;font-weight:600;color:#66787a">ZEN RESEARCH FROM ZEN TRADING · ${escapeHtml(article.edition.toUpperCase())}</p>
+        <h1 style="margin:0 0 20px;font-size:24px;line-height:1.25;font-weight:500;color:#08272b">${escapeHtml(article.title)}</h1>
+        <div style="font-size:14px;line-height:1.6;font-weight:300;color:#173f43">${content}</div>
         ${feedback}
       </td></tr>
-      <tr><td style="padding:24px 32px;border-top:1px solid #dcd8d5;font-size:12px;line-height:1.6;color:#66787a">
-        <p style="margin:0 0 8px">You're receiving this because you subscribed at <a href="${escapeAttr(siteUrl)}" style="color:#173f43">zentradings.com</a>. Research commentary only, not investment advice.</p>
+      <tr><td style="padding:20px 32px;border-top:1px solid #dcd8d5;font-size:11px;line-height:1.6;font-weight:300;color:#66787a">
+        ${contact}
         <p style="margin:0 0 8px"><a href="{% unsubscribe_url %}" class="untracked" style="color:#173f43">Unsubscribe</a></p>
         <p style="margin:0">Zen Trading · ${address}</p>
       </td></tr>
@@ -56,6 +69,34 @@ export function renderNewsletterEmail(article, options = {}) {
   </td></tr></table>
 </body>
 </html>`;
+}
+
+function renderFeedback({ feedbackUrl, contactEmail, edition }) {
+  if (!feedbackUrl && !contactEmail) return '';
+  const positive = feedbackUrl
+    ? feedbackWebUrl(feedbackUrl, 'positive', edition)
+    : feedbackMailto(contactEmail, 'satisfied', edition);
+  const negative = feedbackUrl
+    ? feedbackWebUrl(feedbackUrl, 'negative', edition)
+    : feedbackMailto(contactEmail, 'not satisfied', edition);
+  return `<div style="margin:26px 0 0;padding:18px 12px;border-top:1px solid #dcd8d5;text-align:center">
+          <p style="margin:0 0 12px;font-size:13px;color:#66787a">Was this edition useful?</p>
+          <a href="${escapeAttr(positive)}" style="display:inline-block;margin:0 5px;background:#08272b;color:#f7f4ec;text-decoration:none;padding:9px 15px;border-radius:999px;font-size:13px;font-weight:500">👍 Satisfied</a>
+          <a href="${escapeAttr(negative)}" style="display:inline-block;margin:0 5px;background:#e7e3df;color:#173f43;text-decoration:none;padding:9px 15px;border-radius:999px;font-size:13px;font-weight:500">👎 Not satisfied</a>
+        </div>`;
+}
+
+function feedbackWebUrl(base, rating, edition) {
+  const url = new URL(base);
+  url.searchParams.set('rating', rating);
+  url.searchParams.set('edition', edition);
+  return url.toString();
+}
+
+function feedbackMailto(email, rating, edition) {
+  const subject = `Zen Research feedback: ${rating} (${edition})`;
+  const body = `My rating: ${rating}\n\nWhat would make the next edition more useful?\n`;
+  return `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
 function renderMarkdown(markdown) {
@@ -80,7 +121,7 @@ function renderMarkdown(markdown) {
     const heading = line.match(/^(#{2,4})\s+(.+)$/);
     if (heading) {
       flushParagraph(); flushList();
-      out.push(`<h2 style="margin:30px 0 12px;font-size:22px;line-height:1.3;color:#08272b">${inline(heading[2])}</h2>`);
+      out.push(`<h2 style="margin:24px 0 10px;font-size:17px;line-height:1.35;font-weight:500;color:#08272b">${inline(heading[2])}</h2>`);
       continue;
     }
     const item = line.match(/^[-*]\s+(.+)$/);
@@ -94,10 +135,16 @@ function renderMarkdown(markdown) {
 }
 
 function inline(text) {
-  let value = escapeHtml(text);
-  value = value.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => `<a href="${escapeAttr(url)}" style="color:#0b6d75">${label}</a>`);
+  const links = [];
+  const source = String(text).replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => {
+    const token = `\uE000ZEN_LINK_${links.length}\uE001`;
+    links.push(`<a href="${escapeAttr(url)}" style="color:#0b6d75">${escapeHtml(label)}</a>`);
+    return token;
+  });
+  let value = escapeHtml(source);
   value = value.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   value = value.replace(/`([^`]+)`/g, '<code style="background:#f0edeb;padding:1px 4px;border-radius:3px">$1</code>');
+  value = value.replace(/\uE000ZEN_LINK_(\d+)\uE001/g, (_, index) => links[Number(index)] || '');
   return value;
 }
 
@@ -115,6 +162,11 @@ function safeUrl(value) {
     const url = new URL(String(value));
     return ['http:', 'https:'].includes(url.protocol) ? url.toString() : '';
   } catch { return ''; }
+}
+
+function safeEmail(value) {
+  const email = String(value || '').trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
 }
 
 function stripQuotes(value) {

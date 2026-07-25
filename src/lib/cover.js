@@ -2,8 +2,15 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const DEFAULT_GENERATOR_DIR = path.join(os.homedir(), 'zen-push-image');
+const DEFAULT_GENERATOR_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'tools',
+  'cover-generator'
+);
 
 // 发布前总是写入本次生成的封面,避免沿用旧文章 cover。
 export function ensureFrontmatterCover(markdown, coverPath) {
@@ -21,26 +28,23 @@ const COVER_SYSTEM_PROMPT = `你负责从 Zen Trading 公众号文章中提取�
 
 输出 JSON 字段(严格遵守):
 {
-  "tag": "事件驱动|周报|月报|季报|年报 之一",
   "title": "封面标题,不超过22个汉字",
-  "key_takeaway": "核心结论,不超过25个汉字",
-  "chain": {
-    "direction": "up|down|neutral",
-    "stages": [ { "kicker": "...", "nm": "英文公司名或Ticker", "sub": "..." } ]
-  },
-  "bullets": [ { "ic": "1", "tx": "不超过15字,数字用<b>包裹" } ],
-  "source": "来源：公开资料 · 截至 YYYY-MM"
+  "key_takeaway": "一句核心结论或定位,不超过30个汉字"
 }
-chain.stages 需 2 到 3 个,bullets 需 3 到 5 个。`;
+标题应保留文章主体名称；核心结论必须来自正文，信息不足时写“Zen Research from Zen Trading”。`;
 
 // 调 OpenRouter 从文章内容里提取封面数据。解析/校验失败一律返回 null,不抛错,
 // 让调用方(generateCover)回退到示例数据 + 标题的既有行为,不能让封面因提取失败而挂掉。
 export async function buildCoverData({ title, markdown, writer, fetchFn = globalThis.fetch }) {
+  const controller = new AbortController();
+  const timeoutMs = Number(writer?.coverTimeoutMs || 30000);
+  let timer;
   try {
     if (!writer || !writer.openrouterApiKey || !writer.model) return null;
     const url = `${trimTrailingSlash(writer.baseUrl || 'https://openrouter.ai/api/v1')}/chat/completions`;
-    const res = await fetchFn(url, {
+    const request = fetchFn(url, {
       method: 'POST',
+      signal: controller.signal,
       headers: {
         Authorization: `Bearer ${writer.openrouterApiKey}`,
         'Content-Type': 'application/json',
@@ -52,12 +56,22 @@ export async function buildCoverData({ title, markdown, writer, fetchFn = global
         max_tokens: 1200,
         reasoning: { effort: 'none', exclude: true },
         temperature: 0,
+        response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: COVER_SYSTEM_PROMPT },
           { role: 'user', content: `文章标题:${title || ''}\n\n文章正文:\n${markdown || ''}` },
         ],
       }),
     });
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        const error = new Error('封面数据请求超时');
+        error.name = 'AbortError';
+        reject(error);
+      }, timeoutMs);
+    });
+    const res = await Promise.race([request, timeout]);
     if (!res.ok) return null;
     const data = await res.json();
     const content = data?.choices?.[0]?.message?.content;
@@ -65,6 +79,8 @@ export async function buildCoverData({ title, markdown, writer, fetchFn = global
     return parseCoverContent(content);
   } catch {
     return null;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -80,37 +96,13 @@ function parseCoverContent(content) {
   }
 }
 
-const VALID_TAGS = ['事件驱动', '周报', '月报', '季报', '年报'];
-const VALID_DIRECTIONS = ['up', 'down', 'neutral'];
-
 function normalizeCoverData(data) {
   if (!data || typeof data !== 'object') return null;
-  if (!VALID_TAGS.includes(data.tag)) return null;
 
   const title = truncateField(data.title, 30, 22);
-  const key_takeaway = truncateField(data.key_takeaway, 35, 25);
+  const key_takeaway = truncateField(data.key_takeaway, 40, 30);
   if (title === null || key_takeaway === null) return null;
-
-  if (!data.chain || typeof data.chain !== 'object') return null;
-  if (!VALID_DIRECTIONS.includes(data.chain.direction)) return null;
-  if (!Array.isArray(data.chain.stages) || data.chain.stages.length < 2 || data.chain.stages.length > 3) return null;
-  for (const s of data.chain.stages) {
-    if (!s || typeof s !== 'object' || !s.kicker || !s.nm || !s.sub) return null;
-  }
-
-  if (!Array.isArray(data.bullets) || data.bullets.length < 3 || data.bullets.length > 5) return null;
-  for (const b of data.bullets) {
-    if (!b || typeof b !== 'object' || !b.ic || !b.tx) return null;
-  }
-
-  return {
-    tag: data.tag,
-    title,
-    key_takeaway,
-    chain: data.chain,
-    bullets: data.bullets,
-    source: typeof data.source === 'string' && data.source.trim() ? data.source : '来源:公开资料',
-  };
+  return { title, key_takeaway };
 }
 
 // 缺失/空字符串返回 null(触发整体提取失败);超过硬上限的字符串截断而非失败。
@@ -125,6 +117,7 @@ function deepMerge(base, override) {
   if (override && typeof override === 'object') {
     const result = { ...(base && typeof base === 'object' && !Array.isArray(base) ? base : {}) };
     for (const key of Object.keys(override)) {
+      if (['__proto__', 'prototype', 'constructor'].includes(key)) continue;
       result[key] = deepMerge(base ? base[key] : undefined, override[key]);
     }
     return result;
@@ -136,10 +129,9 @@ function trimTrailingSlash(value) {
   return String(value || '').replace(/\/+$/, '');
 }
 
-// 调用 ~/zen-push-image/render.mjs 生成封面 PNG。
+// 调用仓库内置 cover-generator/render.mjs 生成封面 PNG。
 // 真实接口: node render.mjs <data.json> [out.png] —— 无 --title/--out flag,
 // 数据以 window.DATA 形式注入 template.html 后由无头 Chrome 截图。
-// 不需要 Gemini API key:无 key 时背景退化为 CSS 渐变占位图。
 export async function generateCover({
   title,
   outDir,
@@ -148,6 +140,8 @@ export async function generateCover({
   markdown,
   writer,
   buildDataFn = buildCoverData,
+  processTimeoutMs = Number(writer?.coverProcessTimeoutMs || 90000),
+  keepTemp = false,
 }) {
   const examplePath = path.join(generatorDir, 'samples', 'example.json');
   let exampleData;
@@ -159,7 +153,7 @@ export async function generateCover({
   }
 
   // 既有回退行为:示例数据 + 文章标题覆盖 title 字段,其余字段沿用示例默认值。
-  let data = { ...exampleData, title };
+  let data = { ...exampleData, title, key_takeaway: 'Zen Research from Zen Trading' };
 
   if (markdown && writer) {
     let built = null;
@@ -177,18 +171,33 @@ export async function generateCover({
   const outPath = path.join(outDir, 'cover.png');
   await fs.writeFile(dataPath, JSON.stringify(data, null, 2));
 
-  return new Promise((resolve, reject) => {
-    let cp;
-    try {
-      cp = spawnFn(process.execPath, [path.join(generatorDir, 'render.mjs'), dataPath, outPath], { cwd: generatorDir, stdio: 'inherit' });
-    } catch (e) {
-      reject(Object.assign(e, { stage: 'cover' }));
-      return;
-    }
-    cp.on('close', (code) => {
-      if (code === 0) resolve(path.resolve(outPath));
-      else reject(Object.assign(new Error(`封面生成失败 code=${code}`), { stage: 'cover' }));
+  try {
+    return await new Promise((resolve, reject) => {
+      let cp;
+      let settled = false;
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      };
+      const timer = setTimeout(() => {
+        try { cp?.kill?.('SIGKILL'); } catch {}
+        finish(reject, Object.assign(new Error(`封面生成超时:${processTimeoutMs}ms`), { stage: 'cover' }));
+      }, processTimeoutMs);
+      try {
+        cp = spawnFn(process.execPath, [path.join(generatorDir, 'render.mjs'), dataPath, outPath], { cwd: generatorDir, stdio: 'inherit' });
+      } catch (e) {
+        finish(reject, Object.assign(e, { stage: 'cover' }));
+        return;
+      }
+      cp.on('close', (code) => {
+        if (code === 0) finish(resolve, path.resolve(outPath));
+        else finish(reject, Object.assign(new Error(`封面生成失败 code=${code}`), { stage: 'cover' }));
+      });
+      cp.on('error', (e) => finish(reject, Object.assign(e, { stage: 'cover' })));
     });
-    cp.on('error', (e) => reject(Object.assign(e, { stage: 'cover' })));
-  });
+  } finally {
+    if (!keepTemp) await fs.rm(workDir, { recursive: true, force: true });
+  }
 }

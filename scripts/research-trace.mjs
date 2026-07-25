@@ -7,10 +7,20 @@ dotenv.config({ override: true });
 const workflowId = process.argv[2] || 'company';
 const base = process.env.WORK_DIR || '/srv/zen/wechat';
 const workDir = workflowId === 'wechat' ? base : path.join(base, workflowId);
-const tracePath = path.join(workDir, 'research-trace.json');
+const legacyTracePath = path.join(workDir, 'research-trace.json');
+const runsDir = path.join(workDir, 'runs');
+const runTracePaths = fs.existsSync(runsDir)
+  ? fs.readdirSync(runsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(runsDir, entry.name, 'research-trace.json'))
+      .filter((candidate) => fs.existsSync(candidate))
+  : [];
+const tracePath = [legacyTracePath, ...runTracePaths]
+  .filter((candidate) => fs.existsSync(candidate))
+  .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
 
-if (!fs.existsSync(tracePath)) {
-  console.log(`未找到调研轨迹: ${tracePath}`);
+if (!tracePath) {
+  console.log(`未找到调研轨迹: ${workDir}`);
   process.exit(0);
 }
 

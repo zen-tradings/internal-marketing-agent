@@ -2,8 +2,10 @@ const BLOCK_RE = /```quarterly-chart\s*([\s\S]*?)```/g;
 
 export function renderQuarterlyCharts(markdown) {
   return String(markdown || '').replace(BLOCK_RE, (_, raw) => {
-    try { return renderChart(JSON.parse(raw.trim())); }
-    catch { return ''; }
+    let spec;
+    try { spec = JSON.parse(raw.trim()); }
+    catch (error) { throw new Error(`季度图表 JSON 无效:${error.message}`); }
+    return renderChart(spec);
   });
 }
 
@@ -11,10 +13,12 @@ function renderChart(spec) {
   const periods = stringArray(spec.periods);
   const revenue = numberArray(spec.revenue);
   const margin = numberArray(spec.grossMargin);
-  if (periods.length < 4 || periods.length > 6 || revenue.length !== periods.length || margin.length !== periods.length) return '';
+  if (periods.length < 4 || periods.length > 6 || revenue.length !== periods.length || margin.length !== periods.length) {
+    throw new Error('季度图表数据不完整:periods/revenue/grossMargin 必须包含相同的 4-6 期数据');
+  }
 
   const maxRevenue = Math.max(...revenue);
-  if (!(maxRevenue > 0)) return '';
+  if (!(maxRevenue > 0)) throw new Error('季度图表营收数据必须包含正数');
   const title = escapeHtml(spec.title || '季度趋势');
   const unit = escapeHtml(spec.revenueUnit || '');
   const source = escapeHtml(spec.source || '公司披露');

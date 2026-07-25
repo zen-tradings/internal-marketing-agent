@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { makeHandler } from '../src/index.js';
+import { FIXED_DRAFT_TEMPLATE_IDS } from '../src/lib/draft-template.js';
+import { createTaskCancelledError } from '../src/lib/task-cancellation.js';
 
 // 极简 store 桩:内存持有单条 run 记录,记录 setStatus 调用序列供断言。
 function makeStore(initial) {
@@ -23,10 +28,12 @@ function makeStore(initial) {
 function makeNotifier() {
   const successCalls = [];
   const failureCalls = [];
+  const cancelledCalls = [];
   return {
-    successCalls, failureCalls,
+    successCalls, failureCalls, cancelledCalls,
     async success(notify, payload) { successCalls.push({ notify, payload }); },
     async failure(notify, payload) { failureCalls.push({ notify, payload }); },
+    async cancelled(notify, payload) { cancelledCalls.push({ notify, payload }); },
   };
 }
 
@@ -82,6 +89,42 @@ test('happy path:生成 + 发布成功 → done,success 调用一次,failure 不
   assert.equal(notifier.failureCalls.length, 0);
 });
 
+test('真实草稿渠道未锁定登记模板时在 publish 前拦截', async () => {
+  let published = false;
+  const workflows = { wechat: { channel: 'wechat-draft', retries: 0 } };
+  const channels = {
+    'wechat-draft': {
+      async publish() { published = true; return { mediaId: 'M', title: 'T' }; },
+    },
+  };
+  const { deps, store } = baseDeps({ workflows, channels });
+
+  await makeHandler(deps)(RUN);
+
+  assert.equal(published, false);
+  assert.equal(store._row().status, 'failed');
+  assert.equal(store._row().stage, 'render');
+  assert.match(store._row().error, /未锁定模板/);
+});
+
+test('真实草稿渠道只有锁定中央登记模板后才允许 publish', async () => {
+  let published = false;
+  const workflows = { wechat: { channel: 'wechat-draft', retries: 0 } };
+  const channels = {
+    'wechat-draft': {
+      templateId: FIXED_DRAFT_TEMPLATE_IDS['wechat-draft'],
+      templateLocked: true,
+      async publish() { published = true; return { mediaId: 'M', title: 'T' }; },
+    },
+  };
+  const { deps, store } = baseDeps({ workflows, channels });
+
+  await makeHandler(deps)(RUN);
+
+  assert.equal(published, true);
+  assert.equal(store._row().status, 'done');
+});
+
 test('生成失败:runWriter 返回 ok:false → failed/generate,failure 调用一次,publish 不调用', async () => {
   const runWriter = async () => ({ ok: false, stderr: 'writer 挂了' });
   const { deps, store, notifier, publishCalls } = baseDeps({ runWriter });
@@ -95,6 +138,23 @@ test('生成失败:runWriter 返回 ok:false → failed/generate,failure 调用�
   assert.equal(notifier.failureCalls.length, 1);
   assert.equal(notifier.failureCalls[0].payload.stage, 'generate');
   assert.equal(notifier.successCalls.length, 0);
+});
+
+test('旧公网出口配置与注入钩子不再参与任务发布', async () => {
+  let writerCalled = false;
+  const runWriter = async () => { writerCalled = true; return { ok: true, articlePath: '/tmp/a.md' }; };
+  const { deps, store, notifier, publishCalls } = baseDeps({ runWriter });
+  deps.config = { egress: { enabled: true } };
+  deps.assertEgress = async () => { throw new Error('旧钩子不应调用'); };
+  deps.waitForEgress = async () => { throw new Error('旧钩子不应调用'); };
+
+  await makeHandler(deps)(RUN);
+
+  assert.equal(writerCalled, true);
+  assert.equal(publishCalls.length, 1);
+  assert.equal(store._row().status, 'done');
+  assert.equal(notifier.failureCalls.length, 0);
+  assert.equal(notifier.successCalls.length, 1);
 });
 
 test('重试后成功:workflow.retries=1,首次抛错次次成功 → 最终 done 且 success 只调用一次', async () => {
@@ -115,4 +175,66 @@ test('重试后成功:workflow.retries=1,首次抛错次次成功 → 最终 don
   assert.equal(store._row().status, 'done');
   assert.equal(notifier.successCalls.length, 1, '不应因重试而重复通知成功');
   assert.equal(notifier.failureCalls.length, 0);
+});
+
+test('成功通知失败不反向把已发布任务改成 failed', async () => {
+  const notifier = {
+    async success() { throw new Error('Slack channel_required'); },
+    async failure() { throw new Error('Slack channel_required'); },
+  };
+  const { deps, store } = baseDeps({ notifier });
+  await makeHandler(deps)(RUN);
+  assert.equal(store._row().status, 'done');
+  assert.equal(store._row().media_id, 'M');
+});
+
+test('损坏 notify_json 被标记 config failed,不会留成 queued 毒任务', async () => {
+  const store = makeStore({ notify_json: '{bad json' });
+  const { deps } = baseDeps({ store });
+  await makeHandler(deps)(RUN);
+  assert.equal(store._row().status, 'failed');
+  assert.equal(store._row().stage, 'config');
+});
+
+test('服务任务使用 run 级工作目录隔离同工作流并发', async () => {
+  let actualWorkDir;
+  const workflows = { wechat: { id: 'wechat', workDir: '/tmp/zen-base', channel: 'mock', retries: 0 } };
+  const runWriter = async ({ workflow }) => {
+    actualWorkDir = workflow.workDir;
+    return { ok: true, articlePath: `${workflow.workDir}/article.md` };
+  };
+  const { deps } = baseDeps({ workflows, runWriter });
+  await makeHandler(deps)(RUN);
+  assert.match(actualWorkDir, /^\/tmp\/zen-base\/runs\/r1-/);
+});
+
+test('Slack 取消生成中任务后标记 cancelled 并删除独立运行目录', async () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-handler-cancel-'));
+  let started;
+  const entered = new Promise((resolve) => { started = resolve; });
+  let actualWorkDir;
+  const workflows = { wechat: { id: 'wechat', workDir: baseDir, channel: 'mock', retries: 0 } };
+  const runWriter = async ({ workflow, signal }) => {
+    actualWorkDir = workflow.workDir;
+    fs.mkdirSync(actualWorkDir, { recursive: true });
+    fs.writeFileSync(path.join(actualWorkDir, 'partial.tmp'), 'unfinished');
+    started();
+    await new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+  };
+  const { deps, store, notifier, publishCalls } = baseDeps({ workflows, runWriter });
+  const controller = new AbortController();
+  const pending = makeHandler(deps)(RUN, { signal: controller.signal, setPhase() {} });
+  await entered;
+  controller.abort(createTaskCancelledError('Slack stop'));
+  await pending;
+
+  assert.equal(store._row().status, 'cancelled');
+  assert.equal(store._row().stage, 'cancelled');
+  assert.equal(fs.existsSync(actualWorkDir), false);
+  assert.equal(publishCalls.length, 0);
+  assert.equal(notifier.failureCalls.length, 0);
+  assert.equal(notifier.cancelledCalls.length, 1);
+  assert.equal(notifier.cancelledCalls[0].payload.cleaned, true);
 });

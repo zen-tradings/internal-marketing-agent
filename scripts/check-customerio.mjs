@@ -45,10 +45,13 @@ if (Number.isInteger(stages[stage].maxRecipients) && selected?.count > stages[st
 }
 if (stage === 'full' && !allowFull) errors.push('full 阶段未设置 CUSTOMERIO_ALLOW_FULL_AUDIENCE=true');
 if (!process.env.CUSTOMERIO_NEWSLETTER_FROM) errors.push('缺少 CUSTOMERIO_NEWSLETTER_FROM');
+else if (senderEmail(process.env.CUSTOMERIO_NEWSLETTER_FROM) !== 'support@zentradings.com') {
+  errors.push('CUSTOMERIO_NEWSLETTER_FROM 必须使用 support@zentradings.com');
+}
 if (!process.env.CUSTOMERIO_COMPANY_ADDRESS) errors.push('缺少 CUSTOMERIO_COMPANY_ADDRESS');
 
 const list = await request('/v1/newsletters');
-const expectedName = `Zen Trading Newsletter · ${edition}`;
+const expectedName = `Zen Research from Zen Trading · ${edition}`;
 const editions = await Promise.all((list.newsletters || [])
   .filter((item) => item.name === expectedName)
   .map(async (item) => {
@@ -97,6 +100,11 @@ async function request(path) {
 function positiveInteger(value) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function senderEmail(value) {
+  const text = String(value || '').trim();
+  return String(text.match(/<([^<>]+)>\s*$/)?.[1] || text).trim().toLowerCase();
 }
 
 function fail(message) {
