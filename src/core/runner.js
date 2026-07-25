@@ -238,6 +238,7 @@ async function runAnalysisV2({
   taskContext,
   signal,
 }) {
+  trace.pipelineVersion = 'v2';
   const analysis = config.analysis || {};
   const maxQueries = positiveNumber(analysis.searchMaxQueries, 6);
   const recentWindowDays = positiveNumber(analysis.recentWindowDays, 90);

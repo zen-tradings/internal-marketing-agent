@@ -26,4 +26,5 @@
 - 生产建议 `MAX_CONCURRENCY=1`、设置 `MAX_QUEUE_SIZE`，并只运行一个进程。
 - Slack 生产环境应配置 `SLACK_ALLOWED_USER_IDS` 和 `SLACK_ALLOWED_CHANNEL_IDS`。
 - 代码或 `.env` 不会自动热加载；必须先完成检查，再由维护者明确重启对应的 launchd 或 systemd 服务。
+- DigitalOcean 的 `/opt/zen-content-hub` 是带 `.deploy-commit` 的现役不可变发布目录，不保证含 `.git`；先在独立 release 目录安装并验证，再单实例切换，旧目录保留为显式 rollback。
 - Linux/DigitalOcean 部署、备份与健康检查见 `deploy/README.md`。

@@ -26,6 +26,7 @@ if (!tracePath) {
 
 const trace = JSON.parse(fs.readFileSync(tracePath, 'utf8'));
 console.log(`工作流: ${trace.workflowId}`);
+if (trace.pipelineVersion) console.log(`分析链路: ${trace.pipelineVersion}`);
 console.log(`任务: ${trace.input}`);
 console.log(`开始: ${trace.startedAt}`);
 if (trace.taskContract) {

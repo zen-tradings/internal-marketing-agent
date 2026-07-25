@@ -6,7 +6,9 @@ manual process with the same Slack tokens or SQLite database.
 ## Filesystem layout
 
 ```text
-/opt/zen-content-hub/          checked-out repository
+/opt/zen-content-hub/          active immutable release (`.deploy-commit`)
+/opt/zen-content-hub.release-<sha>/  staged release before activation
+/opt/zen-content-hub.rollback-<sha>/ previous release kept for rollback
 /etc/zen-content-hub/          secrets and runtime configuration directory
 /etc/zen-content-hub/zen-content-hub.env  service environment (0640, root:zenbot)
 /var/lib/zen-content-hub/      SQLite database and per-run artifacts
@@ -76,19 +78,38 @@ sudo systemctl status zen-content-hub
 curl --fail http://127.0.0.1:8080/health
 ```
 
-Before each deployment, run `npm ci && npm run check`. Deploy by pulling the
-reviewed commit and running `sudo systemctl restart zen-content-hub`. SIGTERM
-stops new queue intake and gives the active task up to 25 seconds to finish;
-queued tasks remain in SQLite and are restored by the new process.
+## Updating an existing service
 
-For the first Analysis V2 rollout, deploy the reviewed code with
-`ANALYSIS_PIPELINE_VERSION=v1`, verify that the service and Slack connection
-are healthy, then set it to `v2` and restart the same systemd instance. Do not
-run V1 and V2 as separate processes. Inspect `research-trace.json` for the first
-five WeChat analysis tasks; it records the immutable task contract, search
-plan, evidence matrix, source classification and sentence-level audit even when
-the task pauses in `needs_input`. Switching the single environment value back
-to `v1` is the temporary rollback path.
+Production uses an immutable release directory rather than an in-place Git
+checkout. Build the archive from an explicit reviewed commit, never from a
+dirty working tree. Extract it into `/opt/zen-content-hub.release-<sha>`, write
+the full commit hash to its `.deploy-commit`, set ownership to `zenbot:zenbot`,
+then run `npm ci && npm run check` inside that staged directory.
+
+Before activation:
+
+1. Run the SQLite-aware backup service and verify that a new snapshot exists.
+2. Confirm `/ready` reports `active=0`, `pending=0`, Slack connected and
+   `ok=true`.
+3. Confirm the rollback destination does not already exist.
+4. Stop `zen-content-hub`, move the current directory to
+   `/opt/zen-content-hub.rollback-<old-sha>`, move the staged release to
+   `/opt/zen-content-hub`, and start the same systemd unit.
+5. Verify `.deploy-commit`, `/ready`, one Node process and recent service logs.
+
+SIGTERM stops new queue intake and gives the active task up to 25 seconds to
+finish; queued tasks remain in SQLite and are restored by the new process. If
+startup or readiness fails, restore the previous directory and protected
+environment-file backup before restarting the unit.
+
+Analysis V2 is the production default. `ANALYSIS_PIPELINE_VERSION=v1` remains
+only as an emergency fallback during the initial five-task acceptance window;
+do not run V1 and V2 as separate processes. Inspect `research-trace.json` for
+the first five WeChat analysis tasks. It records `pipelineVersion`, the
+immutable task contract, search plan, evidence matrix, source classification
+and sentence-level audit even when a task pauses in `needs_input`. Remove the
+temporary V1 code path only in a separately reviewed change after all five
+traces pass.
 
 Back up `/var/lib/zen-content-hub/runs.db` together with its `-wal` and `-shm`
 files using a SQLite-aware snapshot or backup command. Keep only one application

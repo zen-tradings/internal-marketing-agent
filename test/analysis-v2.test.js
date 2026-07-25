@@ -238,6 +238,7 @@ test('V2 完整链路按 Opus 5/Kimi K2 定向搜索、写作、局部审计并�
   assert.match(article, /anthropic\.com\/news\/opus-5/);
   assert.match(article, /kimi\.com\/blog\/kimi-k2/);
   const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.pipelineVersion, 'v2');
   assert.equal(trace.taskContract.prompt_revision, 3);
   assert.deepEqual(trace.evidenceMatrix.entities.map((item) => item.literal), ['Opus 5', 'Kimi K2']);
   assert.equal(trace.factReview.approved, true);

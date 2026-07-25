@@ -28,8 +28,8 @@
    判为一手来源。GLM 5.2 只接收相关证据写作；事实审计只返回精确原句和局部动作，
    不能重写全文。非核心问题确定性删除后继续交付，核心冲突转 needs_input。
    引用链接由系统从证据矩阵精选并确定性追加，不再由模型维护。
-   V1 路径在上线期由 ANALYSIS_PIPELINE_VERSION 临时保留；翻译、晨报和 Newsletter
-   不进入 V2。
+   生产默认运行 V2；V1 路径只在首批五条 V2 任务验收期间由
+   ANALYSIS_PIPELINE_VERSION 临时保留作紧急回退。翻译、晨报和 Newsletter 不进入 V2。
    调 OpenRouter chat completions(正文模型 = .env 的 OPENROUTER_MODEL),
    每个任务使用独立的 workDir/runs/<run-id>/，产出其中的 article.md
    (必须有 title frontmatter，这是硬契约，checkpoint 和生成素材也不得跨任务复用)。
@@ -102,7 +102,7 @@ scripts/install-launchd.sh
 
 ### Linux / DigitalOcean systemd
 
-目录布局、首次安装、数据库备份、安全更新和健康检查见 [`../deploy/README.md`](../deploy/README.md)。更新代码后先 `npm ci && npm run check`，再执行 `sudo systemctl restart zen-content-hub`。生产只运行一个实例。
+目录布局、首次安装、不可变发布包、数据库备份、安全更新和健康检查见 [`../deploy/README.md`](../deploy/README.md)。更新时先在独立 release 目录执行 `npm ci && npm run check`，再切换并重启唯一的 systemd 实例；现役目录用 `.deploy-commit` 标记，不依赖在线 `git pull`。
 
 改任何 `src/` 代码后的验收顺序：`npm run check`（测试不使用真实业务凭据；依赖审计会访问 npm registry）→ 按需执行真实连接检查 → 备份 SQLite → 明确重启对应服务。不要从 Git 拉取后未经检查直接重启。
 

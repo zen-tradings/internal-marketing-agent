@@ -107,7 +107,7 @@ curl --fail http://127.0.0.1:8787/health
 curl --fail http://127.0.0.1:8787/ready
 ```
 
-代码更新不会自动生效。先拉取代码、执行 `npm ci && npm run check`，再重启 systemd；数据库应在停服或使用 SQLite 在线备份机制时备份。生产环境只运行一个实例。
+代码更新不会自动生效。把通过 CI 的明确提交按 [`deploy/README.md`](deploy/README.md) 打成不可变发布包，在独立 release 目录执行 `npm ci && npm run check`，备份 SQLite 后再切换并重启唯一的 systemd 实例；不要从本地脏工作树直接覆盖生产目录。
 
 `RUN_RETENTION_DAYS` 控制终态任务记录及其独立运行目录的保留天数，`SLACK_THREAD_RETENTION_DAYS` 控制线程上下文和事件去重记录；清理在启动时执行。`cancelled` 和 `needs_input` 与其它终态记录使用同一保留规则。主动停止会删除整个未完成运行目录；等待澄清的任务只保留 `research-trace.json`，其余半成品立即清理。调整为更短期限前先备份数据库和 `/var/lib/zen-content-hub`。
 
