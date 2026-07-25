@@ -18,6 +18,7 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal('egress' in c, false);
   assert.equal(c.writer.openrouterApiKey, 'or-key');
   assert.equal(c.writer.model, 'deepseek/deepseek-chat');
+  assert.equal(c.writer.plannerModel, 'deepseek/deepseek-chat');
   assert.equal(c.writer.baseUrl, 'https://openrouter.ai/api/v1');
   assert.equal(c.writer.maxTokens, 12000);
   assert.equal(c.writer.reasoningEffort, 'none');
@@ -25,6 +26,10 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal(c.writer.exaBaseUrl, 'https://api.exa.ai');
   assert.equal(c.writer.exaPriorityResults, 4); // 默认
   assert.equal(c.writer.exaTimeoutMs, 45000); // 默认
+  assert.equal(c.analysis.pipelineVersion, 'v2');
+  assert.equal(c.analysis.searchMaxQueries, 6);
+  assert.equal(c.analysis.recentWindowDays, 90);
+  assert.equal(c.slack.editDebounceMs, 5000);
   assert.equal(c.translation.browserEnabled, true);
   assert.equal(c.translation.maxPdfPages, 120);
   assert.equal(c.translation.maxSourceBytes, 50 * 1024 * 1024);
@@ -78,6 +83,28 @@ test('OpenRouter 生成预算与 reasoning 可由 env 覆盖', () => {
   });
   assert.equal(c.writer.maxTokens, 16000);
   assert.equal(c.writer.reasoningEffort, 'high');
+});
+
+test('分析 V2 的模型角色、搜索预算、时效窗口和 Slack 编辑防抖可独立配置', () => {
+  const c = loadConfig({
+    SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
+    WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec',
+    OPENROUTER_API_KEY: 'or-key',
+    OPENROUTER_MODEL: 'z-ai/glm-5.2',
+    OPENROUTER_PLANNER_MODEL: 'planner/model',
+    OPENROUTER_REVIEW_MODEL: 'review/model',
+    ANALYSIS_PIPELINE_VERSION: 'v1',
+    ANALYSIS_SEARCH_MAX_QUERIES: '5',
+    ANALYSIS_RECENT_WINDOW_DAYS: '60',
+    SLACK_EDIT_DEBOUNCE_MS: '2500',
+  });
+  assert.equal(c.writer.model, 'z-ai/glm-5.2');
+  assert.equal(c.writer.plannerModel, 'planner/model');
+  assert.equal(c.writer.reviewModel, 'review/model');
+  assert.equal(c.analysis.pipelineVersion, 'v1');
+  assert.equal(c.analysis.searchMaxQueries, 5);
+  assert.equal(c.analysis.recentWindowDays, 60);
+  assert.equal(c.slack.editDebounceMs, 2500);
 });
 
 test('EXA_PRIORITY_RESULTS 覆盖优先路默认返回数', () => {

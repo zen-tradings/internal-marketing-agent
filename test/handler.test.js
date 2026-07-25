@@ -29,11 +29,13 @@ function makeNotifier() {
   const successCalls = [];
   const failureCalls = [];
   const cancelledCalls = [];
+  const needsInputCalls = [];
   return {
-    successCalls, failureCalls, cancelledCalls,
+    successCalls, failureCalls, cancelledCalls, needsInputCalls,
     async success(notify, payload) { successCalls.push({ notify, payload }); },
     async failure(notify, payload) { failureCalls.push({ notify, payload }); },
     async cancelled(notify, payload) { cancelledCalls.push({ notify, payload }); },
+    async needsInput(notify, payload) { needsInputCalls.push({ notify, payload }); },
   };
 }
 
@@ -237,4 +239,47 @@ test('Slack 取消生成中任务后标记 cancelled 并删除独立运行目录
   assert.equal(notifier.failureCalls.length, 0);
   assert.equal(notifier.cancelledCalls.length, 1);
   assert.equal(notifier.cancelledCalls[0].payload.cleaned, true);
+});
+
+test('分析核心冲突转为 needs_input，保留研究轨迹并清理其它半成品，不进入发布', async () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-handler-needs-input-'));
+  let actualWorkDir;
+  const clarificationCalls = [];
+  const store = makeStore({
+    notify_json: JSON.stringify({
+      channel: 'C1',
+      ts: '1.0',
+      user: 'U1',
+      threadKey: 'C1:1.0',
+      promptRevision: 2,
+    }),
+  });
+  store.setSlackClarification = (threadKey, payload) => clarificationCalls.push({ threadKey, payload });
+  const workflows = { wechat: { id: 'wechat', mode: 'analysis', workDir: baseDir, channel: 'mock', retries: 0 } };
+  const runWriter = async ({ workflow, taskContext }) => {
+    actualWorkDir = workflow.workDir;
+    assert.equal(taskContext.promptRevision, 2);
+    fs.mkdirSync(actualWorkDir, { recursive: true });
+    fs.writeFileSync(path.join(actualWorkDir, 'research-trace.json'), '{"needsInput":true}\n');
+    fs.writeFileSync(path.join(actualWorkDir, 'article.md'), 'partial');
+    return {
+      ok: false,
+      needsInput: true,
+      stderr: '请确认 Opus 5',
+      clarification: { question: '请确认 Opus 5', conflicts: [] },
+    };
+  };
+  const { deps, notifier, publishCalls } = baseDeps({ store, workflows, runWriter });
+
+  await makeHandler(deps)(RUN);
+
+  assert.equal(store._row().status, 'needs_input');
+  assert.equal(store._row().stage, 'needs_input');
+  assert.equal(publishCalls.length, 0);
+  assert.equal(notifier.failureCalls.length, 0);
+  assert.equal(notifier.needsInputCalls.length, 1);
+  assert.equal(clarificationCalls.length, 1);
+  assert.equal(clarificationCalls[0].threadKey, 'C1:1.0');
+  assert.equal(fs.existsSync(path.join(actualWorkDir, 'research-trace.json')), true);
+  assert.equal(fs.existsSync(path.join(actualWorkDir, 'article.md')), false);
 });

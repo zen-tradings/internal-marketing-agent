@@ -41,6 +41,7 @@ export function loadConfig(env = process.env) {
       openrouterApiKey: need('OPENROUTER_API_KEY'),
       model: env.OPENROUTER_MODEL || 'qwen/qwen3-235b-a22b',
       routerModel: env.OPENROUTER_ROUTER_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3-235b-a22b',
+      plannerModel: env.OPENROUTER_PLANNER_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3-235b-a22b',
       reviewModel: env.OPENROUTER_REVIEW_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3-235b-a22b',
       baseUrl: env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
       maxTokens: positiveIntegerOrThrow(env.OPENROUTER_MAX_TOKENS, 12000, 'OPENROUTER_MAX_TOKENS'),
@@ -58,6 +59,11 @@ export function loadConfig(env = process.env) {
       temperature: finiteNumber(env.OPENROUTER_TEMPERATURE, 0.4, 'OPENROUTER_TEMPERATURE'),
       httpReferer: env.OPENROUTER_HTTP_REFERER || 'https://zentradings.com',
       appTitle: env.OPENROUTER_APP_TITLE || 'Zen Content Hub',
+    },
+    analysis: {
+      pipelineVersion: analysisPipelineVersion(env.ANALYSIS_PIPELINE_VERSION),
+      searchMaxQueries: positiveIntegerOrThrow(env.ANALYSIS_SEARCH_MAX_QUERIES, 6, 'ANALYSIS_SEARCH_MAX_QUERIES'),
+      recentWindowDays: positiveIntegerOrThrow(env.ANALYSIS_RECENT_WINDOW_DAYS, 90, 'ANALYSIS_RECENT_WINDOW_DAYS'),
     },
     translation: {
       // 直译优先使用原站结构化 HTML；PDF 由 Datalab 托管解析后回到同一结构化链路。
@@ -88,6 +94,7 @@ export function loadConfig(env = process.env) {
       allowedUserIds: slackAllowedUserIds,
       allowedChannelIds: slackAllowedChannelIds,
       rateLimitPerMinute: positiveIntegerOrThrow(env.SLACK_RATE_LIMIT_PER_MINUTE, 10, 'SLACK_RATE_LIMIT_PER_MINUTE'),
+      editDebounceMs: nonNegativeInteger(env.SLACK_EDIT_DEBOUNCE_MS, 5000, 'SLACK_EDIT_DEBOUNCE_MS'),
     },
     wechat: { appId: need('WECHAT_APP_ID'), appSecret: need('WECHAT_APP_SECRET') },
     customerio: {
@@ -180,4 +187,12 @@ function translationMode(value) {
     throw new Error('DATALAB_MODE 必须是 fast、balanced 或 accurate');
   }
   return mode;
+}
+
+function analysisPipelineVersion(value) {
+  const version = String(value || 'v2').trim().toLowerCase();
+  if (!['v1', 'v2'].includes(version)) {
+    throw new Error('ANALYSIS_PIPELINE_VERSION 必须是 v1 或 v2');
+  }
+  return version;
 }

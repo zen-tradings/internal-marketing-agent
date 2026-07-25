@@ -105,12 +105,30 @@ export function makeHandler(deps) {
           workflow: runtimeWorkflow,
           input: run.input,
           config,
+          taskContext: {
+            promptRevision: notify.promptRevision,
+            threadKey: notify.threadKey,
+          },
           onProgress: (progress) => notifyBestEffort(deps.notifier, 'progress', notify, progress),
           resumeFromCheckpoint,
           signal,
         });
+        if (res.needsInput) {
+          const err = stageError('needs_input', res.stderr || res.clarification?.question || '任务需要用户确认');
+          err.needsInput = true;
+          err.details = res.clarification || { question: err.message };
+          throw err;
+        }
         if (!res.ok) { const err = new Error(res.stderr); err.stage = 'generate'; throw err; }
         throwIfTaskCancelled(signal);
+        if (Array.isArray(res.warnings) && res.warnings.length) {
+          await notifyBestEffort(
+            deps.notifier,
+            'warn',
+            notify,
+            `事实审计已自动处理 ${res.warnings.length} 项:\n${res.warnings.slice(0, 6).map((item) => `• ${item}`).join('\n')}`,
+          );
+        }
 
         // dry-run:HUB_DRY_RUN 置位时,不管 workflow 声明的是哪个渠道,一律强制走 mock,
         // 用于本地/CI 演练全流程而不触碰真实微信 API。严格真值判断,避免 "0"/"false"/空串
@@ -163,6 +181,34 @@ export function makeHandler(deps) {
         }
         return;
       }
+      if (e.needsInput || e.stage === 'needs_input') {
+        const cleanup = cleanupRunArtifacts(workflows, run, { preserveResearchTrace: true });
+        store.setStatus(run.id, 'needs_input', {
+          stage: 'needs_input',
+          error: e.message,
+          finishedAt: Date.now(),
+        });
+        if (notify.threadKey) {
+          try {
+            store.setSlackClarification?.(notify.threadKey, {
+              runId: run.id,
+              question: e.details?.question || e.message,
+              details: e.details || {},
+              cleaned: cleanup.cleaned,
+              createdAt: Date.now(),
+            });
+          } catch (storeError) {
+            console.error('[hub] 澄清上下文写入失败:', storeError?.message || storeError);
+          }
+        }
+        if (deps.notifier) {
+          await notifyBestEffort(deps.notifier, 'needsInput', notify, {
+            question: e.details?.question || e.message,
+            details: e.details || {},
+          });
+        }
+        return;
+      }
       const stage = e.stage || 'publish';
       store.setStatus(run.id, 'failed', { stage, error: e.message, finishedAt: Date.now() });
       if (deps.notifier) await notifyBestEffort(deps.notifier, 'failure', notify, { stage, error: e.message });
@@ -188,11 +234,18 @@ async function sleepWithCancellation(sleep, ms, signal) {
   }
 }
 
-export function cleanupRunArtifacts(workflows, run) {
+export function cleanupRunArtifacts(workflows, run, { preserveResearchTrace = false } = {}) {
   const workflow = workflows?.[run?.workflowId];
   if (!workflow?.workDir || !run?.id) return { cleaned: false };
   const artifactDir = runWorkDir(workflow.workDir, run.id);
   try {
+    if (preserveResearchTrace && fs.existsSync(artifactDir)) {
+      for (const entry of fs.readdirSync(artifactDir)) {
+        if (entry === 'research-trace.json') continue;
+        fs.rmSync(`${artifactDir}/${entry}`, { recursive: true, force: true });
+      }
+      return { cleaned: true, artifactDir, preserved: ['research-trace.json'] };
+    }
     fs.rmSync(artifactDir, { recursive: true, force: true });
     return { cleaned: true, artifactDir };
   } catch (error) {

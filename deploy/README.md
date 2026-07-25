@@ -30,6 +30,13 @@ HEALTH_HOST=127.0.0.1
 HEALTH_PORT=8080
 MAX_CONCURRENCY=1
 MAX_QUEUE_SIZE=100
+OPENROUTER_MODEL=z-ai/glm-5.2
+OPENROUTER_PLANNER_MODEL=z-ai/glm-5.2
+OPENROUTER_REVIEW_MODEL=z-ai/glm-5.2
+ANALYSIS_PIPELINE_VERSION=v2
+ANALYSIS_SEARCH_MAX_QUERIES=6
+ANALYSIS_RECENT_WINDOW_DAYS=90
+SLACK_EDIT_DEBOUNCE_MS=5000
 SLACK_ALLOWED_USER_IDS=U0123456789
 SLACK_ALLOWED_CHANNEL_IDS=C0123456789
 ```
@@ -73,6 +80,15 @@ Before each deployment, run `npm ci && npm run check`. Deploy by pulling the
 reviewed commit and running `sudo systemctl restart zen-content-hub`. SIGTERM
 stops new queue intake and gives the active task up to 25 seconds to finish;
 queued tasks remain in SQLite and are restored by the new process.
+
+For the first Analysis V2 rollout, deploy the reviewed code with
+`ANALYSIS_PIPELINE_VERSION=v1`, verify that the service and Slack connection
+are healthy, then set it to `v2` and restart the same systemd instance. Do not
+run V1 and V2 as separate processes. Inspect `research-trace.json` for the first
+five WeChat analysis tasks; it records the immutable task contract, search
+plan, evidence matrix, source classification and sentence-level audit even when
+the task pauses in `needs_input`. Switching the single environment value back
+to `v1` is the temporary rollback path.
 
 Back up `/var/lib/zen-content-hub/runs.db` together with its `-wal` and `-shm`
 files using a SQLite-aware snapshot or backup command. Keep only one application

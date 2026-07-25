@@ -6,16 +6,17 @@
 
 ```text
 Slack 私聊自然语言 / 频道 @Bot / cron
-  → 持久化事件去重、SQLite 入队、限流与限并发处理
+  → 消息/编辑静默防抖、修订去重、SQLite 入队与单实例限并发
   → 直译：范围识别 → 结构化 HTML/PDF → 分块翻译与完整性门禁
-  → 原创：用户链接 + 官方一手 + 优先信源 + 开放交叉验证
-  → 事实审查与引用门禁
+  → 微信分析 V2：原始 Prompt → TaskContract → SearchPlan → EvidenceMatrix
+  → 用户链接 + 最新官方一手 + 优先信源 + 开放交叉验证
+  → GLM 5.2 写作 → 逐句事实审计 → 系统确定性引用
   → 中央模板门禁 → 微信固定版式 / Customer.io Newsletter 固定模板
   → 只创建草稿，不发送、不排期
   → Slack best-effort 回报；通知失败不改变草稿结果
 ```
 
-Node.js 负责流程控制；运行时模型由 `.env` 的 `OPENROUTER_MODEL` 指定。正文默认关闭 reasoning，并由 `OPENROUTER_MAX_TOKENS` 明确控制输出预算，避免推理 token 吃掉文章内容。Exa 只负责检索与正文抓取。
+Node.js 负责流程控制；正文模型由 `.env` 的 `OPENROUTER_MODEL` 指定，生产默认 `z-ai/glm-5.2`。`OPENROUTER_PLANNER_MODEL` 与 `OPENROUTER_REVIEW_MODEL` 可独立覆盖任务规划和逐句事实审计，未设置时继承正文模型。正文默认关闭 reasoning，并由 `OPENROUTER_MAX_TOKENS` 明确控制输出预算。Exa 只负责检索与正文抓取。
 
 ## 目录
 
@@ -108,7 +109,7 @@ curl --fail http://127.0.0.1:8787/ready
 
 代码更新不会自动生效。先拉取代码、执行 `npm ci && npm run check`，再重启 systemd；数据库应在停服或使用 SQLite 在线备份机制时备份。生产环境只运行一个实例。
 
-`RUN_RETENTION_DAYS` 控制终态任务记录及其独立运行目录的保留天数，`SLACK_THREAD_RETENTION_DAYS` 控制线程上下文和事件去重记录；清理在启动时执行。`cancelled` 与其它终态记录使用同一保留规则，但被 Slack 主动停止的任务会立即删除自己的未完成运行目录。调整为更短期限前先备份数据库和 `/var/lib/zen-content-hub`。
+`RUN_RETENTION_DAYS` 控制终态任务记录及其独立运行目录的保留天数，`SLACK_THREAD_RETENTION_DAYS` 控制线程上下文和事件去重记录；清理在启动时执行。`cancelled` 和 `needs_input` 与其它终态记录使用同一保留规则。主动停止会删除整个未完成运行目录；等待澄清的任务只保留 `research-trace.json`，其余半成品立即清理。调整为更短期限前先备份数据库和 `/var/lib/zen-content-hub`。
 
 查看实时 Exa 调用和最近一次 company 调研轨迹：
 
@@ -119,9 +120,11 @@ npm run trace:research -- company
 
 ## Slack 自然语言入口
 
-私聊 Bot 时直接像和 AI 对话一样输入任务即可；公共频道必须 `@Bot`，避免误收普通聊天。`NODE_ENV=production` 时必须通过 `SLACK_ALLOWED_USER_IDS` 和 `SLACK_ALLOWED_CHANNEL_IDS` 限定调用者，并用 `SLACK_RATE_LIMIT_PER_MINUTE` 限流。Slack 事件先持久化去重，再入队；重连或重启不会重复接收同一个 event。显式前缀继续保留，但只是兼容快捷方式。
+私聊 Bot 时直接像和 AI 对话一样输入任务即可；公共频道必须 `@Bot`，避免误收普通聊天。`NODE_ENV=production` 时必须通过 `SLACK_ALLOWED_USER_IDS` 和 `SLACK_ALLOWED_CHANNEL_IDS` 限定调用者，并用 `SLACK_RATE_LIMIT_PER_MINUTE` 限流。新消息或最后一次编辑默认静默 5 秒后入队，`SLACK_EDIT_DEBOUNCE_MS` 可调整。任务按 `channel + message_ts + 修订号` 持久化去重；编辑原消息或在线程补充 Prompt 时，尚未发布的旧修订会被取消、清理并替换，入队回执会显示完整要求、精确型号、链接数量和修订号。
 
-中文和英文指令使用同一套路由。`Translate the first 11 pages ...`、`Write an earnings review ...`、`Prepare an industry analysis ...`、`Create a morning brief ...`、`Do an in-depth company analysis ...` 和 `Draft a newsletter ...` 分别进入现有的直译、财报、行业、晨报、公司和 Newsletter 工作流。英文只是指令语言，不改变产物默认语言：公众号与直译结果仍为简体中文，Newsletter 保持自身的语言规则。链接只表示用户指定的一级优先研究素材，不自动触发直译；只有明确使用 `translate`、`full/faithful translation` 或“直译、完整翻译、全文翻译”等表达才走完整直译，讨论 `machine translation market` 不会被误判。裸链接和未明确类型的任务默认微信公众号分析。同一 Slack 线程会继承上一任务，可直接说“换标题”“补充这组数据”或英文短补充。
+中文和英文指令使用同一套路由。Slack 中未经截断的原始 Prompt 是微信分析内容要求的最高权威；主题、比较对象、观点、结构、篇幅和禁止项不能被工作流默认框架覆盖。英文只是指令语言，不改变产物默认语言：公众号与直译结果仍为简体中文，Newsletter 保持自身的语言规则。模型能力比较即使写了 `deep dive` 也走通用 Prompt 驱动分析，不触发公司财务、SEC 或价值链查询。链接只表示用户指定的最高优先研究素材，不自动触发直译；只有明确要求翻译才走完整直译。裸链接和未明确类型的任务默认微信公众号分析。
+
+用户链接会先全文读取，再默认用最新官方/一手来源和既定优先来源交叉验证；明确写“仅依据此链接”时不扩展搜索。用户链接不会自动被认定为官方事实，最终引用也由系统按实际支持力精选。若用户链接与一手材料对核心实体、型号或主要前提发生实质冲突，任务转为 `needs_input`，Bot 在原线程只问一个明确问题；授权用户回复后，原 Prompt、最新编辑、补充链接和确认答案会组成新修订重新入队。次要口径差异不打断任务。
 
 在原任务线程或同一频道发送 `@ZenBot 停止当前任务`、`停止进程`、`取消任务`、`stop the current task`、`cancel task` 或 `abort this job`，会停止当前生成任务。排队任务会直接移出队列；运行中任务会中断网络请求、标记为 `cancelled` 并删除自己的 `runs/<run-id>/` 目录，ZenBot 服务本身保持在线。任务一旦进入微信或 Customer.io 草稿创建阶段便不再强杀，避免外部草稿已经创建而本地丢失 `media_id`；Bot 会明确回复该状态。任何路径都只创建草稿，不发送或排期。
 
@@ -130,14 +133,14 @@ npm run trace:research -- company
 | ID | Slack 前缀 | 用途 |
 |---|---|---|
 | `wechat` | `wechat:`、`微信：`、无前缀 | 通用公众号文章 |
-| `earnings` | `earnings:`、`财报：` | 财报预期与复盘，执行标准四路调研，含官方/一手来源深度发现 |
-| `sector` | `sector:`、`行业：` | 行业综述 |
+| `earnings` | `earnings:`、`财报：` | 财报预期与复盘；固定框架仅在 Prompt 未规定结构时补空白 |
+| `sector` | `sector:`、`行业：` | 行业分析；固定框架仅作备用 |
 | `morning` | `morning:`、`晨报：` | 24–48 小时晨报 |
 | `translate` | `translate:`、`直译：`、`翻译：` | 按用户指定范围忠实翻译第一个链接的结构化内容 |
-| `company` | `company:`、`公司：`、`个股：`、`深度：` | 公司深度分析、历史季度趋势、竞争与产业链，并追加三组专项深搜 |
+| `company` | `company:`、`公司：`、`个股：`、`深度：` | 明确要求公司财务、竞争或价值链时使用；不接管模型产品比较 |
 | `email` | `email:`、`邮件：` | 生成带 Vol. 版号的 newsletter，并在 Customer.io 创建待审核草稿 |
 
-这些内部工作流由规则优先、模型兜底的自然语言路由隐藏。原创研究型任务都会运行开放检索、优先信源检索、限定官方域名检索，以及 `official-discovery` 官方/一手来源深度发现；`company` 另有季度财报、官方披露和产业链三组专项深搜。`morning` 设置 `MORNING_CRON` 后会增加定时触发。`OPENROUTER_ROUTER_MODEL` 和 `OPENROUTER_REVIEW_MODEL` 可分别覆盖路由与事实审查模型。
+这些内部工作流由规则优先、模型兜底的自然语言路由隐藏。微信分析 V2 先把原始 Prompt 固化为 `TaskContract`，再生成最多 `ANALYSIS_SEARCH_MAX_QUERIES` 个定向查询；“最新/newly released/current”类动态查询默认使用最近 `ANALYSIS_RECENT_WINDOW_DAYS` 天，官方产品页不受该硬窗口限制。静态官方域名只用于发现候选来源，来源必须同时匹配发布主体、页面类型和目标实体才能进入一手证据。搜索结果按用户要求逐项形成 `EvidenceMatrix`，不再以“至少两个官方来源”这种全局数量门禁决定成败。
 
 直译使用一条固定的结构化链路。程序先识别“前 11 页”“第 3–8 页”“第 2.1 节”“从 Introduction 到 Conclusion”以及 `first 11 pages`、`pages 3–8`、`translate the Introduction section only` 等中英文范围；没有范围时才翻译全文。英文指令不会改变目标语言，默认仍把英文原文翻译为简体中文。arXiv 优先读取官方 HTML，普通 HTML 保留标题层级、段落、列表、引用、原图与图注、表格、公式、代码和参考文献；Notion 配置 `NOTION_API_TOKEN` 后优先读取官方 Markdown。PDF 由 Datalab 托管 API 转成结构化 HTML，Poppler 只用于本地页数和元数据校验。
 
@@ -153,7 +156,7 @@ HTML 直译不需要 Datalab。PDF 直译必须设置 `DATALAB_API_KEY`；Bot、
 npm run check:translation -- "翻译前 11 页 https://example.com/paper.pdf"
 ```
 
-原创分析默认官方来源优先。用户在 Slack 提供的链接会全文抓取并与官方/一手来源、既定优先信源一起进入第一优先层，但不会被误算为官方来源；关键结论仍需交叉验证。公司/财报任务要求检索官网、IR、SEC/交易所、证监会或官方业绩材料，但不再因正文引用的官方链接少于固定数量而失败。法律案件改用案号和案名驱动的独立检索，优先案卷、诉状、裁定、监管材料和精确匹配案件的可靠报道，不再套用公司分析域名清单。公众号正文不放引用脚标或来源链接，文末精选 1–5 个最相关链接；Wenyan 最终只保留一个左对齐的“引用链接”板块。原创公众号工作流每个主要章节都用固定浅蓝底纹样式克制地高亮 1–2 个核心观点或关键词；直译忠实保留原文结构，不追加原创分析。
+原创分析默认官方来源优先，但相关性和实体匹配高于域名。写作模型只接收证据矩阵选出的相关材料，不再接收几十个混杂来源。事实审计器只返回文章中的精确原句、严重程度、证据编号和删除/限定/替换/澄清动作，不能重写全文或把自己的建议称为“原问题”。非核心无支持表述会确定性删除并在 Slack 提醒，草稿继续创建；核心型号、主要前提或来源冲突才暂停询问。公众号正文不放引用脚标或来源链接，系统根据证据矩阵确定性追加唯一、左对齐的“引用链接”板块，精选最多 5 个实际采用的来源。
 
 ## 发布前处理
 

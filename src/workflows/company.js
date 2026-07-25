@@ -72,6 +72,7 @@ export default {
   get channel() { return envChannel(); },
   get timeoutMs() { return envTimeoutMs(); },
   get research() { return { ...sharedResearch(), extraQueries }; },
+  defaultMethodology: METHODOLOGY,
   retries: 0,
   promptTemplate: (task) => buildPromptTemplate({
     persona: 'Zen Trading 资深股票研究分析师',

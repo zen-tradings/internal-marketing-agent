@@ -8,6 +8,20 @@ import {
   withTaskCancellation,
 } from '../lib/task-cancellation.js';
 import { generateStrictTranslation } from '../workflows/translate-engine.js';
+import {
+  AnalysisNeedsInputError,
+  appendDeterministicReferences,
+  applyAuditIssues,
+  buildAuditPrompt,
+  buildEvidencePrompt,
+  buildPlanningPrompt,
+  buildWritingPrompt,
+  fallbackTaskContract,
+  isAnalysisV2Enabled,
+  normalizeAuditIssues,
+  normalizeEvidenceMatrix,
+  normalizePlanningResult,
+} from './analysis-v2.js';
 
 const DEFAULT_SYSTEM_PROMPT = `你是 Zen Trading 公众号分析师。你会基于系统提供的调研素材写中文金融分析文章。
 
@@ -25,6 +39,16 @@ title: 文章标题
 ---
 正文从 frontmatter 后开始。不要输出解释、代码围栏或发布指令。`;
 
+const ANALYSIS_V2_SYSTEM_PROMPT = `你是 Zen Trading 微信分析写作模型。
+
+优先级:
+1. 用户在 Slack 发送的完整原始 Prompt 决定文章主题、实体、版本、观点、结构、篇幅、语言和禁止项。
+2. TaskContract 只用于忠实展开原始 Prompt；两者冲突时必须服从原始 Prompt。
+3. EvidenceMatrix 限定可以当作事实使用的材料。不得引入矩阵外的数字、版本、来源或部署信息。
+4. 系统固定规则只负责可核验、安全和可发布格式，不能强迫文章加入用户未要求的分析章节。
+
+默认使用严谨专业的机构分析口吻；用户明确指定语言或风格时服从用户。输出完整 Markdown，开头必须是只含 title 的 YAML frontmatter。不要输出解释、代码围栏、引用链接、脚注或发布指令。`;
+
 const LEGAL_TASK_RE = /(?:诉讼|法院|法庭|案件|案卷|起诉状|起诉|裁定|判决|被告|原告|身份信息|complaint|docket|court|lawsuit|litigation|case\s+(?:no\.?|number)|\d:\d{2}-cv-\d+|pacermonitor|courtlistener|pacer\.uscourts)/i;
 const LEGAL_OFFICIAL_SOURCES = [
   'pacer.uscourts.gov',
@@ -41,6 +65,7 @@ export async function runWriter({
   fetchFn = globalThis.fetch,
   onProgress,
   resumeFromCheckpoint = false,
+  taskContext = {},
   signal,
 }) {
   fetchFn = withTaskCancellation(fetchFn, signal);
@@ -62,7 +87,11 @@ export async function runWriter({
     fs.mkdirSync(workflow.workDir, { recursive: true });
     const writer = config.writer || {};
     const model = workflow.model || writer.model;
-    trace.models = { writer: model || null, review: writer.reviewModel || model || null };
+    trace.models = {
+      writer: model || null,
+      planner: writer.plannerModel || model || null,
+      review: writer.reviewModel || model || null,
+    };
     if (!writer.openrouterApiKey) throw new Error('缺少 OpenRouter API key');
     if (!model) throw new Error('缺少 OpenRouter model');
 
@@ -93,6 +122,33 @@ export async function runWriter({
       throwIfTaskCancelled(signal);
       fs.writeFileSync(articlePath, result.article);
       return { ok: true, articlePath, model, researchTracePath, sources: [result.sourceUrl], completeness: result.completeness };
+    }
+
+    const preserveSpecializedLegalV1 = LEGAL_TASK_RE.test(String(input || ''))
+      && extractUrls(input).urls.length > 0;
+    if (isAnalysisV2Enabled(config, workflow) && !preserveSpecializedLegalV1) {
+      const result = await runAnalysisV2({
+        workflow,
+        input,
+        config,
+        writer,
+        model,
+        fetchFn,
+        trace,
+        researchTracePath,
+        taskContext,
+        signal,
+      });
+      throwIfTaskCancelled(signal);
+      fs.writeFileSync(articlePath, result.article);
+      return {
+        ok: true,
+        articlePath,
+        model,
+        researchTracePath,
+        sources: result.sources.map((source) => source.url).filter(Boolean),
+        warnings: result.warnings,
+      };
     }
 
     const sourcePolicy = sourcePolicyFor({ input, workflow });
@@ -149,11 +205,507 @@ export async function runWriter({
   } catch (e) {
     if (isTaskCancelled(e, signal)) throw cancellationErrorFromSignal(signal);
     trace.finishedAt = new Date().toISOString();
+    if (e instanceof AnalysisNeedsInputError) {
+      trace.needsInput = e.details;
+      trace.error = e.message;
+      writeResearchTrace(researchTracePath, trace);
+      try { fs.rmSync(articlePath, { force: true }); } catch {}
+      return {
+        ok: false,
+        needsInput: true,
+        clarification: e.details,
+        articlePath,
+        researchTracePath,
+        stderr: e.message,
+      };
+    }
     trace.error = describeFetchError(e).slice(0, 600);
     writeResearchTrace(researchTracePath, trace);
     try { fs.rmSync(articlePath, { force: true }); } catch {}
     return { ok: false, articlePath, researchTracePath, exitCode: 1, stderr: describeFetchError(e).slice(0, 600) };
   }
+}
+
+async function runAnalysisV2({
+  workflow,
+  input,
+  config,
+  writer,
+  model,
+  fetchFn,
+  trace,
+  researchTracePath,
+  taskContext,
+  signal,
+}) {
+  const analysis = config.analysis || {};
+  const maxQueries = positiveNumber(analysis.searchMaxQueries, 6);
+  const recentWindowDays = positiveNumber(analysis.recentWindowDays, 90);
+  const planningPrompt = buildPlanningPrompt(input, workflow, taskContext, {
+    maxQueries,
+    recentWindowDays,
+  });
+  let rawPlanning;
+  try {
+    rawPlanning = await completeReviewJson({
+      prompt: planningPrompt,
+      model: writer.plannerModel || model,
+      writer: { ...writer, temperature: 0 },
+      fetchFn,
+      timeoutMs: workflow.timeoutMs,
+      systemPrompt: '你是分析任务规划器。Slack 原始 Prompt 是不可修改的任务合同。只返回有效 JSON。',
+    });
+  } catch (error) {
+    trace.planningFallback = describeFetchError(error).slice(0, 500);
+    rawPlanning = {
+      task_contract: fallbackTaskContract(input, workflow, taskContext),
+      search_plan: [],
+    };
+  }
+  const { taskContract, searchPlan } = normalizePlanningResult(
+    rawPlanning,
+    input,
+    workflow,
+    taskContext,
+    { maxQueries },
+  );
+  trace.taskContract = taskContract;
+  trace.searchPlan = searchPlan;
+  trace.sourcePolicy = {
+    kind: 'analysis-v2',
+    promptFirst: true,
+    userLinksFirst: true,
+    officialFirst: true,
+    minOfficialSources: 0,
+    maxReferences: 5,
+  };
+  writeResearchTrace(researchTracePath, trace);
+  if (taskContract.clarification_needed) {
+    throw new AnalysisNeedsInputError(
+      taskContract.clarification_question || '请确认任务中的核心实体、版本或写作要求。',
+      { kind: 'task-contract', taskContract },
+    );
+  }
+
+  const sources = await searchExaV2({
+    taskContract,
+    searchPlan,
+    workflow,
+    writer,
+    fetchFn,
+    trace,
+    recentWindowDays,
+    asOf: new Date(),
+  });
+  throwIfTaskCancelled(signal);
+  if (!sources.length) {
+    throw new AnalysisNeedsInputError(
+      taskContract.user_urls.length
+        ? '用户链接无法读取，且未检索到可核验的补充材料。请检查链接或补充可访问来源。'
+        : '未检索到与任务直接相关的可靠材料。请补充准确实体、时间范围或参考链接。',
+      { kind: 'missing-evidence', userUrls: taskContract.user_urls },
+    );
+  }
+  if (taskContract.user_urls.length && !sources.some((source) => source.userSpecified)) {
+    throw new AnalysisNeedsInputError(
+      '你提供的链接未能读取。请检查链接权限或补充可公开访问的链接；确认后系统再用官方与优先来源交叉验证。',
+      {
+        kind: 'user-link-unavailable',
+        userUrls: taskContract.user_urls,
+        fetchError: trace.userSourceError,
+      },
+    );
+  }
+
+  let rawEvidence;
+  try {
+    rawEvidence = await completeReviewJson({
+      prompt: buildEvidencePrompt(taskContract, sources),
+      model: writer.plannerModel || model,
+      writer: { ...writer, temperature: 0 },
+      fetchFn,
+      timeoutMs: workflow.timeoutMs,
+      systemPrompt: '你是研究证据编辑。只依据给定来源建立证据矩阵，只返回有效 JSON。',
+    });
+  } catch (error) {
+    trace.evidenceFallback = describeFetchError(error).slice(0, 500);
+    rawEvidence = {};
+  }
+  const evidenceMatrix = normalizeEvidenceMatrix(rawEvidence, sources, taskContract);
+  const primaryIds = new Set(
+    evidenceMatrix.source_assessments
+      .filter((assessment) => assessment.source_type === 'primary')
+      .map((assessment) => assessment.source_id),
+  );
+  for (const source of sources) {
+    if (primaryIds.has(source.id)) source.official = true;
+  }
+  trace.evidenceMatrix = evidenceMatrix;
+  trace.selectedSources = sources.map((source) => ({ id: source.id, ...sourceForTrace(source) }));
+  trace.officialSourceCount = sources.filter((source) => source.official).length;
+  trace.sourceTiers = {
+    firstPriority: sources.filter((source) => sourcePriorityTier(source) === 1).length,
+    specialist: sources.filter((source) => sourcePriorityTier(source) === 2).length,
+    open: sources.filter((source) => sourcePriorityTier(source) === 3).length,
+  };
+  trace.researchLanes = [...new Set(trace.requests.map((request) => request.kind).filter(Boolean))];
+  writeResearchTrace(researchTracePath, trace);
+  if (evidenceMatrix.clarification_needed) {
+    throw new AnalysisNeedsInputError(
+      evidenceMatrix.clarification_question || '核心证据存在冲突，请确认后继续。',
+      {
+        kind: 'evidence-conflict',
+        conflicts: evidenceMatrix.conflicts,
+        entities: evidenceMatrix.entities,
+        taskContract,
+      },
+    );
+  }
+  if (!evidenceMatrix.relevant_source_ids.length) {
+    throw new AnalysisNeedsInputError(
+      '检索结果与原始 Prompt 的核心要求不匹配。请补充更准确的实体名称、时间范围或参考链接。',
+      { kind: 'irrelevant-evidence', taskContract },
+    );
+  }
+
+  const prompt = buildWritingPrompt({
+    contract: taskContract,
+    evidenceMatrix,
+    sources,
+    workflow,
+    asOf: formatAsOf(new Date()),
+  });
+  const maxPromptChars = positiveNumber(writer.maxPromptChars, 160000);
+  if (prompt.length > maxPromptChars) {
+    throw new Error(`生成输入超过全局上限:${prompt.length}/${maxPromptChars} 字符;请减少链接或缩短素材`);
+  }
+  const content = await completeArticle({
+    prompt,
+    model,
+    writer,
+    fetchFn,
+    timeoutMs: workflow.timeoutMs,
+    systemPrompt: ANALYSIS_V2_SYSTEM_PROMPT,
+  });
+  throwIfTaskCancelled(signal);
+  let article = renderQuarterlyCharts(normalizeAnalysisArticle(content, taskContract));
+  const audit = await auditAnalysisV2({
+    article,
+    taskContract,
+    evidenceMatrix,
+    sources,
+    workflow,
+    writer,
+    model,
+    fetchFn,
+    trace,
+    researchTracePath,
+  });
+  article = audit.article;
+  article = appendDeterministicReferences(
+    article,
+    sources,
+    evidenceMatrix.selected_reference_ids,
+    5,
+  );
+  const sourcePolicy = {
+    requireCitations: true,
+    referenceStyle: 'terminal-list',
+    minReferences: 1,
+    maxReferences: 5,
+    requireUserSource: false,
+  };
+  validateArticleSourceContract(article, sources, sourcePolicy);
+  trace.factReview = audit.review;
+  trace.citationValidation = citationValidationSummary(article, sources, sourcePolicy);
+  trace.finishedAt = new Date().toISOString();
+  writeResearchTrace(researchTracePath, trace);
+  return { article, sources, warnings: audit.warnings };
+}
+
+async function searchExaV2({
+  taskContract,
+  searchPlan,
+  workflow,
+  writer,
+  fetchFn,
+  trace,
+  recentWindowDays,
+  asOf,
+}) {
+  const userUrls = taskContract.user_urls || [];
+  let userSources = [];
+  if (userUrls.length) {
+    try {
+      userSources = (await fetchExaContents({ urls: userUrls, writer, fetchFn, trace }))
+        .map((source) => ({ ...source, userSpecified: true, retrievalLane: 'user' }));
+    } catch (error) {
+      trace.userSourceError = describeFetchError(error).slice(0, 500);
+    }
+  }
+  if (taskContract.only_user_links) {
+    return assignSourceIds(dedupeByUrl(userSources));
+  }
+
+  const prioritySources = workflow?.research?.prioritySources || [];
+  const officialDomains = workflow?.research?.officialSources || [];
+  const recentStart = new Date(asOf.getTime() - recentWindowDays * 24 * 60 * 60 * 1000).toISOString();
+  const settled = await Promise.allSettled(searchPlan.map((querySpec) => {
+    const baseOptions = {
+      kind: `analysis-${querySpec.lane}`,
+      type: querySpec.lane === 'official' ? 'deep' : 'auto',
+      numResults: querySpec.lane === 'official'
+        ? Math.max(6, writer.exaPriorityResults || 4)
+        : writer.exaNumResults || 5,
+      ...(querySpec.startPublishedDate
+        ? { startPublishedDate: querySpec.startPublishedDate }
+        : querySpec.recent ? { startPublishedDate: recentStart } : {}),
+      ...(querySpec.endPublishedDate ? { endPublishedDate: querySpec.endPublishedDate } : {}),
+    };
+    if (querySpec.lane === 'official') {
+      return searchExaOpen({
+        query: querySpec.query,
+        options: {
+          ...baseOptions,
+          systemPrompt: 'Return primary sources for the exact named entities and versions: official product releases and documentation, issuer or regulator disclosures, original papers, or original repositories. Exclude forums, media rewrites, aggregators, similarly named companies, and nearby model versions.',
+          additionalQueries: [`${querySpec.query} official release`, `${querySpec.query} official documentation`],
+        },
+        writer,
+        fetchFn,
+        trace,
+      }).then((results) => results.map((source) => ({ ...source, retrievalLane: 'official' })));
+    }
+    if (querySpec.lane === 'priority' && prioritySources.length) {
+      return searchExaOpen({
+        query: querySpec.query,
+        options: {
+          ...baseOptions,
+          includeDomains: prioritySources,
+        },
+        writer,
+        fetchFn,
+        trace,
+      }).then((results) => results.map((source) => ({
+        ...source,
+        priority: true,
+        retrievalLane: 'priority',
+      })));
+    }
+    return searchExaOpen({
+      query: querySpec.query,
+      options: baseOptions,
+      writer,
+      fetchFn,
+      trace,
+    }).then((results) => results.map((source) => ({ ...source, retrievalLane: 'open' })));
+  }));
+  const searched = settled.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
+  const merged = dedupeByUrl([...userSources, ...searched]);
+  for (const source of merged) {
+    if (!source.userSpecified && strictOfficialSource(source, taskContract, officialDomains)) {
+      source.official = true;
+    }
+  }
+  return assignSourceIds(merged);
+}
+
+async function auditAnalysisV2({
+  article,
+  taskContract,
+  evidenceMatrix,
+  sources,
+  workflow,
+  writer,
+  model,
+  fetchFn,
+  trace,
+  researchTracePath,
+}) {
+  const warnings = [];
+  let firstRaw;
+  try {
+    firstRaw = await completeReviewJson({
+      prompt: buildAuditPrompt({ article, contract: taskContract, evidenceMatrix, sources }),
+      model: writer.reviewModel || model,
+      writer: { ...writer, temperature: 0 },
+      fetchFn,
+      timeoutMs: workflow.timeoutMs,
+      systemPrompt: '你是逐句事实审计员。只定位原文中的问题，不得重写全文，只返回有效 JSON。',
+    });
+  } catch (error) {
+    const message = `事实审计服务不可用，已保留证据约束稿:${describeFetchError(error).slice(0, 240)}`;
+    warnings.push(message);
+    return {
+      article,
+      warnings,
+      review: { approved: true, skipped: true, reason: message },
+    };
+  }
+  const firstIssues = normalizeAuditIssues(firstRaw, article, evidenceMatrix);
+  trace.factReview = { approved: firstIssues.length === 0, issues: firstIssues, repaired: false };
+  writeResearchTrace(researchTracePath, trace);
+  const blocking = firstIssues.find((issue) => issue.severity === 'core'
+    && !(['replace', 'qualify'].includes(issue.action) && issue.replacement && issue.evidence_ids.length));
+  if (blocking) {
+    throw new AnalysisNeedsInputError(
+      blocking.question || `核心表述“${blocking.article_quote.slice(0, 120)}”缺少可核验证据，请确认是否删除或补充来源。`,
+      { kind: 'fact-audit', issue: blocking, taskContract },
+    );
+  }
+  if (!firstIssues.length) {
+    return { article, warnings, review: { approved: true, issues: [] } };
+  }
+
+  const firstApplied = applyAuditIssues(article, firstIssues);
+  for (const issue of firstApplied.applied) {
+    warnings.push(issue.action === 'delete'
+      ? `已删除无支持表述:${issue.article_quote.slice(0, 160)}`
+      : `已局部修正表述:${issue.article_quote.slice(0, 160)}`);
+  }
+  let secondRaw;
+  try {
+    secondRaw = await completeReviewJson({
+      prompt: buildAuditPrompt({
+        article: firstApplied.article,
+        contract: taskContract,
+        evidenceMatrix,
+        sources,
+      }),
+      model: writer.reviewModel || model,
+      writer: { ...writer, temperature: 0 },
+      fetchFn,
+      timeoutMs: workflow.timeoutMs,
+      systemPrompt: '你是局部修复复核员。只检查当前稿件剩余的事实问题，不得重写全文，只返回有效 JSON。',
+    });
+  } catch (error) {
+    const message = `局部复核服务不可用，已保留第一次确定性修复:${describeFetchError(error).slice(0, 240)}`;
+    warnings.push(message);
+    return {
+      article: firstApplied.article,
+      warnings,
+      review: {
+        approved: true,
+        issues: firstIssues,
+        repaired: true,
+        verificationSkipped: message,
+      },
+    };
+  }
+  const secondIssues = normalizeAuditIssues(secondRaw, firstApplied.article, evidenceMatrix);
+  trace.factReview = {
+    approved: secondIssues.length === 0,
+    issues: firstIssues,
+    repaired: true,
+    verificationIssues: secondIssues,
+  };
+  writeResearchTrace(researchTracePath, trace);
+  const remainingCore = secondIssues.find((issue) => issue.severity === 'core');
+  if (remainingCore) {
+    throw new AnalysisNeedsInputError(
+      remainingCore.question || `核心表述“${remainingCore.article_quote.slice(0, 120)}”仍无法核验，请确认后继续。`,
+      { kind: 'fact-audit-verification', issue: remainingCore, taskContract },
+    );
+  }
+  const secondApplied = applyAuditIssues(firstApplied.article, secondIssues);
+  for (const issue of secondApplied.applied) {
+    warnings.push(`复核后已删除或修正次要表述:${issue.article_quote.slice(0, 160)}`);
+  }
+  return {
+    article: secondApplied.article,
+    warnings,
+    review: {
+      approved: true,
+      issues: firstIssues,
+      repaired: true,
+      verificationIssues: secondIssues,
+    },
+  };
+}
+
+function assignSourceIds(sources) {
+  return sources.map((source, index) => ({ ...source, id: `S${index + 1}` }));
+}
+
+function strictOfficialSource(source, contract, officialDomains) {
+  if (!source?.url) return false;
+  let url;
+  try { url = new URL(source.url); }
+  catch { return false; }
+  const host = url.hostname.toLowerCase().replace(/^www\./, '');
+  const haystack = [
+    source.title,
+    source.url,
+    source.summary,
+    source.text,
+    ...(source.highlights || []),
+  ].filter(Boolean).join(' ').toLowerCase();
+  const entities = contract.exact_entities_and_versions || [];
+  const entityMatched = entities.length === 0 || entities.some((entity) =>
+    comparableText(haystack).includes(comparableText(entity.literal)));
+  if (!entityMatched) return false;
+  if (/\.(?:gov|mil|int)$/.test(host) || /(?:^|\.)gov\.cn$/.test(host) || host === 'sec.gov') {
+    return true;
+  }
+  if (/(?:arxiv\.org|doi\.org|nber\.org|ssrn\.com)$/.test(host)) return true;
+  const entityHostMatch = entities.some((entity) => {
+    const brand = String(entity.literal || '').split(/\s|-/)[0].toLowerCase();
+    return brand.length >= 3 && host.includes(brand);
+  });
+  if (entityHostMatch) return true;
+  if (!urlMatchesAnyDomain(source.url, officialDomains)) return false;
+  if (host.includes('nasdaq.com')) {
+    return /\/market-activity\/stocks\/|\/market-activity\/ipos\/|\/docs?\//i.test(url.pathname);
+  }
+  if (/forum|community|discussion|support/i.test(`${url.pathname} ${source.title || ''}`)) return false;
+  return entities.length === 0 && /investor|newsroom|press-release|financial|filing/i.test(`${host}${url.pathname}`);
+}
+
+function comparableText(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9\u3400-\u9fff]+/g, '');
+}
+
+function normalizeAnalysisArticle(content, contract) {
+  let article = normalizeArticle(content);
+  const titles = [];
+  const firstFrontmatter = article.match(/^---\n([\s\S]*?)\n---(?:\n|$)/);
+  if (firstFrontmatter) {
+    const firstTitle = firstFrontmatter[1].match(/^title\s*:\s*(.+)$/m)?.[1];
+    if (firstTitle) titles.push(unquoteYamlTitle(firstTitle));
+    article = article.slice(firstFrontmatter[0].length).trimStart();
+  }
+  // GLM 偶尔会在合法 frontmatter 后再次输出一个 frontmatter，或只多输出
+  // `title: ...` + `---` 的残片。发布前统一收敛为一个 title 区块。
+  for (;;) {
+    const duplicateBlock = article.match(/^---\n([\s\S]*?)\n---(?:\n|$)/);
+    if (duplicateBlock) {
+      const duplicateTitle = duplicateBlock[1].match(/^title\s*:\s*(.+)$/m)?.[1];
+      if (duplicateTitle) titles.push(unquoteYamlTitle(duplicateTitle));
+      article = article.slice(duplicateBlock[0].length).trimStart();
+      continue;
+    }
+    const titleFragment = article.match(/^title\s*:\s*(.+)\n---(?:\n|$)/);
+    if (titleFragment) {
+      titles.push(unquoteYamlTitle(titleFragment[1]));
+      article = article.slice(titleFragment[0].length).trimStart();
+      continue;
+    }
+    break;
+  }
+  const heading = article.match(/^#\s+(.+)$/m);
+  const title = titles.at(-1)
+    || heading?.[1]?.trim()
+    || contract.exact_entities_and_versions?.map((entity) => entity.literal).join(' vs ')
+    || 'Zen Trading 分析';
+  if (heading && heading.index === 0) article = article.slice(heading[0].length).trimStart();
+  return `---\ntitle: ${JSON.stringify(title.slice(0, 120))}\n---\n${article}`;
+}
+
+function unquoteYamlTitle(value) {
+  const text = String(value || '').trim();
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    return text.slice(1, -1).trim();
+  }
+  return text;
 }
 
 // 调研入口:
@@ -315,6 +867,9 @@ async function searchExaOpen({ query, options = {}, writer, fetchFn, trace }) {
       ...(options.category ? { category: options.category } : {}),
       ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
       ...(options.additionalQueries ? { additionalQueries: options.additionalQueries } : {}),
+      ...(options.includeDomains ? { includeDomains: options.includeDomains } : {}),
+      ...(options.startPublishedDate ? { startPublishedDate: options.startPublishedDate } : {}),
+      ...(options.endPublishedDate ? { endPublishedDate: options.endPublishedDate } : {}),
     };
   const event = startTrace(trace, {
     kind: options.kind || 'open-search',
@@ -322,6 +877,8 @@ async function searchExaOpen({ query, options = {}, writer, fetchFn, trace }) {
     query,
     searchType: body.type,
     category: body.category,
+    includeDomains: body.includeDomains,
+    startPublishedDate: body.startPublishedDate,
   });
   try {
     const res = await fetchWithRetry(fetchFn, url, {

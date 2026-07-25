@@ -2,12 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createSlackIntentClassifier,
+  buildSlackThreadInput,
   isSlackStopCommand,
+  mergeSlackThreadMessages,
   parseSlackTask,
   resolveNaturalWorkflowTask,
   resolveWorkflowTask,
   slackStopResponse,
   slackMessageEventKey,
+  slackPromptMetadata,
 } from '../src/triggers/slack.js';
 
 test('识别 "任务:" 前缀', () => {
@@ -32,7 +35,30 @@ test('同一条 @Bot 消息的 message 与 app_mention 使用同一个持久化�
   const mention = slackMessageEventKey({ channel: 'C1', ts: '1784898806.000100', eventId: 'EvMention' });
   assert.equal(message, 'message:C1:1784898806.000100');
   assert.equal(mention, message);
+  assert.equal(
+    slackMessageEventKey({ channel: 'C1', ts: '1784898806.000100', revision: '1784898810.000200' }),
+    'message:C1:1784898806.000100:rev:1784898810.000200',
+  );
   assert.equal(slackMessageEventKey({ eventId: 'EvFallback' }), 'event:EvFallback');
+});
+
+test('Slack 编辑替换同一消息而不是追加，线程确认合并为完整 Prompt', () => {
+  const initial = mergeSlackThreadMessages([], { ts: '1.0', text: '比较 Opus 5 和 Kimi K3' });
+  const edited = mergeSlackThreadMessages(initial, { ts: '1.0', text: '比较 Opus 5 和 Kimi K2', edited: true });
+  const replied = mergeSlackThreadMessages(edited, { ts: '2.0', text: '确认使用 Kimi K2' });
+  assert.equal(edited.length, 1);
+  assert.equal(edited[0].text, '比较 Opus 5 和 Kimi K2');
+  const input = buildSlackThreadInput(replied, { clarification: { question: '请确认 Kimi 版本' } });
+  assert.match(input, /^比较 Opus 5 和 Kimi K2/);
+  assert.match(input, /系统曾询问的核心确认/);
+  assert.match(input, /确认使用 Kimi K2/);
+  assert.doesNotMatch(input, /Kimi K3/);
+  assert.deepEqual(slackPromptMetadata(input, 2), {
+    promptRevision: 2,
+    promptEntities: ['Opus 5', 'Kimi K2'],
+    userUrlCount: 0,
+    freshnessRequirement: '按任务需要核对当前信息',
+  });
 });
 
 test('中英文停止表达只匹配独立控制指令', () => {
@@ -64,6 +90,16 @@ test('自然语言路由:用户链接加财务、竞品和上下游要求进入�
   const route = await resolveNaturalWorkflowTask(task, { workflowIds: ids });
   assert.equal(route.workflowId, 'company');
   assert.equal(route.reason, 'natural-rule');
+});
+
+test('模型能力比较即使写 deep dive 也走 prompt 驱动 wechat，不误入公司财务链路', async () => {
+  const ids = ['wechat', 'email', 'translate', 'company', 'earnings', 'sector', 'morning'];
+  const route = await resolveNaturalWorkflowTask(
+    'please write a deep dive analysis report comparing newly released Opus 5 and Kimi K2',
+    { workflowIds: ids },
+  );
+  assert.equal(route.workflowId, 'wechat');
+  assert.equal(route.reason, 'model-comparison');
 });
 
 test('英文自然语言与中文使用同一套工作流路由', async () => {

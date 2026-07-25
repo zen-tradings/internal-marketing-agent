@@ -28,6 +28,20 @@ const trace = JSON.parse(fs.readFileSync(tracePath, 'utf8'));
 console.log(`工作流: ${trace.workflowId}`);
 console.log(`任务: ${trace.input}`);
 console.log(`开始: ${trace.startedAt}`);
+if (trace.taskContract) {
+  console.log('\n任务合同:');
+  console.log(`- 修订: ${trace.taskContract.prompt_revision || 1}`);
+  console.log(`- 类型: ${trace.taskContract.article_type || '-'}`);
+  console.log(`- 实体: ${(trace.taskContract.exact_entities_and_versions || []).map((item) => item.literal).join(', ') || '-'}`);
+  console.log(`- 用户链接: ${(trace.taskContract.user_urls || []).length}`);
+  console.log(`- 时效: ${trace.taskContract.freshness_requirement || '-'}`);
+}
+if (trace.searchPlan?.length) {
+  console.log('\n搜索计划:');
+  for (const item of trace.searchPlan) {
+    console.log(`- [${item.lane}] ${item.query}${item.recent ? ' (recent)' : ''}`);
+  }
+}
 for (const request of trace.requests || []) {
   console.log(`\n[${request.status}] ${request.kind} ${request.searchType || ''} ${request.category || ''}`.trim());
   if (request.query) console.log(`查询: ${request.query}`);
@@ -42,4 +56,20 @@ if (trace.selectedSources?.length) {
   console.log('\n最终送入模型的来源:');
   for (const source of trace.selectedSources) console.log(`- [${source.kind}] ${source.title || '(无标题)'}\n  ${source.url}`);
 }
+if (trace.evidenceMatrix) {
+  console.log('\n证据矩阵:');
+  for (const entity of trace.evidenceMatrix.entities || []) {
+    console.log(`- 实体 ${entity.literal}: ${entity.verified ? '已由一手来源确认' : '未确认'} (${(entity.source_ids || []).join(', ') || '-'})`);
+  }
+  for (const conflict of trace.evidenceMatrix.conflicts || []) {
+    console.log(`- [${conflict.severity}] ${conflict.description || conflict.topic}`);
+  }
+}
+if (trace.factReview) {
+  console.log(`\n事实审计: ${trace.factReview.approved ? '通过' : '需处理'}`);
+  for (const issue of trace.factReview.issues || []) {
+    console.log(`- [${issue.severity || '-'} / ${issue.action || '-'}] ${issue.article_quote || issue}`);
+  }
+}
+if (trace.needsInput) console.log(`\n等待确认: ${trace.needsInput.question || trace.error || '是'}`);
 if (trace.error) console.log(`\n任务错误: ${trace.error}`);

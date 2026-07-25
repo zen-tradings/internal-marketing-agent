@@ -1,4 +1,5 @@
 import boltPkg from '@slack/bolt';
+import { extractExplicitEntityVersions, extractUserUrls } from '../core/analysis-v2.js';
 const { App } = boltPkg;
 
 export function cleanSlackText(text) {
@@ -11,8 +12,11 @@ export function cleanSlackText(text) {
 // Slack 在公共频道 @Bot 时可能同时投递 message 与 app_mention，两次投递的
 // event_id 不同，但 channel + message ts 相同。任务去重必须使用消息身份，
 // 不能优先使用 event_id，否则同一条指令会进入队列两次并创建重复草稿。
-export function slackMessageEventKey({ channel, ts, eventId } = {}) {
-  if (channel && ts) return `message:${channel}:${ts}`;
+export function slackMessageEventKey({ channel, ts, eventId, revision } = {}) {
+  if (channel && ts) {
+    const suffix = revision && String(revision) !== '0' ? `:rev:${revision}` : '';
+    return `message:${channel}:${ts}${suffix}`;
+  }
   return eventId ? `event:${eventId}` : '';
 }
 
@@ -103,6 +107,15 @@ export async function resolveNaturalWorkflowTask(task, {
   if (/https?:\/\/\S+/i.test(task) && /(?:\btranslate\b|\b(?:full|complete|faithful|literal|direct)\s+translation\b|\btranslation\s+of\s+(?:this|the)\s+(?:article|paper|pdf|link)\b|直译|全文翻译|完整翻译|忠实翻译|逐字翻译|翻译)/i.test(task)) {
     const matched = workflowIds.find((id) => id.toLowerCase() === 'translate');
     if (matched) return { workflowId: matched, task, reason: 'translation-keyword-with-url' };
+  }
+
+  // 模型/产品能力比较是 prompt 驱动分析，不是“公司深度”。不能仅因出现
+  // deep dive/in-depth analysis 就触发财务、SEC、季度数据和价值链搜索。
+  const explicitModelEntities = extractExplicitEntityVersions(task);
+  if (explicitModelEntities.length >= 2
+    && /(?:比较|对比|\bcompar(?:e|ing|ison)\b|\bversus\b|\bvs\.?\b)/i.test(task)) {
+    const matched = workflowIds.find((id) => id.toLowerCase() === 'wechat');
+    if (matched) return { workflowId: matched, task, reason: 'model-comparison' };
   }
 
   for (const rule of NATURAL_RULES) {
@@ -205,6 +218,38 @@ export function slackStopResponse(result) {
   return 'ℹ️ 当前频道没有可停止的运行中或排队任务。';
 }
 
+export function mergeSlackThreadMessages(messages, incoming) {
+  const next = Array.isArray(messages) ? messages.map((message) => ({ ...message })) : [];
+  const index = next.findIndex((message) => String(message.ts) === String(incoming.ts));
+  if (index >= 0) next[index] = { ...next[index], ...incoming };
+  else next.push({ ...incoming });
+  return next
+    .sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0))
+    .slice(-12);
+}
+
+export function buildSlackThreadInput(messages, { clarification } = {}) {
+  const list = Array.isArray(messages) ? messages.filter((message) => message?.text) : [];
+  if (!list.length) return '';
+  if (list.length === 1) return list[0].text;
+  const followups = list.slice(1).map((message) => `- ${message.text}`).join('\n');
+  const clarificationBlock = clarification?.question
+    ? `\n\n【系统曾询问的核心确认】\n${clarification.question}\n\n【用户确认与后续要求】\n${followups}`
+    : `\n\n【同一 Slack 线程的后续要求】\n${followups}`;
+  return `${list[0].text}${clarificationBlock}`;
+}
+
+export function slackPromptMetadata(input, promptRevision = 1) {
+  return {
+    promptRevision,
+    promptEntities: extractExplicitEntityVersions(input).map((entity) => entity.literal),
+    userUrlCount: extractUserUrls(input).length,
+    freshnessRequirement: /(?:最新|近期|刚发布|新发布|当前|\blatest\b|\bcurrent\b|\bnewly\s+released\b|\brecent(?:ly)?\b)/i.test(input)
+      ? '最新信息'
+      : '按任务需要核对当前信息',
+  };
+}
+
 export async function registerSlack({
   config,
   enqueue,
@@ -240,14 +285,24 @@ export async function registerSlack({
   };
   let botId = '';
   const classify = createSlackIntentClassifier(config);
-  const handle = async ({ channel, ts, threadTs, channelType, raw, user, eventId }) => {
+  const handle = async ({
+    channel,
+    ts,
+    threadTs,
+    channelType,
+    raw,
+    user,
+    eventId,
+    revision,
+    isEdit = false,
+  }) => {
     const task = parseSlackTask(raw, botId, { channelType, channel });
     if (!task) return;
     if (!isAuthorized({ user, channel })) {
       console.error(`[slack] 已拒绝未授权任务:user=${user || 'unknown'} channel=${channel || 'unknown'}`);
       return;
     }
-    const eventKey = slackMessageEventKey({ channel, ts, eventId });
+    const eventKey = slackMessageEventKey({ channel, ts, eventId, revision });
     if (!dedup(eventKey)) return;
     const stopCommand = isSlackStopCommand(task);
     if (!stopCommand && !withinRateLimit(user)) {
@@ -281,50 +336,134 @@ export async function registerSlack({
     }
     let enqueued = false;
     try {
-    const rootTs = threadTs || ts;
-    const threadKey = `${channel}:${rootTs}`;
-    const previous = store?.getSlackThread?.(threadKey);
-    const route = await resolveNaturalWorkflowTask(task, {
-      workflowIds,
-      defaultWorkflowId,
-      previousWorkflowId: previous?.workflow_id,
-      classify,
-    });
-    const messages = [...(previous?.messages || []), { text: task, ts }].slice(-12);
-    const input = messages.length === 1
-      ? route.task
-      : `${messages[0].text}\n\n【同一 Slack 线程的后续要求】\n${messages.slice(1).map((message) => `- ${message.text}`).join('\n')}`;
-    const run = enqueue({
-      workflowId: route.workflowId,
-      source: 'slack',
-      input,
-      notify: { channel, ts: rootTs, user, routeLabel: workflowRouteLabel(route.workflowId), threadKey },
-    });
-    enqueued = true;
-    try {
-      store?.upsertSlackThread?.({
-        threadKey,
-        channelId: channel,
-        threadTs: rootTs,
-        workflowId: route.workflowId,
-        messages,
-        lastRunId: run?.id,
+      const rootTs = threadTs || ts;
+      const threadKey = `${channel}:${rootTs}`;
+      const previous = store?.getSlackThread?.(threadKey);
+      const isThreadRevision = Boolean(previous && (isEdit || threadTs));
+      if (isThreadRevision && previous?.last_run_id) {
+        const result = await cancelTask?.({
+          runId: previous.last_run_id,
+          channel,
+          user,
+          reason: isEdit
+            ? `Slack 用户 ${user || 'unknown'} 编辑了原始 Prompt，旧修订已被替换`
+            : `Slack 用户 ${user || 'unknown'} 在线程补充了 Prompt，旧修订已被替换`,
+        });
+        if (result?.kind === 'too-late') {
+          await app.client.chat.postMessage({
+            channel,
+            thread_ts: rootTs,
+            text: '⚠️ 这条任务已经进入草稿创建阶段或已经创建草稿，当前编辑/补充不会覆盖它。请重新 @zenbot 提交完整 Prompt，避免产生无法确认的新旧版本。',
+          });
+          return;
+        }
+        if (result?.done) await result.done;
+      }
+      const route = await resolveNaturalWorkflowTask(task, {
+        workflowIds,
+        defaultWorkflowId,
+        previousWorkflowId: previous?.workflow_id,
+        classify,
       });
-    } catch (error) {
-      console.error('[slack] 线程上下文写入失败(任务已入队):', error?.message || error);
-    }
+      const incomingText = String(ts) === String(rootTs) ? route.task : task;
+      const promptRevision = previous ? Number(previous.prompt_revision || 1) + 1 : 1;
+      const messages = mergeSlackThreadMessages(previous?.messages, {
+        text: incomingText,
+        ts,
+        revision: revision || '0',
+        edited: Boolean(isEdit),
+      });
+      const input = buildSlackThreadInput(messages, { clarification: previous?.clarification });
+      const metadata = slackPromptMetadata(input, promptRevision);
+      const run = enqueue({
+        workflowId: route.workflowId,
+        source: 'slack',
+        input,
+        notify: {
+          channel,
+          ts: rootTs,
+          user,
+          routeLabel: workflowRouteLabel(route.workflowId),
+          threadKey,
+          ...metadata,
+        },
+      });
+      enqueued = true;
+      try {
+        store?.upsertSlackThread?.({
+          threadKey,
+          channelId: channel,
+          threadTs: rootTs,
+          workflowId: route.workflowId,
+          messages,
+          lastRunId: run?.id,
+          promptRevision,
+        });
+      } catch (error) {
+        console.error('[slack] 线程上下文写入失败(任务已入队):', error?.message || error);
+      }
     } catch (error) {
       if (!enqueued) store?.releaseSlackEvent?.(eventKey);
       throw error;
     }
   };
+  const pendingMessages = new Map();
+  const debounceMs = Number(config.slack.editDebounceMs ?? 5000);
+  const scheduleHandle = (payload) => {
+    const parsed = parseSlackTask(payload.raw, botId, { channelType: payload.channelType, channel: payload.channel });
+    if (parsed && isSlackStopCommand(parsed)) return handle(payload);
+    const identity = `${payload.channel}:${payload.ts}`;
+    const existing = pendingMessages.get(identity);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      pendingMessages.delete(identity);
+      Promise.resolve(handle(payload)).catch((error) => {
+        console.error('[slack] 延迟任务处理失败:', error?.message || error);
+      });
+    }, Math.max(0, debounceMs));
+    pendingMessages.set(identity, timer);
+    return Promise.resolve();
+  };
   app.message(async ({ message, body }) => {
     if (!message.bot_id && !message.subtype && message.text) {
-      await handle({ channel: message.channel, ts: message.ts, threadTs: message.thread_ts, channelType: message.channel_type, raw: message.text, user: message.user, eventId: body?.event_id });
+      await scheduleHandle({
+        channel: message.channel,
+        ts: message.ts,
+        threadTs: message.thread_ts,
+        channelType: message.channel_type,
+        raw: message.text,
+        user: message.user,
+        eventId: body?.event_id,
+        revision: '0',
+      });
+      return;
+    }
+    if (message.subtype === 'message_changed' && !message.message?.bot_id && message.message?.text) {
+      const edited = message.message;
+      await scheduleHandle({
+        channel: message.channel,
+        ts: edited.ts,
+        threadTs: edited.thread_ts,
+        channelType: edited.channel_type || message.channel_type,
+        raw: edited.text,
+        user: edited.user,
+        eventId: body?.event_id,
+        revision: edited.edited?.ts || message.event_ts || body?.event_id,
+        isEdit: true,
+      });
     }
   });
   app.event('app_mention', async ({ event, body }) => {
-    await handle({ channel: event.channel, ts: event.ts, threadTs: event.thread_ts, channelType: event.channel_type, raw: event.text, user: event.user, eventId: body?.event_id });
+    await scheduleHandle({
+      channel: event.channel,
+      ts: event.ts,
+      threadTs: event.thread_ts,
+      channelType: event.channel_type,
+      raw: event.text,
+      user: event.user,
+      eventId: body?.event_id,
+      revision: '0',
+    });
   });
   botId = (await app.client.auth.test()).user_id;
   try { await app.start(); }

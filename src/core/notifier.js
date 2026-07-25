@@ -6,7 +6,24 @@ export function createNotifier(postMessage) {
   return {
     ack(notify, input) {
       const route = notify?.routeLabel ? `\n识别:${notify.routeLabel}` : '';
-      return send(notify, `收到,已入队:${route}\n> ${String(input).slice(0, 120)}`);
+      const revision = notify?.promptRevision ? `\nPrompt 修订:${notify.promptRevision}` : '';
+      const entities = notify?.promptEntities?.length
+        ? `\n实体/版本:${notify.promptEntities.join('、')}`
+        : '';
+      const links = Number.isInteger(notify?.userUrlCount)
+        ? `\n用户链接:${notify.userUrlCount}`
+        : '';
+      const freshness = notify?.freshnessRequirement
+        ? `\n时效:${notify.freshnessRequirement}`
+        : '';
+      const fullPrompt = String(input || '').trim();
+      const displayed = fullPrompt.length > 2000
+        ? `${fullPrompt.slice(0, 2000)}\n…完整 Prompt 已保存，共 ${fullPrompt.length} 字符`
+        : fullPrompt;
+      return send(
+        notify,
+        `收到,已入队:${route}${revision}${entities}${links}${freshness}\n\n完整要求:\n> ${displayed.replace(/\n/g, '\n> ')}`,
+      );
     },
     success(notify, { title, mediaId, channelId, sourceCount, completeness }) {
       const destination = channelId === 'customerio-draft' ? 'Customer.io Newsletter 草稿' : '微信公众号草稿';
@@ -16,6 +33,15 @@ export function createNotifier(postMessage) {
     },
     progress(notify, { message }) { return send(notify, `⏳ ${String(message || '任务处理中')}`); },
     failure(notify, { stage, error }) { return send(notify, `❌ 任务失败(阶段:${stage})\n${String(error).slice(0, 500)}`); },
+    needsInput(notify, { question, details }) {
+      const conflicts = Array.isArray(details?.conflicts) && details.conflicts.length
+        ? `\n冲突:\n${details.conflicts.slice(0, 3).map((item) => `• ${item.description || item.topic}`).join('\n')}`
+        : '';
+      return send(
+        notify,
+        `❓ 任务需要确认，已暂停且未创建草稿${conflicts}\n\n请回复这一项:\n${String(question || '请补充核心信息。').slice(0, 1200)}`,
+      );
+    },
     cancelled(notify, { runId, cleaned, cleanupError }) {
       const cleanup = cleanupError
         ? `未完成文件清理失败:${String(cleanupError).slice(0, 300)}`
