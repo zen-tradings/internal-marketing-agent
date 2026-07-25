@@ -26,7 +26,7 @@ src/
 ├── core/                    队列、SQLite、调研写作、通知
 ├── triggers/                Slack 与 cron 触发器
 ├── workflows/               文章类型、提示词、优先信源
-├── channels/                微信草稿与 mock 渠道
+├── channels/                微信、Customer.io 与 mock 草稿渠道
 └── lib/                     门禁、固定图片、封面、渲染输入
 
 scripts/
@@ -36,7 +36,7 @@ scripts/
 ├── research-trace.mjs       查看 Exa 查询与命中来源
 ├── check-openrouter.mjs     检查 OpenRouter 配置
 ├── check-egress.mjs         只读检查各外部 API 的网络可达性
-├── check-translation.mjs      生成结构化直译本地验收稿
+├── check-translation.mjs    生成结构化直译本地验收稿
 ├── preview-newsletter.mjs   生成 Newsletter 本地 HTML 预览
 └── update-render-golden.mjs 更新渲染基准
 
