@@ -1,5 +1,6 @@
 import boltPkg from '@slack/bolt';
 import { extractExplicitEntityVersions, extractUserUrls } from '../core/analysis-v2.js';
+import { attachmentsFromSlackMessages, normalizeSlackAttachments } from '../core/user-sources.js';
 const { App } = boltPkg;
 
 export function cleanSlackText(text) {
@@ -70,7 +71,7 @@ export function resolveWorkflowTask(task, workflowIds = [], defaultWorkflowId = 
 const NATURAL_RULES = [
   { id: 'email', re: /(?:newsletter|customer\.?io|email\s+(?:draft|campaign|newsletter)|subscriber\s+email|订阅者|邮件草稿|邮件通讯|电子报|发邮件)/i },
   // URL 只是素材，不代表翻译意图。只有用户明确要求翻译时才进入完整直译引擎。
-  { id: 'translate', re: /(?:\btranslate\b|\b(?:full|complete|faithful|literal|direct)\s+translation\b|\btranslation\s+of\s+(?:this|the)\s+(?:article|paper|pdf|link)\b|直译|全文翻译|完整翻译|忠实翻译|逐字翻译|翻译成(?:简体)?中文|(?:请|帮我|需要|要)(?:完整)?翻译(?:这篇|这个|全文|链接|文章))/i },
+  { id: 'translate', re: /(?:\btranslate\b|\b(?:full|complete|faithful|literal|direct)\s+translation\b|\btranslation\s+of\s+(?:this|the)\s+(?:article|paper|pdf|link|file|attachment)\b|直译|全文翻译|完整翻译|忠实翻译|逐字翻译|翻译成(?:简体)?中文|(?:请|帮我|需要|要)(?:完整)?翻译(?:这篇|这个|这份|全文|链接|文章|文件|附件|文档|PDF))/i },
   { id: 'morning', re: /(?:\b(?:morning|daily|pre-?market|overnight)\s+(?:brief|briefing|report|digest)\b|晨报|早报|盘前简报|隔夜(?:市场|要闻))/i },
   { id: 'earnings', re: /(?:\bearnings\s+(?:review|analysis|recap|update|report)\b|\bquarterly\s+(?:earnings|results?)\b|\bactuals?\s+(?:vs\.?\s+)?(?:consensus|expectations?)\b|\bguidance\s+(?:change|update|revision)\b|财报点评|业绩点评|本季财报|实际.*预期|指引变化)/i },
   { id: 'sector', re: /(?:\b(?:industry|sector)\s+(?:analysis|research|review|report|overview|deep\s*dive)\b|\bmarket\s+landscape\b|行业综述|产业综述|赛道分析|行业研究|产业研究)/i },
@@ -104,7 +105,7 @@ export async function resolveNaturalWorkflowTask(task, {
 
   // Slack 中最常见的直译用法是自然语言里出现“翻译/直译”并附链接，不一定把
   // 关键词放在句首。URL + 明确翻译词构成稳定的强意图，优先于其它主题词路由。
-  if (/https?:\/\/\S+/i.test(task) && /(?:\btranslate\b|\b(?:full|complete|faithful|literal|direct)\s+translation\b|\btranslation\s+of\s+(?:this|the)\s+(?:article|paper|pdf|link)\b|直译|全文翻译|完整翻译|忠实翻译|逐字翻译|翻译)/i.test(task)) {
+  if (/https?:\/\/\S+/i.test(task) && /(?:\btranslate\b|\b(?:full|complete|faithful|literal|direct)\s+translation\b|\btranslation\s+of\s+(?:this|the)\s+(?:article|paper|pdf|link|file|attachment)\b|直译|全文翻译|完整翻译|忠实翻译|逐字翻译|翻译)/i.test(task)) {
     const matched = workflowIds.find((id) => id.toLowerCase() === 'translate');
     if (matched) return { workflowId: matched, task, reason: 'translation-keyword-with-url' };
   }
@@ -239,11 +240,12 @@ export function buildSlackThreadInput(messages, { clarification } = {}) {
   return `${list[0].text}${clarificationBlock}`;
 }
 
-export function slackPromptMetadata(input, promptRevision = 1) {
+export function slackPromptMetadata(input, promptRevision = 1, attachments = []) {
   return {
     promptRevision,
     promptEntities: extractExplicitEntityVersions(input).map((entity) => entity.literal),
     userUrlCount: extractUserUrls(input).length,
+    userFileCount: Array.isArray(attachments) ? attachments.length : 0,
     freshnessRequirement: /(?:最新|近期|刚发布|新发布|当前|\blatest\b|\bcurrent\b|\bnewly\s+released\b|\brecent(?:ly)?\b)/i.test(input)
       ? '最新信息'
       : '按任务需要核对当前信息',
@@ -294,6 +296,7 @@ export async function registerSlack({
     user,
     eventId,
     revision,
+    attachments = [],
     isEdit = false,
   }) => {
     const task = parseSlackTask(raw, botId, { channelType, channel });
@@ -367,14 +370,17 @@ export async function registerSlack({
       });
       const incomingText = String(ts) === String(rootTs) ? route.task : task;
       const promptRevision = previous ? Number(previous.prompt_revision || 1) + 1 : 1;
+      const incomingAttachments = normalizeSlackAttachments(attachments);
       const messages = mergeSlackThreadMessages(previous?.messages, {
         text: incomingText,
         ts,
         revision: revision || '0',
         edited: Boolean(isEdit),
+        ...(incomingAttachments.length ? { attachments: incomingAttachments } : {}),
       });
       const input = buildSlackThreadInput(messages, { clarification: previous?.clarification });
-      const metadata = slackPromptMetadata(input, promptRevision);
+      const userAttachments = attachmentsFromSlackMessages(messages);
+      const metadata = slackPromptMetadata(input, promptRevision, userAttachments);
       const run = enqueue({
         workflowId: route.workflowId,
         source: 'slack',
@@ -385,6 +391,13 @@ export async function registerSlack({
           user,
           routeLabel: workflowRouteLabel(route.workflowId),
           threadKey,
+          attachments: userAttachments,
+          ...(previous?.clarification?.question ? {
+            resolvedClarification: {
+              question: previous.clarification.question,
+              answered: true,
+            },
+          } : {}),
           ...metadata,
         },
       });
@@ -425,13 +438,16 @@ export async function registerSlack({
     return Promise.resolve();
   };
   app.message(async ({ message, body }) => {
-    if (!message.bot_id && !message.subtype && message.text) {
+    if (!message.bot_id
+      && (!message.subtype || message.subtype === 'file_share')
+      && (message.text || message.files?.length)) {
       await scheduleHandle({
         channel: message.channel,
         ts: message.ts,
         threadTs: message.thread_ts,
         channelType: message.channel_type,
-        raw: message.text,
+        raw: message.text || '',
+        attachments: message.files,
         user: message.user,
         eventId: body?.event_id,
         revision: '0',
@@ -446,6 +462,7 @@ export async function registerSlack({
         threadTs: edited.thread_ts,
         channelType: edited.channel_type || message.channel_type,
         raw: edited.text,
+        attachments: edited.files,
         user: edited.user,
         eventId: body?.event_id,
         revision: edited.edited?.ts || message.event_ts || body?.event_id,
@@ -460,6 +477,7 @@ export async function registerSlack({
       threadTs: event.thread_ts,
       channelType: event.channel_type,
       raw: event.text,
+      attachments: event.files,
       user: event.user,
       eventId: body?.event_id,
       revision: '0',

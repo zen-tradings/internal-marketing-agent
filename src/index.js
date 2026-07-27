@@ -108,6 +108,8 @@ export function makeHandler(deps) {
           taskContext: {
             promptRevision: notify.promptRevision,
             threadKey: notify.threadKey,
+            attachments: notify.attachments,
+            resolvedClarification: notify.resolvedClarification,
           },
           onProgress: (progress) => notifyBestEffort(deps.notifier, 'progress', notify, progress),
           resumeFromCheckpoint,

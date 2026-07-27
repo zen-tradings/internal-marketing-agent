@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runWriter, sourcePolicyFor } from '../src/core/runner.js';
+import {
+  isGovernmentFundedMediaSource,
+  runWriter,
+  sanitizeExaDomains,
+  selectAnalysisSources,
+  sourcePolicyFor,
+} from '../src/core/runner.js';
 import { loadConfig } from '../src/config/index.js';
 
 function tempWorkflow(overrides = {}) {
@@ -25,6 +31,66 @@ function jsonResponse(body, init = {}) {
     async text() { return JSON.stringify(body); },
   };
 }
+
+test('Exa includeDomains 会移除已知不支持的 X/Twitter 域名，避免整条优先检索 403', () => {
+  assert.deepEqual(
+    sanitizeExaDomains(['trendforce.com', 'x.com', 'twitter.com', 'www.x.com', 'trendforce.com']),
+    ['trendforce.com'],
+  );
+});
+
+test('搜索门禁排除政府资助媒体，但保留监管原始文件和独立报道', () => {
+  assert.equal(isGovernmentFundedMediaSource({ url: 'https://www.bbc.com/news/a' }), true);
+  assert.equal(isGovernmentFundedMediaSource({ url: 'https://www.sec.gov/Archives/a' }), false);
+  assert.equal(isGovernmentFundedMediaSource({ url: 'https://www.reuters.com/world/a' }), false);
+  assert.deepEqual(
+    sanitizeExaDomains(['news.bbc.co.uk', 'reuters.com', 'sec.gov']),
+    ['reuters.com', 'sec.gov'],
+  );
+});
+
+test('同一检索层级优先英文或独立第三方，并从候选结果中剔除政府资助媒体', () => {
+  const selected = selectAnalysisSources([
+    {
+      title: '政府资助媒体',
+      url: 'https://www.bbc.com/news/a',
+      publishedDate: '2026-07-26',
+      retrievalLane: 'open',
+      text: 'English report',
+    },
+    {
+      title: 'Generic English source',
+      url: 'https://generic.example/en',
+      publishedDate: '2026-07-26',
+      retrievalLane: 'open',
+      text: 'English market report from an unknown publisher.',
+    },
+    {
+      title: '财新独立报道',
+      url: 'https://www.caixin.com/2026/a.html',
+      publishedDate: '2026-07-26',
+      retrievalLane: 'open',
+      text: '中文市场报道。',
+    },
+    {
+      title: '普通中文来源',
+      url: 'https://generic.example/zh',
+      publishedDate: '2026-07-26',
+      retrievalLane: 'open',
+      text: '中文市场信息。',
+    },
+  ], new Date('2026-07-27T00:00:00Z'), 60);
+
+  assert.deepEqual(
+    selected.map((source) => source.url),
+    [
+      'https://generic.example/en',
+      'https://www.caixin.com/2026/a.html',
+      'https://generic.example/zh',
+    ],
+  );
+  assert.equal(selected[1].independentThirdParty, true);
+});
 
 test('成功:Exa 调研 + OpenRouter 写作后写出带 title frontmatter 的 article.md', async () => {
   const workflow = tempWorkflow({ model: 'workflow/model' });
@@ -634,7 +700,8 @@ test('company 财报深搜:传递 deep/financial report 参数,展开 subpages �
   assert.equal(deepBody.type, 'deep');
   assert.equal(deepBody.category, 'financial report');
   assert.equal(deepBody.numResults, 8);
-  assert.equal(deepBody.systemPrompt, 'Prefer official filings');
+  assert.match(deepBody.systemPrompt, /^Prefer official filings /);
+  assert.match(deepBody.systemPrompt, /Exclude state-owned, public-service, and government-funded media/);
   assert.deepEqual(deepBody.additionalQueries, ['AMAT SEC 10-Q']);
   assert.ok(result.sources.includes('https://sec.example/q1'));
 

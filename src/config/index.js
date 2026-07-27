@@ -62,8 +62,8 @@ export function loadConfig(env = process.env) {
     },
     analysis: {
       pipelineVersion: analysisPipelineVersion(env.ANALYSIS_PIPELINE_VERSION),
-      searchMaxQueries: positiveIntegerOrThrow(env.ANALYSIS_SEARCH_MAX_QUERIES, 6, 'ANALYSIS_SEARCH_MAX_QUERIES'),
-      recentWindowDays: positiveIntegerOrThrow(env.ANALYSIS_RECENT_WINDOW_DAYS, 90, 'ANALYSIS_RECENT_WINDOW_DAYS'),
+      searchMaxQueries: positiveIntegerOrThrow(env.ANALYSIS_SEARCH_MAX_QUERIES, 8, 'ANALYSIS_SEARCH_MAX_QUERIES'),
+      recentWindowDays: positiveIntegerOrThrow(env.ANALYSIS_RECENT_WINDOW_DAYS, 60, 'ANALYSIS_RECENT_WINDOW_DAYS'),
     },
     translation: {
       // 直译优先使用原站结构化 HTML；PDF 由 Datalab 托管解析后回到同一结构化链路。
@@ -95,6 +95,10 @@ export function loadConfig(env = process.env) {
       allowedChannelIds: slackAllowedChannelIds,
       rateLimitPerMinute: positiveIntegerOrThrow(env.SLACK_RATE_LIMIT_PER_MINUTE, 10, 'SLACK_RATE_LIMIT_PER_MINUTE'),
       editDebounceMs: nonNegativeInteger(env.SLACK_EDIT_DEBOUNCE_MS, 5000, 'SLACK_EDIT_DEBOUNCE_MS'),
+    },
+    documents: {
+      googleDocsAccessToken: env.GOOGLE_DOCS_ACCESS_TOKEN || '',
+      githubToken: env.GITHUB_TOKEN || '',
     },
     wechat: { appId: need('WECHAT_APP_ID'), appSecret: need('WECHAT_APP_SECRET') },
     customerio: {

@@ -27,8 +27,10 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal(c.writer.exaPriorityResults, 4); // 默认
   assert.equal(c.writer.exaTimeoutMs, 45000); // 默认
   assert.equal(c.analysis.pipelineVersion, 'v2');
-  assert.equal(c.analysis.searchMaxQueries, 6);
-  assert.equal(c.analysis.recentWindowDays, 90);
+  assert.equal(c.analysis.searchMaxQueries, 8);
+  assert.equal(c.analysis.recentWindowDays, 60);
+  assert.equal(c.documents.googleDocsAccessToken, '');
+  assert.equal(c.documents.githubToken, '');
   assert.equal(c.slack.editDebounceMs, 5000);
   assert.equal(c.translation.browserEnabled, true);
   assert.equal(c.translation.maxPdfPages, 120);
@@ -51,6 +53,8 @@ test('结构化直译抓取、浏览器、PDF、图片、Notion 与 Datalab 配�
     TRANSLATION_MAX_PDF_PAGES: '60',
     TRANSLATION_MAX_ASSET_COUNT: '30',
     NOTION_API_TOKEN: 'notion-secret',
+    GOOGLE_DOCS_ACCESS_TOKEN: 'google-read-token',
+    GITHUB_TOKEN: 'github-read-token',
     DATALAB_API_KEY: 'datalab-secret',
     DATALAB_MODE: 'accurate',
   });
@@ -59,6 +63,8 @@ test('结构化直译抓取、浏览器、PDF、图片、Notion 与 Datalab 配�
   assert.equal(c.translation.maxPdfPages, 60);
   assert.equal(c.translation.maxAssetCount, 30);
   assert.equal(c.translation.notionApiToken, 'notion-secret');
+  assert.equal(c.documents.googleDocsAccessToken, 'google-read-token');
+  assert.equal(c.documents.githubToken, 'github-read-token');
   assert.equal(c.translation.datalabApiKey, 'datalab-secret');
   assert.equal(c.translation.datalabMode, 'accurate');
 });

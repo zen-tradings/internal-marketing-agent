@@ -13,6 +13,12 @@ import path from 'node:path';
 const DEFAULT_PRIORITY_SOURCES = [
   'trendforce.com',        // 含 datatrack.trendforce.com,半导体/AI 供应链/HBM
   'semianalysis.com',
+  'techinsights.com',
+  'counterpointresearch.com',
+  'omdia.tech.informa.com',
+  'blocksandfiles.com',
+  'eetimes.com',
+  'digitimes.com',
   'alphaxiv.org',
   'skhynix.com',           // SK Hynix IR
   'marvell.com',           // investor.marvell.com
@@ -48,6 +54,83 @@ const DEFAULT_OFFICIAL_SOURCES = [
   'cxmt.com',
 ];
 
+// 搜索结果中的新闻/评论来源不能来自政府资助、国家所有或公共广播媒体。
+// 监管机构、交易所和政府原始数据不属于“媒体”，继续通过 officialSources 使用。
+const DEFAULT_EXCLUDED_MEDIA_SOURCES = [
+  'xinhuanet.com',
+  'news.cn',
+  'people.com.cn',
+  'cctv.com',
+  'cgtn.com',
+  'chinadaily.com.cn',
+  'globaltimes.cn',
+  'cri.cn',
+  'cnr.cn',
+  'china.com.cn',
+  'voanews.com',
+  'rfa.org',
+  'rferl.org',
+  'usagm.gov',
+  'alhurra.com',
+  'bbc.com',
+  'bbc.co.uk',
+  'dw.com',
+  'france24.com',
+  'rfi.fr',
+  'rt.com',
+  'sputniknews.com',
+  'tass.com',
+  'trtworld.com',
+  'aljazeera.com',
+  'nhk.or.jp',
+  'kbs.co.kr',
+  'arirang.com',
+  'abc.net.au',
+  'sbs.com.au',
+  'cbc.ca',
+  'channelnewsasia.com',
+  'pbs.org',
+  'npr.org',
+  'rnz.co.nz',
+  'tvnz.co.nz',
+  'swissinfo.ch',
+  'rte.ie',
+  'yle.fi',
+  'svt.se',
+  'nrk.no',
+  'dr.dk',
+  'ard.de',
+  'zdf.de',
+  'deutschlandradio.de',
+];
+
+// 在同一来源层级内优先这些独立第三方报道/研究机构；其它语言不降级，
+// 只要来源独立且能直接支持任务事实，仍可进入证据矩阵。
+const DEFAULT_INDEPENDENT_REPORTING_SOURCES = [
+  'reuters.com',
+  'apnews.com',
+  'ft.com',
+  'wsj.com',
+  'bloomberg.com',
+  'economist.com',
+  'nikkei.com',
+  'caixinglobal.com',
+  'caixin.com',
+  'theinformation.com',
+  'semafor.com',
+  'techcrunch.com',
+  'theregister.com',
+  'trendforce.com',
+  'semianalysis.com',
+  'techinsights.com',
+  'counterpointresearch.com',
+  'omdia.tech.informa.com',
+  'blocksandfiles.com',
+  'eetimes.com',
+  'digitimes.com',
+  'lightcounting.com',
+];
+
 export function prioritySources() {
   const raw = process.env.EXA_PRIORITY_DOMAINS;
   return raw
@@ -62,11 +145,27 @@ export function officialSources() {
     : [...DEFAULT_OFFICIAL_SOURCES];
 }
 
+export function excludedMediaSources() {
+  return uniqueDomains([
+    ...DEFAULT_EXCLUDED_MEDIA_SOURCES,
+    ...csvDomains(process.env.EXA_EXCLUDED_MEDIA_DOMAINS),
+  ]);
+}
+
+export function independentReportingSources() {
+  return uniqueDomains([
+    ...DEFAULT_INDEPENDENT_REPORTING_SOURCES,
+    ...csvDomains(process.env.EXA_INDEPENDENT_MEDIA_DOMAINS),
+  ]);
+}
+
 // 供各工作流 `get research()` 直接返回。
 export function sharedResearch() {
   return {
     prioritySources: prioritySources(),
     officialSources: officialSources(),
+    excludedMediaSources: excludedMediaSources(),
+    independentReportingSources: independentReportingSources(),
     minOfficialSources: 2,
   };
 }
@@ -89,6 +188,15 @@ export function envTimeoutMs() { return Number(process.env.DEFAULT_TIMEOUT_MS ||
 export function workDirFor(id) {
   const base = process.env.WORK_DIR || '/srv/zen/wechat';
   return path.join(base, id);
+}
+
+function csvDomains(value) {
+  return String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function uniqueDomains(domains) {
+  return [...new Set(domains.map((domain) => String(domain || '').trim().toLowerCase())
+    .filter(Boolean))];
 }
 
 // 各工作流共用的通用约束块:风格规范 + 调研素材纪律 + 产出格式。

@@ -11,6 +11,7 @@ import {
   isPrivateIp,
   readResponseBufferWithLimit,
   removeRepeatedSourceMetadata,
+  safeFetchResource,
   sourceDocumentFromHtml,
   sourceDocumentFromMarkdown,
   translateDocument,
@@ -63,6 +64,33 @@ test('流式响应超过大小上限时立即取消', async () => {
   await assert.rejects(() => readResponseBufferWithLimit(response, 10), /超过大小上限/);
   assert.equal(reads, 2);
   assert.equal(cancelled, true);
+});
+
+test('私有文件跨域重定向时不会把 Authorization 带到 CDN', async () => {
+  const requests = [];
+  const result = await safeFetchResource({
+    url: 'https://files.slack.com/private/report.pdf',
+    headers: { Authorization: 'Bearer xoxb-secret', 'X-Trace': 'keep' },
+    dnsLookup: PUBLIC_DNS,
+    fetchFn: async (url, options) => {
+      requests.push({ url: String(url), headers: options.headers });
+      if (requests.length === 1) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://cdn.example.com/report.pdf?signature=ok' },
+        });
+      }
+      return new Response('%PDF-test', {
+        status: 200,
+        headers: { 'content-type': 'application/pdf' },
+      });
+    },
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+  });
+  assert.equal(result.buffer.toString(), '%PDF-test');
+  assert.equal(requests[0].headers.Authorization, 'Bearer xoxb-secret');
+  assert.equal(requests[1].headers.Authorization, undefined);
+  assert.equal(requests[1].headers['X-Trace'], 'keep');
 });
 
 test('PDF 页数在文字提取前受硬上限保护', () => {

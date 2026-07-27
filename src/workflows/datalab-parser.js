@@ -15,7 +15,7 @@ export async function convertPdfWithDatalab({
 }) {
   const apiKey = String(config.datalabApiKey || '').trim();
   if (!apiKey) {
-    throw new Error('PDF 结构化翻译需要 DATALAB_API_KEY；当前 DigitalOcean 服务尚未配置');
+    throw new Error('PDF 结构化翻译需要 DATALAB_API_KEY；当前运行环境尚未配置');
   }
   const baseUrl = trustedBaseUrl(config.datalabBaseUrl || DEFAULT_BASE_URL);
   const modes = unique([config.datalabMode || 'balanced', 'accurate']);

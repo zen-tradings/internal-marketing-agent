@@ -43,10 +43,15 @@ test('同一条 @Bot 消息的 message 与 app_mention 使用同一个持久化�
 });
 
 test('Slack 编辑替换同一消息而不是追加，线程确认合并为完整 Prompt', () => {
-  const initial = mergeSlackThreadMessages([], { ts: '1.0', text: '比较 Opus 5 和 Kimi K3' });
+  const initial = mergeSlackThreadMessages([], {
+    ts: '1.0',
+    text: '比较 Opus 5 和 Kimi K3',
+    attachments: [{ name: 'source.pdf', url: 'https://files.slack.com/source.pdf' }],
+  });
   const edited = mergeSlackThreadMessages(initial, { ts: '1.0', text: '比较 Opus 5 和 Kimi K2', edited: true });
   const replied = mergeSlackThreadMessages(edited, { ts: '2.0', text: '确认使用 Kimi K2' });
   assert.equal(edited.length, 1);
+  assert.equal(edited[0].attachments[0].name, 'source.pdf');
   assert.equal(edited[0].text, '比较 Opus 5 和 Kimi K2');
   const input = buildSlackThreadInput(replied, { clarification: { question: '请确认 Kimi 版本' } });
   assert.match(input, /^比较 Opus 5 和 Kimi K2/);
@@ -57,6 +62,7 @@ test('Slack 编辑替换同一消息而不是追加，线程确认合并为完�
     promptRevision: 2,
     promptEntities: ['Opus 5', 'Kimi K2'],
     userUrlCount: 0,
+    userFileCount: 0,
     freshnessRequirement: '按任务需要核对当前信息',
   });
 });

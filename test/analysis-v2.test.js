@@ -10,6 +10,7 @@ import {
   extractExplicitEntityVersions,
   fallbackTaskContract,
   normalizeAuditIssues,
+  normalizeEvidenceMatrix,
   normalizePlanningResult,
 } from '../src/core/analysis-v2.js';
 import { runWriter } from '../src/core/runner.js';
@@ -43,8 +44,8 @@ function config() {
   return {
     analysis: {
       pipelineVersion: 'v2',
-      searchMaxQueries: 6,
-      recentWindowDays: 90,
+      searchMaxQueries: 8,
+      recentWindowDays: 60,
     },
     writer: {
       openrouterApiKey: 'or-key',
@@ -104,6 +105,154 @@ test('用户明确两方结构时 sector 方法论只能补空白，不能强制
   assert.match(prompt, /用户已经指定结构，不得套用任何固定行业、公司或财报框架/);
   assert.doesNotMatch(prompt, /必须写 TAM/);
   assert.equal(contract.requested_structure.length, 1);
+});
+
+test('中文公司任务补齐英文别名查询，并给动态来源加时效窗口', () => {
+  const input = '分析长鑫存储的IPO、技术、市场份额和供应链';
+  const normalized = normalizePlanningResult({
+    task_contract: {
+      article_type: 'company',
+      exact_entities_and_versions: [{ literal: '长鑫存储' }],
+      search_aliases: ['ChangXin Memory Technologies', 'CXMT', '长鑫科技'],
+    },
+    search_plan: [
+      { query: '长鑫存储 官网 招股书', lane: 'official', recent: false },
+      { query: '长鑫存储 市场份额', lane: 'priority', recent: false },
+      { query: '长鑫存储 最新动态', lane: 'open', recent: false },
+    ],
+  }, input, { id: 'company' }, {}, { maxQueries: 8 });
+  const english = normalized.searchPlan.filter((item) => /ChangXin|CXMT/.test(item.query));
+  assert.ok(english.length >= 2);
+  assert.ok(normalized.searchPlan.filter((item) => item.lane !== 'official').every((item) => item.recent));
+  assert.deepEqual(normalized.taskContract.search_aliases, [
+    'ChangXin Memory Technologies',
+    'CXMT',
+    '长鑫科技',
+  ]);
+  assert.deepEqual(
+    [...new Set(normalized.searchPlan.map((item) => item.language))].sort(),
+    ['en', 'zh'],
+  );
+});
+
+test('纯英文任务也会确定性补齐中文查询，搜索计划始终覆盖中英双语', () => {
+  const normalized = normalizePlanningResult({
+    task_contract: {
+      article_type: 'company',
+      exact_entities_and_versions: [{ literal: 'NVIDIA' }],
+      search_aliases: ['NVIDIA Corporation', 'NVDA'],
+    },
+    search_plan: [
+      {
+        query: 'NVIDIA official investor relations filing',
+        lane: 'official',
+        language: 'en',
+        recent: false,
+      },
+      {
+        query: 'NVIDIA latest independent analysis',
+        lane: 'priority',
+        language: 'en',
+        recent: true,
+      },
+    ],
+  }, 'Analyze NVIDIA market share and supply chain', { id: 'company' }, {}, { maxQueries: 8 });
+
+  assert.ok(normalized.searchPlan.some((item) => item.language === 'en'));
+  assert.ok(normalized.searchPlan.some((item) => item.language === 'zh'));
+  assert.ok(normalized.searchPlan.find((item) => item.language === 'zh').query.includes('独立第三方'));
+});
+
+test('缺少一手确认不会触发澄清，只有双边核心冲突才询问一次', () => {
+  const contract = fallbackTaskContract('分析 Opus 5', { id: 'wechat' });
+  const sources = [
+    { id: 'S1', title: '用户材料', url: 'https://example.com/user', text: 'Opus 5', userSpecified: true },
+    { id: 'S2', title: '官方材料', url: 'https://example.com/official', text: 'Opus 5', official: true },
+  ];
+  const missing = normalizeEvidenceMatrix({
+    source_assessments: [{ source_id: 'S1', source_type: 'user', relevant: true }],
+    entities: [{ literal: 'Opus 5', verified: false, source_ids: [] }],
+    relevant_source_ids: ['S1'],
+    clarification_needed: true,
+  }, sources, contract);
+  assert.equal(missing.clarification_needed, false);
+
+  const conflict = normalizeEvidenceMatrix({
+    source_assessments: [
+      { source_id: 'S1', source_type: 'user', relevant: true },
+      { source_id: 'S2', source_type: 'primary', relevant: true },
+    ],
+    conflicts: [{
+      severity: 'core',
+      topic: '核心版本',
+      user_source_ids: ['S1'],
+      official_source_ids: ['S2'],
+      question: '采用哪一版？',
+    }],
+    relevant_source_ids: ['S1', 'S2'],
+  }, sources, contract);
+  assert.equal(conflict.clarification_needed, true);
+  assert.equal(conflict.clarification_question, '采用哪一版？');
+});
+
+test('用户主动提供的政府资助媒体只能作为上下文，不能佐证事实或进入引用', () => {
+  const contract = fallbackTaskContract('分析一项市场政策', { id: 'wechat' });
+  const sources = [
+    {
+      id: 'S1',
+      title: '用户提供的公共广播报道',
+      url: 'https://www.bbc.com/news/example',
+      text: '一项市场政策。',
+      userSpecified: true,
+      editorialWarning: 'user-specified-government-funded-media',
+    },
+    {
+      id: 'S2',
+      title: 'Reuters independent report',
+      url: 'https://www.reuters.com/world/example',
+      text: 'Independent evidence.',
+      independentThirdParty: true,
+    },
+  ];
+  const matrix = normalizeEvidenceMatrix({
+    source_assessments: [
+      {
+        source_id: 'S1',
+        source_type: 'primary',
+        relevant: true,
+        entity_matches: ['市场政策'],
+        safe_statements: ['不得采用'],
+      },
+      {
+        source_id: 'S2',
+        source_type: 'secondary',
+        relevant: true,
+        safe_statements: ['可采用'],
+      },
+    ],
+    requirements: [{
+      requirement: '分析政策',
+      source_ids: ['S1', 'S2'],
+      safe_statements: ['有来源'],
+      covered: true,
+    }],
+    relevant_source_ids: ['S1', 'S2'],
+    selected_reference_ids: ['S1', 'S2'],
+  }, sources, contract);
+
+  const warned = matrix.source_assessments.find((item) => item.source_id === 'S1');
+  assert.equal(warned.source_type, 'user');
+  assert.deepEqual(warned.safe_statements, []);
+  assert.deepEqual(matrix.requirements[0].source_ids, ['S2']);
+  assert.deepEqual(matrix.selected_reference_ids, ['S2']);
+
+  const article = appendDeterministicReferences(
+    '---\ntitle: 测试\n---\n\n正文。',
+    sources,
+    ['S1', 'S2'],
+  );
+  assert.doesNotMatch(article, /bbc\.com/);
+  assert.match(article, /reuters\.com/);
 });
 
 test('局部审计只替换逐字命中的句子，不允许审查器整篇重写', () => {
@@ -228,7 +377,7 @@ test('V2 完整链路按 Opus 5/Kimi K2 定向搜索、写作、局部审计并�
 
   assert.equal(result.ok, true);
   const searchBodies = calls.filter((call) => call.url.endsWith('/search')).map((call) => call.body);
-  assert.equal(searchBodies.length, 4);
+  assert.ok(searchBodies.length >= 6);
   assert.ok(searchBodies.every((body) => /Opus 5|Kimi K2/.test(body.query)));
   assert.ok(searchBodies.every((body) => !/Opus Genetics|KMI|10-Q|K2\.6|Opus 4\.5/.test(body.query)));
   const article = fs.readFileSync(result.articlePath, 'utf8');
@@ -244,7 +393,7 @@ test('V2 完整链路按 Opus 5/Kimi K2 定向搜索、写作、局部审计并�
   assert.equal(trace.factReview.approved, true);
 });
 
-test('V2 无法从一手来源确认精确型号时返回 needs_input 而不是改用附近版本', async () => {
+test('V2 无法从一手来源确认精确型号时停止无依据写作，但不反复向用户确认', async () => {
   let completionIndex = 0;
   const fetchFn = async (url, options) => {
     if (String(url).endsWith('/search')) {
@@ -279,9 +428,37 @@ test('V2 无法从一手来源确认精确型号时返回 needs_input 而不是�
     fetchFn,
   });
   assert.equal(result.ok, false);
-  assert.equal(result.needsInput, true);
-  assert.match(result.clarification.question, /暂未确认 Opus 5/);
+  assert.equal(result.needsInput, undefined);
+  assert.match(result.stderr, /已停止生成以避免无依据写作/);
   assert.equal(fs.existsSync(result.articlePath), false);
   const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
-  assert.equal(trace.needsInput.kind, 'evidence-conflict');
+  assert.equal(trace.needsInput, undefined);
+  assert.equal(trace.evidenceMatrix.entities[0].verified, false);
+});
+
+test('V2 完全没有检索结果时直接失败，不把缺资料变成 needs_input', async () => {
+  const fetchFn = async (url) => {
+    if (String(url).endsWith('/search')) return jsonResponse({ results: [] });
+    return jsonResponse({ choices: [{ message: { content: JSON.stringify({
+      task_contract: {
+        article_type: 'company',
+        exact_entities_and_versions: [{ literal: '长鑫存储' }],
+        search_aliases: ['ChangXin Memory Technologies', 'CXMT'],
+        must_cover: ['分析长鑫存储'],
+      },
+      search_plan: [
+        { query: 'ChangXin Memory Technologies official filing', lane: 'official', recent: false },
+        { query: 'CXMT latest DRAM market share', lane: 'priority', recent: true },
+      ],
+    }) } }] });
+  };
+  const result = await runWriter({
+    workflow: workflow(),
+    input: '分析长鑫存储',
+    config: config(),
+    fetchFn,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.needsInput, undefined);
+  assert.match(result.stderr, /未检索到与任务直接相关的可靠材料/);
 });

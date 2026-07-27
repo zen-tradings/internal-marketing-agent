@@ -37,8 +37,12 @@ test('workflow env 属性延迟读取:import 后修改 env 仍生效(getter 语�
 test('workflow.research:行业优先源排除 Exa 不支持域名,官方源与两类 env 均可整体覆盖', async () => {
   const orig = process.env.EXA_PRIORITY_DOMAINS;
   const origOfficial = process.env.EXA_OFFICIAL_DOMAINS;
+  const origExcluded = process.env.EXA_EXCLUDED_MEDIA_DOMAINS;
+  const origIndependent = process.env.EXA_INDEPENDENT_MEDIA_DOMAINS;
   delete process.env.EXA_PRIORITY_DOMAINS;
   delete process.env.EXA_OFFICIAL_DOMAINS;
+  delete process.env.EXA_EXCLUDED_MEDIA_DOMAINS;
+  delete process.env.EXA_INDEPENDENT_MEDIA_DOMAINS;
 
   try {
     const mod = await import('../src/workflows/wechat.js');
@@ -59,15 +63,26 @@ test('workflow.research:行业优先源排除 Exa 不支持域名,官方源与�
     assert.ok(wf.research.officialSources.includes('sse.com.cn'));
     assert.ok(wf.research.officialSources.includes('cninfo.com.cn'));
     assert.ok(wf.research.officialSources.includes('cxmt.com'));
+    assert.ok(wf.research.excludedMediaSources.includes('bbc.com'));
+    assert.ok(wf.research.excludedMediaSources.includes('xinhuanet.com'));
+    assert.ok(wf.research.independentReportingSources.includes('reuters.com'));
+    assert.ok(wf.research.independentReportingSources.includes('caixin.com'));
 
     // 设置 env → 整体覆盖,逗号分隔并去除空白
     process.env.EXA_PRIORITY_DOMAINS = 'foo.com, bar.com ,baz.com';
     assert.deepEqual(wf.research.prioritySources, ['foo.com', 'bar.com', 'baz.com']);
     process.env.EXA_OFFICIAL_DOMAINS = 'sec.test, exchange.test';
     assert.deepEqual(wf.research.officialSources, ['sec.test', 'exchange.test']);
+    process.env.EXA_EXCLUDED_MEDIA_DOMAINS = 'public.test, STATE.test';
+    assert.ok(wf.research.excludedMediaSources.includes('public.test'));
+    assert.ok(wf.research.excludedMediaSources.includes('state.test'));
+    process.env.EXA_INDEPENDENT_MEDIA_DOMAINS = 'independent.test';
+    assert.ok(wf.research.independentReportingSources.includes('independent.test'));
   } finally {
     if (orig) process.env.EXA_PRIORITY_DOMAINS = orig; else delete process.env.EXA_PRIORITY_DOMAINS;
     if (origOfficial) process.env.EXA_OFFICIAL_DOMAINS = origOfficial; else delete process.env.EXA_OFFICIAL_DOMAINS;
+    if (origExcluded) process.env.EXA_EXCLUDED_MEDIA_DOMAINS = origExcluded; else delete process.env.EXA_EXCLUDED_MEDIA_DOMAINS;
+    if (origIndependent) process.env.EXA_INDEPENDENT_MEDIA_DOMAINS = origIndependent; else delete process.env.EXA_INDEPENDENT_MEDIA_DOMAINS;
   }
 });
 

@@ -22,14 +22,21 @@
 
 ③ 调研+写作  src/core/analysis-v2.js + src/core/runner.js
    微信原创/行业/公司/财报先把未经截断的 Slack 原始 Prompt 固化为 TaskContract，
-   再生成最多 6 个 SearchPlan 定向查询。用户 URL 先走 Exa /contents；默认继续以
-   最新官方/一手、既定优先源和开放来源交叉验证。检索结果按用户每项要求形成
+   抽取英文/法定别名后再生成最多 8 个 SearchPlan 定向查询。Slack PDF/文本附件、
+   PDF/Notion/Google Docs/GitHub URL 与 Exa 搜索并行读取，并作为一级用户来源；
+   每个任务至少包含一条中文查询和一条英文查询，默认继续以最新官方/一手、
+   既定优先源和开放来源交叉验证。同层级优先英文或任何语言的独立第三方机构，
+   搜索结果确定性排除政府资助、国家所有和公共广播媒体；监管、交易所、统计部门
+   的原始文件仍可作一手证据，用户主动提供的受限媒体只作上下文、不作佐证或引用。
+   公司任务同时补跑
+   季度财务、监管披露和价值链三路深搜。检索结果按用户每项要求形成
    EvidenceMatrix；静态域名只用于发现，必须匹配发布主体、页面类型和目标实体才能
    判为一手来源。GLM 5.2 只接收相关证据写作；事实审计只返回精确原句和局部动作，
-   不能重写全文。非核心问题确定性删除后继续交付，核心冲突转 needs_input。
+   不能重写全文。缺资料和无支持句不再提问；只有用户材料与一手来源对核心前提
+   形成双边、不可调和冲突时转 needs_input，同一线程回答后不重复询问。
    引用链接由系统从证据矩阵精选并确定性追加，不再由模型维护。
-   生产默认运行 V2；V1 路径只在首批五条 V2 任务验收期间由
-   ANALYSIS_PIPELINE_VERSION 临时保留作紧急回退。翻译、晨报和 Newsletter 不进入 V2。
+   生产默认运行 V2；V1 路径只通过 ANALYSIS_PIPELINE_VERSION 保留为单实例紧急回退，
+   不作为日常运行模式。翻译、晨报和 Newsletter 不进入 V2。
    调 OpenRouter chat completions(正文模型 = .env 的 OPENROUTER_MODEL),
    每个任务使用独立的 workDir/runs/<run-id>/，产出其中的 article.md
    (必须有 title frontmatter，这是硬契约，checkpoint 和生成素材也不得跨任务复用)。
@@ -61,15 +68,16 @@
 |---|---|---|
 | 分析 Prompt 合同、证据矩阵、局部审计 | `src/core/analysis-v2.js` | 原始 Prompt 最高优先；纯函数便于回归 |
 | 微信分析编排与外部调用 | `src/core/runner.js` 的 Analysis V2 分支 | 规划、Exa、写作、审计、确定性引用 |
+| 用户附件与直接文档 | `src/core/user-sources.js` | Slack 私有文件、PDF、Notion、Google Docs、GitHub；并行读取并保留一级来源身份 |
 | 备用文章结构 | `src/workflows/<id>.js` 的 `defaultMethodology` | 只在用户未规定结构时补空白 |
 | 新增一种文章类型 | 新建 `src/workflows/<name>.js` + `src/index.js` WORKFLOWS 注册 | 照抄 earnings.js 的结构 |
 | 公司深度备用框架 | `src/workflows/company.js` | 只有 Prompt 确实要求公司财务/竞争/价值链时使用 |
 | Slack 中英文触发、编辑、补充、停止与路由 | `src/triggers/slack.js` | 编辑替换旧修订；模型能力比较不误入 company |
 | 直译范围识别 | `src/workflows/translation-scope.js` | 页码和章节范围；用户页码为 1-based，Datalab 请求转换为 0-based |
 | 直译内容提取/结构 | `src/workflows/translation-source-text.js` | arXiv HTML 优先、普通 HTML/Notion；保留标题、段落、图表、公式、代码和引用 |
-| PDF 结构化解析 | `src/workflows/datalab-parser.js` | 托管 Datalab API、异步轮询、质量重试及图片资产落盘；密钥只在 PDF 路径需要 |
+| PDF 结构化解析 | `src/workflows/datalab-parser.js` | 直译/扫描件走托管 Datalab；有文字层的分析型 PDF 可在 `user-sources.js` 用 Poppler 降级读取 |
 | 直译翻译/完整性/续跑 | `src/workflows/translate-engine.js` | 逐文本节点翻译、原文表格转图片、确定性重组、高亮密度、图表公式完整性门禁与 checkpoint |
-| 直译抓取配置 | `.env` 的 `TRANSLATION_*` / `NOTION_API_TOKEN` / `DATALAB_*` | 控制来源、图片、PDF 页数、浏览器、解析质量、超时和重定向 |
+| 文档抓取配置 | `.env` 的 `TRANSLATION_*` / `NOTION_API_TOKEN` / `GOOGLE_DOCS_ACCESS_TOKEN` / `GITHUB_TOKEN` / `DATALAB_*` | 控制来源、私有文档、PDF 页数、浏览器、解析质量、超时和重定向 |
 | 单任务取消、发布阶段保护与垃圾目录清理 | `src/core/queue.js`、`src/index.js`、`src/lib/task-cancellation.js` | generate 可取消；publish 后拒绝强杀；取消后状态为 cancelled |
 | 优先信源加减域名 | `workflows/shared.js` 的清单,或 .env EXA_PRIORITY_DOMAINS | 写主域即可,子域自动匹配 |
 | 门禁规则(拦截/提醒) | `src/lib/gate.js` | 注意:投资建议敏感词已按要求移除,勿加回 |

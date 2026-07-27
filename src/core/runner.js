@@ -9,6 +9,16 @@ import {
 } from '../lib/task-cancellation.js';
 import { generateStrictTranslation } from '../workflows/translate-engine.js';
 import {
+  excludedMediaSources,
+  independentReportingSources,
+} from '../workflows/shared.js';
+import {
+  isDirectUserUrl,
+  loadDirectUserSources,
+  sourceRequestHeadersForAttachment,
+  translationAttachment,
+} from './user-sources.js';
+import {
   AnalysisNeedsInputError,
   appendDeterministicReferences,
   applyAuditIssues,
@@ -57,6 +67,7 @@ const LEGAL_OFFICIAL_SOURCES = [
   'justice.gov',
   'sec.gov',
 ];
+const EDITORIAL_SEARCH_POLICY = 'Prefer English-language sources within the same evidence tier, plus independent third-party reporting or research in any language. Exclude state-owned, public-service, and government-funded media. Government regulators, exchanges, and statistical agencies remain allowed only for original filings or primary data.';
 
 export async function runWriter({
   workflow,
@@ -96,8 +107,14 @@ export async function runWriter({
     if (!model) throw new Error('缺少 OpenRouter model');
 
     if (workflow.mode === 'translation') {
+      const inputSourceUrl = extractUrls(input).urls[0];
+      const attachedSource = inputSourceUrl ? undefined : translationAttachment(taskContext.attachments);
+      const sourceUrl = inputSourceUrl || attachedSource?.url;
       const result = await generateStrictTranslation({
-        input, workflow, writer, fetchFn, trace,
+        input,
+        sourceUrl,
+        sourceRequestHeaders: sourceRequestHeadersForAttachment(attachedSource, config.slack?.botToken),
+        workflow, writer, fetchFn, trace,
         completeArticle,
         fetchWithRetry,
         translationConfig: config.translation || {},
@@ -240,8 +257,8 @@ async function runAnalysisV2({
 }) {
   trace.pipelineVersion = 'v2';
   const analysis = config.analysis || {};
-  const maxQueries = positiveNumber(analysis.searchMaxQueries, 6);
-  const recentWindowDays = positiveNumber(analysis.recentWindowDays, 90);
+  const maxQueries = positiveNumber(analysis.searchMaxQueries, 8);
+  const recentWindowDays = positiveNumber(analysis.recentWindowDays, 60);
   const planningPrompt = buildPlanningPrompt(input, workflow, taskContext, {
     maxQueries,
     recentWindowDays,
@@ -277,6 +294,10 @@ async function runAnalysisV2({
     promptFirst: true,
     userLinksFirst: true,
     officialFirst: true,
+    bilingualSearchRequired: ['zh', 'en'],
+    preferEnglishWithinTier: true,
+    preferIndependentThirdPartyAnyLanguage: true,
+    excludeGovernmentFundedMedia: true,
     minOfficialSources: 0,
     maxReferences: 5,
   };
@@ -295,27 +316,29 @@ async function runAnalysisV2({
     writer,
     fetchFn,
     trace,
+    taskContext,
+    config,
     recentWindowDays,
     asOf: new Date(),
   });
   throwIfTaskCancelled(signal);
   if (!sources.length) {
-    throw new AnalysisNeedsInputError(
+    throw new Error(
       taskContract.user_urls.length
-        ? '用户链接无法读取，且未检索到可核验的补充材料。请检查链接或补充可访问来源。'
-        : '未检索到与任务直接相关的可靠材料。请补充准确实体、时间范围或参考链接。',
-      { kind: 'missing-evidence', userUrls: taskContract.user_urls },
+        ? '用户来源无法读取，且未检索到可核验的补充材料；任务已停止，未进入写作。'
+        : '未检索到与任务直接相关的可靠材料；任务已停止，未进入写作。',
     );
   }
-  if (taskContract.user_urls.length && !sources.some((source) => source.userSpecified)) {
-    throw new AnalysisNeedsInputError(
-      '你提供的链接未能读取。请检查链接权限或补充可公开访问的链接；确认后系统再用官方与优先来源交叉验证。',
-      {
-        kind: 'user-link-unavailable',
-        userUrls: taskContract.user_urls,
-        fetchError: trace.userSourceError,
-      },
-    );
+  if ((taskContract.user_urls.length || taskContract.user_attachments?.length)
+    && !sources.some((source) => source.userSpecified)) {
+    trace.userSourceWarning = {
+      kind: 'user-source-unavailable',
+      userUrls: taskContract.user_urls,
+      userAttachments: taskContract.user_attachments,
+      fetchError: trace.userSourceError,
+      directErrors: trace.directUserSourceErrors,
+      continuedWithIndependentSources: true,
+    };
   }
 
   let rawEvidence;
@@ -339,7 +362,10 @@ async function runAnalysisV2({
       .map((assessment) => assessment.source_id),
   );
   for (const source of sources) {
-    if (primaryIds.has(source.id)) source.official = true;
+    if (primaryIds.has(source.id)) {
+      source.official = true;
+      source.independentThirdParty = false;
+    }
   }
   trace.evidenceMatrix = evidenceMatrix;
   trace.selectedSources = sources.map((source) => ({ id: source.id, ...sourceForTrace(source) }));
@@ -351,6 +377,15 @@ async function runAnalysisV2({
   };
   trace.researchLanes = [...new Set(trace.requests.map((request) => request.kind).filter(Boolean))];
   writeResearchTrace(researchTracePath, trace);
+  if (evidenceMatrix.clarification_needed && taskContext?.resolvedClarification?.answered) {
+    trace.suppressedClarification = {
+      reason: '用户已在同一线程回答过一次核心确认，继续按完整线程上下文写作',
+      previousQuestion: taskContext.resolvedClarification.question,
+      proposedQuestion: evidenceMatrix.clarification_question,
+    };
+    evidenceMatrix.clarification_needed = false;
+    evidenceMatrix.clarification_question = '';
+  }
   if (evidenceMatrix.clarification_needed) {
     throw new AnalysisNeedsInputError(
       evidenceMatrix.clarification_question || '核心证据存在冲突，请确认后继续。',
@@ -363,10 +398,10 @@ async function runAnalysisV2({
     );
   }
   if (!evidenceMatrix.relevant_source_ids.length) {
-    throw new AnalysisNeedsInputError(
-      '检索结果与原始 Prompt 的核心要求不匹配。请补充更准确的实体名称、时间范围或参考链接。',
-      { kind: 'irrelevant-evidence', taskContract },
-    );
+    throw new Error('检索结果与原始 Prompt 的核心要求不匹配，已停止生成以避免无依据写作。');
+  }
+  if (!evidenceMatrix.selected_reference_ids.length) {
+    throw new Error('没有可用于独立事实佐证和最终引用的合格来源，已停止生成；用户主动提供的受政府资助媒体仅可作为上下文。');
   }
 
   const prompt = buildWritingPrompt({
@@ -431,29 +466,40 @@ async function searchExaV2({
   writer,
   fetchFn,
   trace,
+  taskContext,
+  config,
   recentWindowDays,
   asOf,
 }) {
   const userUrls = taskContract.user_urls || [];
-  let userSources = [];
-  if (userUrls.length) {
-    try {
-      userSources = (await fetchExaContents({ urls: userUrls, writer, fetchFn, trace }))
-        .map((source) => ({ ...source, userSpecified: true, retrievalLane: 'user' }));
-    } catch (error) {
-      trace.userSourceError = describeFetchError(error).slice(0, 500);
-    }
-  }
-  if (taskContract.only_user_links) {
-    return assignSourceIds(dedupeByUrl(userSources));
-  }
-
-  const prioritySources = workflow?.research?.prioritySources || [];
-  const officialDomains = workflow?.research?.officialSources || [];
+  const directPromise = loadDirectUserSources({
+    userUrls,
+    attachments: taskContext?.attachments || [],
+    workDir: workflow.workDir,
+    config,
+    fetchFn,
+    fetchWithRetry,
+    signal: taskContext?.signal,
+    trace,
+  });
+  const exaUserUrls = userUrls.filter((url) => !isDirectUserUrl(url));
+  const exaContentsPromise = exaUserUrls.length
+    ? fetchExaContents({ urls: exaUserUrls, writer, fetchFn, trace })
+    : Promise.resolve([]);
+  const prioritySources = sanitizeExaDomains(workflow?.research?.prioritySources || []);
+  const officialDomains = sanitizeExaDomains(workflow?.research?.officialSources || []);
   const recentStart = new Date(asOf.getTime() - recentWindowDays * 24 * 60 * 60 * 1000).toISOString();
-  const settled = await Promise.allSettled(searchPlan.map((querySpec) => {
+  const workflowQuerySubject = [
+    ...(taskContract.exact_entities_and_versions || []).map((entity) => entity.literal),
+    ...(taskContract.search_aliases || []),
+  ].join(' / ') || String(taskContract.raw_prompt || '').replace(/https?:\/\/\S+/g, ' ').replace(/\s+/g, ' ').slice(0, 220);
+  const workflowQueries = typeof workflow?.research?.extraQueries === 'function'
+    ? workflow.research.extraQueries(workflowQuerySubject).filter(Boolean).slice(0, 3)
+    : [];
+  const searchPromise = Promise.allSettled(searchPlan.map((querySpec) => {
     const baseOptions = {
       kind: `analysis-${querySpec.lane}`,
+      language: querySpec.language,
       type: querySpec.lane === 'official' ? 'deep' : 'auto',
       numResults: querySpec.lane === 'official'
         ? Math.max(6, writer.exaPriorityResults || 4)
@@ -464,7 +510,7 @@ async function searchExaV2({
       ...(querySpec.endPublishedDate ? { endPublishedDate: querySpec.endPublishedDate } : {}),
     };
     if (querySpec.lane === 'official') {
-      return searchExaOpen({
+      const discovery = searchExaOpen({
         query: querySpec.query,
         options: {
           ...baseOptions,
@@ -474,7 +520,23 @@ async function searchExaV2({
         writer,
         fetchFn,
         trace,
-      }).then((results) => results.map((source) => ({ ...source, retrievalLane: 'official' })));
+      });
+      const constrained = officialDomains.length
+        ? searchExaOpen({
+            query: querySpec.query,
+            options: {
+              ...baseOptions,
+              kind: 'analysis-official-domain',
+              includeDomains: officialDomains,
+            },
+            writer,
+            fetchFn,
+            trace,
+          })
+        : Promise.resolve([]);
+      return Promise.allSettled([discovery, constrained]).then((results) =>
+        dedupeByUrl(results.flatMap((result) => result.status === 'fulfilled' ? result.value : []))
+          .map((source) => ({ ...source, retrievalLane: 'official' })));
     }
     if (querySpec.lane === 'priority' && prioritySources.length) {
       return searchExaOpen({
@@ -500,14 +562,60 @@ async function searchExaV2({
       trace,
     }).then((results) => results.map((source) => ({ ...source, retrievalLane: 'open' })));
   }));
-  const searched = settled.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
+  const workflowSearchPromise = Promise.allSettled(workflowQueries.map((spec) =>
+    searchExaOpen({
+      query: typeof spec === 'string' ? spec : spec.query,
+      options: typeof spec === 'string'
+        ? {}
+        : {
+            ...spec,
+            ...(spec.kind === 'company-value-chain' ? { startPublishedDate: recentStart } : {}),
+          },
+      writer,
+      fetchFn,
+      trace,
+    }).then((results) => results.map((source) => ({
+      ...source,
+      retrievalLane: spec.kind === 'company-official-disclosures' || spec.kind === 'quarterly-financials'
+        ? 'official'
+        : 'priority',
+      ...(spec.kind === 'company-value-chain' ? { priority: true } : {}),
+    })))));
+  const [directResult, exaContentsResult, settled, workflowSettled] = await Promise.all([
+    directPromise,
+    exaContentsPromise.then(
+      (value) => ({ status: 'fulfilled', value }),
+      (reason) => ({ status: 'rejected', reason }),
+    ),
+    searchPromise,
+    workflowSearchPromise,
+  ]);
+  if (directResult.errors.length) trace.directUserSourceErrors = directResult.errors;
+  const userSources = [
+    ...directResult.sources,
+    ...(exaContentsResult.status === 'fulfilled'
+      ? exaContentsResult.value.map((source) => ({ ...source, userSpecified: true, retrievalLane: 'user' }))
+      : []),
+  ];
+  if (exaContentsResult.status === 'rejected') {
+    trace.userSourceError = describeFetchError(exaContentsResult.reason).slice(0, 500);
+  }
+  if (taskContract.only_user_links) {
+    return assignSourceIds(applyEditorialSourcePolicy(dedupeByUrl(userSources)));
+  }
+  const searched = [...settled, ...workflowSettled]
+    .flatMap((result) => result.status === 'fulfilled' ? result.value : []);
   const merged = dedupeByUrl([...userSources, ...searched]);
   for (const source of merged) {
     if (!source.userSpecified && strictOfficialSource(source, taskContract, officialDomains)) {
       source.official = true;
     }
   }
-  return assignSourceIds(merged);
+  return assignSourceIds(selectAnalysisSources(
+    applyEditorialSourcePolicy(merged),
+    asOf,
+    recentWindowDays,
+  ));
 }
 
 async function auditAnalysisV2({
@@ -545,14 +653,6 @@ async function auditAnalysisV2({
   const firstIssues = normalizeAuditIssues(firstRaw, article, evidenceMatrix);
   trace.factReview = { approved: firstIssues.length === 0, issues: firstIssues, repaired: false };
   writeResearchTrace(researchTracePath, trace);
-  const blocking = firstIssues.find((issue) => issue.severity === 'core'
-    && !(['replace', 'qualify'].includes(issue.action) && issue.replacement && issue.evidence_ids.length));
-  if (blocking) {
-    throw new AnalysisNeedsInputError(
-      blocking.question || `核心表述“${blocking.article_quote.slice(0, 120)}”缺少可核验证据，请确认是否删除或补充来源。`,
-      { kind: 'fact-audit', issue: blocking, taskContract },
-    );
-  }
   if (!firstIssues.length) {
     return { article, warnings, review: { approved: true, issues: [] } };
   }
@@ -600,13 +700,6 @@ async function auditAnalysisV2({
     verificationIssues: secondIssues,
   };
   writeResearchTrace(researchTracePath, trace);
-  const remainingCore = secondIssues.find((issue) => issue.severity === 'core');
-  if (remainingCore) {
-    throw new AnalysisNeedsInputError(
-      remainingCore.question || `核心表述“${remainingCore.article_quote.slice(0, 120)}”仍无法核验，请确认后继续。`,
-      { kind: 'fact-audit-verification', issue: remainingCore, taskContract },
-    );
-  }
   const secondApplied = applyAuditIssues(firstApplied.article, secondIssues);
   for (const issue of secondApplied.applied) {
     warnings.push(`复核后已删除或修正次要表述:${issue.article_quote.slice(0, 160)}`);
@@ -739,13 +832,13 @@ async function searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy
       )
     : Promise.resolve([]);
 
-  const prioritySources = workflow?.research?.prioritySources;
+  const prioritySources = sanitizeExaDomains(workflow?.research?.prioritySources);
   const hasPriority = sourcePolicy.kind !== 'legal-document-analysis'
     && Array.isArray(prioritySources)
     && prioritySources.length > 0;
-  const officialSources = sourcePolicy.kind === 'legal-document-analysis'
+  const officialSources = sanitizeExaDomains(sourcePolicy.kind === 'legal-document-analysis'
     ? LEGAL_OFFICIAL_SOURCES
-    : workflow?.research?.officialSources;
+    : workflow?.research?.officialSources);
   const hasOfficial = sourcePolicy.requireOfficial && Array.isArray(officialSources) && officialSources.length > 0;
 
   // 法律案件必须先读用户给的案卷页，再把案名、案号补进检索词。只用 Slack 中的
@@ -840,10 +933,10 @@ async function searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy
   }
 
   const contentsResults = earlyContents || await contentsPromise;
-  const merged = dedupeByUrl([...contentsResults, ...searchResults]).map((source) => ({
+  const merged = applyEditorialSourcePolicy(dedupeByUrl([...contentsResults, ...searchResults]).map((source) => ({
     ...source,
     ...(source.official || urlMatchesAnyDomain(source.url, officialSources) ? { official: true } : {}),
-  }));
+  })));
   if (sourcePolicy.requireOfficial) {
     const officialCount = merged.filter((source) => source.official).length;
     if (officialCount < sourcePolicy.minOfficialSources) {
@@ -856,6 +949,7 @@ async function searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy
 async function searchExaOpen({ query, options = {}, writer, fetchFn, trace }) {
   const numResults = options.numResults || writer.exaNumResults || 5;
   const url = `${trimTrailingSlash(writer.exaBaseUrl || 'https://api.exa.ai')}/search`;
+  const searchSystemPrompt = [options.systemPrompt, EDITORIAL_SEARCH_POLICY].filter(Boolean).join(' ');
   const body = {
       query,
       numResults,
@@ -866,7 +960,9 @@ async function searchExaOpen({ query, options = {}, writer, fetchFn, trace }) {
         ...(options.subpages ? { subpages: options.subpages, subpageTarget: options.subpageTarget } : {}),
       },
       ...(options.category ? { category: options.category } : {}),
-      ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
+      ...(searchSystemPrompt && (options.type || 'auto') === 'deep'
+        ? { systemPrompt: searchSystemPrompt }
+        : {}),
       ...(options.additionalQueries ? { additionalQueries: options.additionalQueries } : {}),
       ...(options.includeDomains ? { includeDomains: options.includeDomains } : {}),
       ...(options.startPublishedDate ? { startPublishedDate: options.startPublishedDate } : {}),
@@ -876,6 +972,7 @@ async function searchExaOpen({ query, options = {}, writer, fetchFn, trace }) {
     kind: options.kind || 'open-search',
     endpoint: '/search',
     query,
+    language: options.language,
     searchType: body.type,
     category: body.category,
     includeDomains: body.includeDomains,
@@ -893,11 +990,16 @@ async function searchExaOpen({ query, options = {}, writer, fetchFn, trace }) {
     if (!res.ok) throw new Error(`Exa search failed: ${res.status} ${res.statusText} ${await safeText(res)}`.trim());
     const data = await res.json();
     const roots = Array.isArray(data.results) ? data.results.slice(0, numResults) : [];
-    const results = flattenExaResults(roots).map((result) => ({
-      ...result,
-      ...(options.kind === 'quarterly-financials' ? { financialReport: true } : {}),
-      ...(options.kind && !['open-search', 'official-discovery'].includes(options.kind) ? { specialist: true } : {}),
-    }));
+    const flattened = flattenExaResults(roots);
+    const excluded = flattened.filter((result) => isGovernmentFundedMediaSource(result));
+    const results = flattened
+      .filter((result) => !isGovernmentFundedMediaSource(result))
+      .map((result) => ({
+        ...result,
+        ...(options.kind === 'quarterly-financials' ? { financialReport: true } : {}),
+        ...(options.kind && !['open-search', 'official-discovery'].includes(options.kind) ? { specialist: true } : {}),
+      }));
+    event.excludedGovernmentFundedMedia = excluded.map((result) => result.url).filter(Boolean);
     finishTrace(event, { requestId: data.requestId, costDollars: data.costDollars, results });
     return results;
   } catch (e) {
@@ -930,7 +1032,12 @@ async function searchExaPriority({ query, writer, prioritySources, fetchFn, trac
   }, { timeoutMs: writer.exaTimeoutMs || 45000 });
   if (!res.ok) throw new Error(`Exa priority search failed: ${res.status} ${res.statusText} ${await safeText(res)}`.trim());
   const data = await res.json();
-  const results = Array.isArray(data.results) ? data.results.slice(0, numResults) : [];
+  const rawResults = Array.isArray(data.results) ? data.results.slice(0, numResults) : [];
+  const results = rawResults.filter((result) => !isGovernmentFundedMediaSource(result));
+  event.excludedGovernmentFundedMedia = rawResults
+    .filter((result) => isGovernmentFundedMediaSource(result))
+    .map((result) => result.url)
+    .filter(Boolean);
   finishTrace(event, { requestId: data.requestId, costDollars: data.costDollars, results });
   return results.map((r) => ({
     ...r,
@@ -1031,6 +1138,9 @@ function sourceForTrace(source) {
     priorityTier: sourcePriorityTier(source),
     userSpecified: Boolean(source.userSpecified),
     official: Boolean(source.official),
+    language: source.language || detectSourceLanguage(source),
+    independentThirdParty: Boolean(source.independentThirdParty),
+    editorialWarning: source.editorialWarning || null,
   };
 }
 
@@ -1173,9 +1283,14 @@ function formatResearch(results, writer = {}) {
     ].filter(Boolean).join('\n');
     const truncated = full.length > maxChars;
     const excerpts = truncated ? `${full.slice(0, maxChars)}\n(原文过长已截断)` : full;
+    const editorialNotice = r.editorialWarning
+      ? '\n编辑门禁: 该链接由用户主动提供，但属于政府资助/国家所有/公共广播媒体，只可用于理解用户上下文，不得作为独立事实佐证或最终引用。'
+      : '';
     return `### 来源 ${i + 1}: ${label}${r.title || '未命名来源'}
 URL: ${r.url || '无'}
 发布日期: ${r.publishedDate || '未知'}
+语言: ${r.language || detectSourceLanguage(r)}
+独立第三方: ${r.independentThirdParty ? '是' : '否'}${editorialNotice}
 摘录:
 ${excerpts || '无可用正文摘录'}`;
   }).join('\n\n');
@@ -1387,6 +1502,86 @@ function cleanSourceTitle(title, url) {
   const value = String(title || '').replace(/[\[\]\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (value) return value;
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return '来源'; }
+}
+
+export function sanitizeExaDomains(domains) {
+  const unsupported = new Set(['x.com', 'twitter.com', 'www.x.com', 'www.twitter.com']);
+  const excluded = new Set(excludedMediaSources().map((domain) => domain.replace(/^www\./, '')));
+  return [...new Set((Array.isArray(domains) ? domains : [])
+    .map((domain) => String(domain || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, ''))
+    .filter((domain) => domain
+      && !unsupported.has(domain)
+      && ![...excluded].some((blocked) => domain === blocked || domain.endsWith(`.${blocked}`))))];
+}
+
+export function selectAnalysisSources(sources, asOf, recentWindowDays) {
+  const eligible = applyEditorialSourcePolicy(sources);
+  const cutoff = asOf.getTime() - recentWindowDays * 24 * 60 * 60 * 1000;
+  const score = (source) => {
+    const published = Date.parse(source.publishedDate || '');
+    const freshness = Number.isFinite(published)
+      ? published >= cutoff ? 80 : Math.max(0, 40 - Math.floor((cutoff - published) / (30 * 24 * 60 * 60 * 1000)))
+      : 0;
+    return freshness
+      + (source.userSpecified ? 1000 : 0)
+      + (source.official ? 600 : 0)
+      + (source.retrievalLane === 'official' ? 450 : 0)
+      + (source.priority ? 300 : 0)
+      + (source.retrievalLane === 'priority' ? 250 : 0)
+      + (source.language === 'en' ? 70 : 0)
+      + (source.independentThirdParty ? 70 : 0);
+  };
+  const ranked = eligible.sort((a, b) => score(b) - score(a));
+  const selected = [];
+  const laneCounts = { official: 0, priority: 0, open: 0 };
+  for (const source of ranked) {
+    if (source.userSpecified) {
+      selected.push(source);
+      continue;
+    }
+    const lane = source.official || source.retrievalLane === 'official'
+      ? 'official'
+      : source.priority || source.retrievalLane === 'priority'
+        ? 'priority'
+        : 'open';
+    const limit = lane === 'official' ? 12 : lane === 'priority' ? 8 : 8;
+    if (laneCounts[lane] >= limit) continue;
+    laneCounts[lane] += 1;
+    selected.push(source);
+  }
+  return selected.slice(0, 32);
+}
+
+export function isGovernmentFundedMediaSource(source) {
+  return urlMatchesAnyDomain(source?.url, excludedMediaSources());
+}
+
+function applyEditorialSourcePolicy(sources) {
+  return sources
+    .filter((source) => source?.userSpecified || !isGovernmentFundedMediaSource(source))
+    .map((source) => {
+      const governmentFundedMedia = isGovernmentFundedMediaSource(source);
+      const official = source?.official || source?.retrievalLane === 'official';
+      return {
+        ...source,
+        language: detectSourceLanguage(source),
+        independentThirdParty: !official
+          && !governmentFundedMedia
+          && (source?.priority
+            || source?.specialist
+            || urlMatchesAnyDomain(source?.url, independentReportingSources())),
+        ...(source?.userSpecified && governmentFundedMedia
+          ? { editorialWarning: 'user-specified-government-funded-media' }
+          : {}),
+      };
+    });
+}
+
+function detectSourceLanguage(source) {
+  const sample = `${source?.title || ''}\n${source?.text || source?.summary || ''}`.slice(0, 4000);
+  const hanCount = (sample.match(/\p{Script=Han}/gu) || []).length;
+  const latinWords = sample.match(/[A-Za-z]{4,}/g) || [];
+  return latinWords.length >= Math.max(3, Math.ceil(hanCount / 4)) ? 'en' : hanCount ? 'zh' : 'other';
 }
 
 function urlMatchesAnyDomain(rawUrl, domains) {

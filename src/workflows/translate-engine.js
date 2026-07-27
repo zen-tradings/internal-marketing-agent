@@ -2,6 +2,8 @@ import { generateStructuredTranslation } from './translation-source-text.js';
 
 export async function generateStrictTranslation({
   input,
+  sourceUrl,
+  sourceRequestHeaders,
   workflow,
   writer,
   fetchFn,
@@ -15,6 +17,8 @@ export async function generateStrictTranslation({
 }) {
   const result = await generateStructuredTranslation({
     input,
+    sourceUrl,
+    sourceRequestHeaders,
     workflow,
     writer,
     fetchFn,

@@ -47,6 +47,8 @@ const EXCLUDED_CONTENT_SELECTOR = [
 
 export async function generateStructuredTranslation({
   input,
+  sourceUrl: explicitSourceUrl,
+  sourceRequestHeaders = {},
   workflow,
   writer,
   fetchFn,
@@ -58,7 +60,7 @@ export async function generateStructuredTranslation({
   signal,
 }) {
   throwIfTaskCancelled(signal);
-  const sourceUrl = extractInputUrls(input)[0];
+  const sourceUrl = explicitSourceUrl || extractInputUrls(input)[0];
   if (!sourceUrl) throw new Error('直译任务缺少可读取的 http(s) 原文链接');
   const scope = parseTranslationScope(input);
 
@@ -77,6 +79,7 @@ export async function generateStructuredTranslation({
     dnsLookup: translationConfig.dnsLookup,
     scope,
     onProgress,
+    requestHeaders: sourceRequestHeaders,
     signal,
   });
   throwIfTaskCancelled(signal);
@@ -147,6 +150,7 @@ export async function acquireSourceDocument({
   dnsLookup = dns.lookup,
   scope = { kind: 'all' },
   onProgress,
+  requestHeaders = {},
   signal,
 }) {
   throwIfTaskCancelled(signal);
@@ -206,6 +210,7 @@ export async function acquireSourceDocument({
       limits,
       dnsLookup,
       accept: 'text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.5',
+      headers: requestHeaders,
     });
   } catch (error) {
     throwIfTaskCancelled(signal);
@@ -220,6 +225,7 @@ export async function acquireSourceDocument({
         limits,
         dnsLookup,
         accept: 'application/pdf,*/*;q=0.5',
+        headers: requestHeaders,
       });
     } else {
       if (scope.kind === 'pages' && !/\.pdf(?:$|[?#])/i.test(acquisitionUrl)) {
@@ -1026,6 +1032,7 @@ export async function safeFetchResource({
   maxBytes = limits.maxSourceBytes,
 }) {
   let current = url;
+  let currentHeaders = { ...headers };
   for (let redirects = 0; redirects <= limits.maxRedirects; redirects += 1) {
     const resolved = await resolveSafeHttpUrl(current, { dnsLookup });
     const requestFetch = fetchFn === globalThis.fetch ? pinnedHttpFetch(resolved.addresses) : fetchFn;
@@ -1034,14 +1041,18 @@ export async function safeFetchResource({
       headers: {
         Accept: accept || '*/*',
         'User-Agent': 'Mozilla/5.0 ZenTranslationBot/3.0',
-        ...headers,
+        ...currentHeaders,
       },
     }, limits.fetchTimeoutMs);
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get('location');
       await cancelResponseBody(response);
       if (!location) throw new Error(`原文重定向缺少 Location:${response.status}`);
-      current = new URL(location, current).toString();
+      const next = new URL(location, current).toString();
+      if (new URL(next).origin !== new URL(current).origin) {
+        currentHeaders = stripSensitiveRequestHeaders(currentHeaders);
+      }
+      current = next;
       continue;
     }
     if (!response.ok) {
@@ -1063,6 +1074,13 @@ export async function safeFetchResource({
     };
   }
   throw new Error(`原文重定向超过 ${limits.maxRedirects} 次`);
+}
+
+function stripSensitiveRequestHeaders(headers) {
+  const sensitive = new Set(['authorization', 'cookie', 'proxy-authorization']);
+  return Object.fromEntries(
+    Object.entries(headers || {}).filter(([name]) => !sensitive.has(name.toLowerCase())),
+  );
 }
 
 export async function readResponseBufferWithLimit(response, maxBytes) {
@@ -1212,7 +1230,7 @@ async function fetchNotionMarkdown({ sourceUrl, token, fetchFn, fetchWithRetry, 
     method: 'GET',
     headers: {
       Authorization: `Bearer ${token}`,
-      'Notion-Version': '2025-09-03',
+      'Notion-Version': '2026-03-11',
       Accept: 'application/json',
     },
   }, timeoutMs);

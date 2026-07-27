@@ -36,8 +36,14 @@ OPENROUTER_MODEL=z-ai/glm-5.2
 OPENROUTER_PLANNER_MODEL=z-ai/glm-5.2
 OPENROUTER_REVIEW_MODEL=z-ai/glm-5.2
 ANALYSIS_PIPELINE_VERSION=v2
-ANALYSIS_SEARCH_MAX_QUERIES=6
-ANALYSIS_RECENT_WINDOW_DAYS=90
+ANALYSIS_SEARCH_MAX_QUERIES=8
+ANALYSIS_RECENT_WINDOW_DAYS=60
+# Optional comma-separated extensions to the built-in editorial source policy.
+EXA_EXCLUDED_MEDIA_DOMAINS=
+EXA_INDEPENDENT_MEDIA_DOMAINS=
+NOTION_API_TOKEN=replace-if-private-notion-pages-are-used
+GOOGLE_DOCS_ACCESS_TOKEN=replace-if-private-google-docs-are-used
+GITHUB_TOKEN=replace-if-private-github-repositories-are-used
 SLACK_EDIT_DEBOUNCE_MS=5000
 SLACK_ALLOWED_USER_IDS=U0123456789
 SLACK_ALLOWED_CHANNEL_IDS=C0123456789
@@ -50,6 +56,12 @@ artifact directory before translation and rendering continue locally. The
 Droplet therefore does not need Marker/MinerU models; `DATALAB_API_KEY` is
 required only when a translation resolves to PDF. Keep it in the protected
 service environment, never in the repository.
+
+For original analysis, text-layer PDFs can fall back to Poppler `pdftotext`;
+scanned PDFs still require Datalab OCR. Public Google Docs and GitHub
+repositories work without access tokens. Configure the optional read-only
+tokens above only for private material, and rotate the Google OAuth access
+token when it expires.
 
 The application does not enforce a public-IP allowlist and does not reject
 proxy environment variables. Outbound routing follows the host and Node.js
@@ -103,13 +115,12 @@ startup or readiness fails, restore the previous directory and protected
 environment-file backup before restarting the unit.
 
 Analysis V2 is the production default. `ANALYSIS_PIPELINE_VERSION=v1` remains
-only as an emergency fallback during the initial five-task acceptance window;
-do not run V1 and V2 as separate processes. Inspect `research-trace.json` for
-the first five WeChat analysis tasks. It records `pipelineVersion`, the
-immutable task contract, search plan, evidence matrix, source classification
-and sentence-level audit even when a task pauses in `needs_input`. Remove the
-temporary V1 code path only in a separately reviewed change after all five
-traces pass.
+only as a single-instance emergency fallback; do not run V1 and V2 as separate
+processes. Inspect `research-trace.json` during production acceptance. It records
+`pipelineVersion`, the immutable task contract, bilingual search plan, evidence
+matrix, editorial source classification and sentence-level audit even when a
+task pauses in `needs_input`. Remove the V1 code path only in a separately
+reviewed change.
 
 Back up `/var/lib/zen-content-hub/runs.db` together with its `-wal` and `-shm`
 files using a SQLite-aware snapshot or backup command. Keep only one application
