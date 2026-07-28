@@ -1504,9 +1504,12 @@ function sameInvariantTokens(source, translated) {
   const sourceNumbers = invariantNumbers(source);
   const translatedNumbers = invariantNumbers(translated);
   if (JSON.stringify(sourceNumbers) === JSON.stringify(translatedNumbers)) return true;
-  const monthNumbers = englishMonthNumbers(source);
-  return monthNumbers.length > 0
-    && JSON.stringify([...sourceNumbers, ...monthNumbers].sort()) === JSON.stringify(translatedNumbers);
+  const semanticNumbers = [
+    ...englishMonthNumbers(source),
+    ...englishFractionNumbers(source),
+  ];
+  return semanticNumbers.length > 0
+    && JSON.stringify([...sourceNumbers, ...semanticNumbers].sort()) === JSON.stringify(translatedNumbers);
 }
 
 function invariantNumbers(value) {
@@ -1535,6 +1538,19 @@ function englishMonthNumbers(value) {
     /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sept?(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b/gi,
   );
   return [...matches].map((match) => months[match[1].toLowerCase()]).filter(Boolean);
+}
+
+function englishFractionNumbers(value) {
+  const wholeNumbers = {
+    one: 1, two: 2, three: 3, four: 4, five: 5,
+    six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  };
+  const matches = String(value).matchAll(
+    /\b(one|two|three|four|five|six|seven|eight|nine|ten)\s+and\s+(?:a|one)\s+half\b/gi,
+  );
+  return [...matches]
+    .map((match) => `${wholeNumbers[match[1].toLowerCase()] + 0.5}`)
+    .filter(Boolean);
 }
 
 function createSourceDocument({

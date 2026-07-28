@@ -504,6 +504,43 @@ test('同段多个英文月份可忠实翻译为对应月份数字，其它数�
   assert.match(renderTranslatedDocument(translated), /1995 年 1 月.*2009 年 12 月.*8\.04%/);
 });
 
+test('英文分数词组和月份可转换为对应数字且不放宽其它数字', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'pdf',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a.pdf',
+    title: 'Assets',
+    author: '',
+    sha256: 'fraction-and-month-numbers',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: 'Assets exceeded one and a half trillion dollars from January 1995 through December 2009, based on 8,400 funds.',
+    }],
+  };
+  const translated = await translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title'
+            ? '资产'
+            : '**管理资产**超过 1.5 万亿美元，样本期从 1995 年 1 月持续到 2009 年 12 月，基于 8,400 只基金。',
+        })),
+      });
+    },
+  });
+  assert.match(renderTranslatedDocument(translated), /1\.5 万亿美元.*1995 年 1 月.*2009 年 12 月.*8,400/);
+});
+
 test('长文正常翻译批次最多 24 个单元，尽早写入分块 checkpoint', async () => {
   const source = {
     version: 5,
