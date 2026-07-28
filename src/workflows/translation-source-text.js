@@ -1501,19 +1501,75 @@ function sameInvariantTokens(source, translated) {
     ...(String(value).match(/\$[A-Z]{1,6}\b|\b(?:NASDAQ|NYSE|AMEX|OTC)\s*:\s*[A-Z]{1,6}\b/g) || []),
   ].sort();
   if (JSON.stringify(tokens(source)) !== JSON.stringify(tokens(translated))) return false;
-  const sourceNumbers = invariantNumbers(source);
-  const translatedNumbers = invariantNumbers(translated);
+  const sourceNumbers = invariantNumericSignature(source);
+  const translatedNumbers = invariantNumericSignature(translated);
   if (JSON.stringify(sourceNumbers) === JSON.stringify(translatedNumbers)) return true;
-  const semanticNumbers = [
-    ...englishMonthNumbers(source),
-    ...englishFractionNumbers(source),
-  ];
-  return semanticNumbers.length > 0
-    && JSON.stringify([...sourceNumbers, ...semanticNumbers].sort()) === JSON.stringify(translatedNumbers);
+  const monthNumbers = englishMonthNumbers(source);
+  return monthNumbers.length > 0
+    && JSON.stringify([...sourceNumbers, ...monthNumbers].sort()) === JSON.stringify(translatedNumbers);
 }
 
 function invariantNumbers(value) {
   return (String(value).match(/(?<![A-Za-z0-9])[-+]?\d+(?:[,.]\d+)*(?:%|‰)?/g) || []).sort();
+}
+
+function invariantNumericSignature(value) {
+  const magnitudeMultipliers = {
+    thousand: 1_000n,
+    million: 1_000_000n,
+    billion: 1_000_000_000n,
+    trillion: 1_000_000_000_000n,
+    万: 10_000n,
+    十万: 100_000n,
+    百万: 1_000_000n,
+    千万: 10_000_000n,
+    亿: 100_000_000n,
+    十亿: 1_000_000_000n,
+    百亿: 10_000_000_000n,
+    千亿: 100_000_000_000n,
+    万亿: 1_000_000_000_000n,
+  };
+  const magnitudeTokens = [];
+  let masked = String(value).replaceAll('**', '');
+  masked = masked.replace(
+    /(?<![A-Za-z0-9])(?:[$€£¥]\s*)?(one\s+and\s+(?:a|one)\s+half|[-+]?\d+(?:[,.]\d+)*)\s*(thousand|million|billion|trillion)\b(?:\s+(?:U\.?S\.?\s+)?dollars?)?/gi,
+    (match, amount, unit) => {
+      const normalized = normalizeMagnitudeAmount(amount, magnitudeMultipliers[unit.toLowerCase()]);
+      if (normalized) magnitudeTokens.push(`MAG:${normalized}`);
+      return ' '.repeat(match.length);
+    },
+  );
+  masked = masked.replace(
+    /(?<![A-Za-z0-9])(?:[$€£¥]\s*)?([-+]?\d+(?:[,.]\d+)*)\s*(万亿|千亿|百亿|十亿|千万|百万|十万|亿|万)(?:\s*(?:美元|美金|人民币|欧元|英镑|日元|元))?/g,
+    (match, amount, unit) => {
+      const normalized = normalizeMagnitudeAmount(amount, magnitudeMultipliers[unit]);
+      if (normalized) magnitudeTokens.push(`MAG:${normalized}`);
+      return ' '.repeat(match.length);
+    },
+  );
+  return [...invariantNumbers(masked), ...magnitudeTokens].sort();
+}
+
+function normalizeMagnitudeAmount(value, multiplier) {
+  if (!multiplier) return null;
+  const wholeNumbers = {
+    one: 1, two: 2, three: 3, four: 4, five: 5,
+    six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  };
+  const phrase = String(value).trim().toLowerCase();
+  const fraction = /^(one|two|three|four|five|six|seven|eight|nine|ten)\s+and\s+(?:a|one)\s+half$/.exec(phrase);
+  const decimal = fraction ? `${wholeNumbers[fraction[1]]}.5` : phrase.replaceAll(',', '');
+  const parsed = /^([-+]?)(\d+)(?:\.(\d+))?$/.exec(decimal);
+  if (!parsed) return null;
+  const sign = parsed[1] === '-' ? -1n : 1n;
+  const fractionDigits = parsed[3] || '';
+  const denominator = 10n ** BigInt(fractionDigits.length);
+  const numerator = BigInt(`${parsed[2]}${fractionDigits}`) * multiplier;
+  const whole = numerator / denominator;
+  const remainder = numerator % denominator;
+  if (remainder === 0n) return `${sign * whole}`;
+  const decimals = remainder.toString().padStart(fractionDigits.length, '0').replace(/0+$/, '');
+  return `${sign < 0n ? '-' : ''}${whole}.${decimals}`;
 }
 
 function isClearlyUntranslated(source, translated) {
@@ -1538,19 +1594,6 @@ function englishMonthNumbers(value) {
     /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sept?(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b/gi,
   );
   return [...matches].map((match) => months[match[1].toLowerCase()]).filter(Boolean);
-}
-
-function englishFractionNumbers(value) {
-  const wholeNumbers = {
-    one: 1, two: 2, three: 3, four: 4, five: 5,
-    six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
-  };
-  const matches = String(value).matchAll(
-    /\b(one|two|three|four|five|six|seven|eight|nine|ten)\s+and\s+(?:a|one)\s+half\b/gi,
-  );
-  return [...matches]
-    .map((match) => `${wholeNumbers[match[1].toLowerCase()] + 0.5}`)
-    .filter(Boolean);
 }
 
 function createSourceDocument({

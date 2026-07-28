@@ -541,6 +541,49 @@ test('英文分数词组和月份可转换为对应数字且不放宽其它数�
   assert.match(renderTranslatedDocument(translated), /1\.5 万亿美元.*1995 年 1 月.*2009 年 12 月.*8,400/);
 });
 
+test('英文 billion 与中文亿按数值等价校验，修复稿多出数字时保留原译稿', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'pdf',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a.pdf',
+    title: 'Assets',
+    author: '',
+    sha256: 'billion-to-yi',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: 'In 1990, 530 hedge funds managed about $50 billion, and the industry continued to expand during the sample.',
+    }],
+  };
+  let calls = 0;
+  const translated = await translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      calls += 1;
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title'
+            ? '资产'
+            : calls === 1
+              ? '**1990 年，530 只对冲基金管理着约 500 亿美元，行业在样本期内继续扩张。**'
+              : '1990 年，530 只对冲基金管理着约 $50 0 亿美元，行业在样本期内继续扩张。',
+        })),
+      });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.match(renderTranslatedDocument(translated), /500 亿美元/);
+  assert.doesNotMatch(renderTranslatedDocument(translated), /\$50 0 亿美元/);
+});
+
 test('长文正常翻译批次最多 24 个单元，尽早写入分块 checkpoint', async () => {
   const source = {
     version: 5,
