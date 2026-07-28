@@ -52,6 +52,8 @@ deploy/
 
 要求 Node.js 22 或更高版本，并准备 OpenRouter、Slack 和微信公众号凭据。原创分析需要 Exa；直译不依赖 Exa。分析型 PDF 的本地文字提取需要 Poppler 的 `pdfinfo` 与 `pdftotext`，扫描件 OCR 和保留原始结构的 PDF 直译需要 Datalab。Newsletter 还需要 Customer.io App API key。
 
+Slack App 的 Bot Token Scopes 必须包含 `files:read`，否则消息事件虽然会带 PDF 文件名和私有 URL，下载时仍只会返回 Slack 登录页。新增该权限后必须重新安装 App 到工作区，再更新生产 `SLACK_BOT_TOKEN`。程序会在 PDF 进入 Poppler 或 Datalab 前验证真实文件签名，遇到登录页会直接给出权限提示，不再把 HTML 误报成 PDF 损坏。
+
 ```bash
 npm ci
 cp .env.example .env

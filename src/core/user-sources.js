@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import {
   acquireSourceDocument,
   assertPdfPageLimit,
+  assertPdfResponse,
   safeFetchResource,
 } from '../workflows/translation-source-text.js';
 
@@ -253,9 +254,12 @@ async function loadPdfTextFallback({
     accept: 'application/pdf,*/*;q=0.5',
     maxBytes: Number(config.maxSourceBytes || 50 * 1024 * 1024),
   });
-  if (fetched.buffer.subarray(0, 4).toString() !== '%PDF') {
-    throw new Error('附件不是有效 PDF');
-  }
+  assertPdfResponse({
+    buffer: fetched.buffer,
+    sourceUrl: descriptor.originalUrl,
+    finalUrl: fetched.finalUrl,
+    contentType: fetched.contentType,
+  });
   await fs.mkdir(sourceDir, { recursive: true });
   const pdfPath = path.join(sourceDir, 'source.pdf');
   await fs.writeFile(pdfPath, fetched.buffer);

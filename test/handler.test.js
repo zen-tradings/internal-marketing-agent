@@ -179,6 +179,41 @@ test('重试后成功:workflow.retries=1,首次抛错次次成功 → 最终 don
   assert.equal(notifier.failureCalls.length, 0);
 });
 
+test('直译确定性 PDF 权限错误不会重复运行或重复发送进度', async () => {
+  let attempts = 0;
+  let progressCalls = 0;
+  const runWriter = async ({ onProgress }) => {
+    attempts += 1;
+    await onProgress({ stage: 'source', message: '正在提取原文结构' });
+    return {
+      ok: false,
+      stderr: 'Slack PDF 下载返回了登录页面而不是文件。请添加 files:read 并重新安装 App。',
+    };
+  };
+  const workflows = {
+    translate: {
+      id: 'translate',
+      mode: 'translation',
+      workDir: '/tmp/zen-handler-test',
+      channel: 'mock',
+      retries: 3,
+      retryDelayMs: 0,
+      shouldRetry: (error) => /网络|超时|HTTP 5\d\d/.test(error?.message || ''),
+    },
+  };
+  const notifier = makeNotifier();
+  notifier.progress = async () => { progressCalls += 1; };
+  const { deps, store, publishCalls } = baseDeps({ runWriter, workflows, notifier });
+
+  await makeHandler(deps)({ id: 'pdf-run', workflowId: 'translate', input: 'translate attachment' });
+
+  assert.equal(attempts, 1);
+  assert.equal(progressCalls, 1);
+  assert.equal(publishCalls.length, 0);
+  assert.equal(store._row().status, 'failed');
+  assert.match(store._row().error, /files:read/);
+});
+
 test('成功通知失败不反向把已发布任务改成 failed', async () => {
   const notifier = {
     async success() { throw new Error('Slack channel_required'); },

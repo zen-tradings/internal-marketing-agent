@@ -146,6 +146,8 @@ test('translate 工作流:id、workDir 子目录、channel/research 与其它工
     assert.equal(translate.workDir, '/srv/zen/wechat/translate');
     assert.equal(translate.retries, 3);
     assert.equal(translate.retryDelayMs, 15000);
+    assert.equal(translate.shouldRetry(new Error('fetch failed: ECONNRESET')), true);
+    assert.equal(translate.shouldRetry(new Error('Slack PDF 下载返回登录页')), false);
 
     process.env.WECHAT_CHANNEL = 'mock';
     assert.equal(translate.channel, 'mock');

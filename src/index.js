@@ -46,6 +46,7 @@ export async function runWithRetry(
   retryDelayMs = 0,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   signal,
+  shouldRetry,
 ) {
   let last;
   for (let i = 0; i <= retries; i++) {
@@ -54,9 +55,12 @@ export async function runWithRetry(
     catch (e) {
       if (isTaskCancelled(e, signal)) throw cancellationErrorFromSignal(signal);
       last = e;
-      if (i < retries) {
+      const retryAllowed = typeof shouldRetry !== 'function' || shouldRetry(e);
+      if (i < retries && retryAllowed) {
         console.error(`[hub] 执行失败,准备第 ${i + 2}/${retries + 1} 次尝试:${e?.message || e}`);
         if (retryDelayMs > 0) await sleepWithCancellation(sleep, retryDelayMs, signal);
+      } else {
+        break;
       }
     }
   }
@@ -162,7 +166,13 @@ export function makeHandler(deps) {
         store.setMediaId(run.id, mediaId, title); // 早写,发布成功后立刻落库,支撑上面的幂等判断
         setPhase('published');
         return { mediaId, title, sourceCount: res.sources?.length || 0, completeness: res.completeness };
-      }, runtimeWorkflow.retries, runtimeWorkflow.retryDelayMs, undefined, signal);
+      },
+      runtimeWorkflow.retries,
+      runtimeWorkflow.retryDelayMs,
+      undefined,
+      signal,
+      runtimeWorkflow.shouldRetry,
+    );
       store.setStatus(run.id, 'done', { title, mediaId, finishedAt: Date.now() });
       if (deps.notifier) await notifyBestEffort(deps.notifier, 'success', notify, { title, mediaId, channelId: runtimeWorkflow.channel, sourceCount, completeness });
       else console.error('[hub] notifier 未就绪,跳过 success 通知(启动窗口期竞态)', { runId: run.id, title, mediaId });

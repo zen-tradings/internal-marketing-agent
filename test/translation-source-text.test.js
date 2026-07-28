@@ -6,8 +6,10 @@ import path from 'node:path';
 import {
   acquireSourceDocument,
   assertPdfPageLimit,
+  assertPdfResponse,
   assertSafeHttpUrl,
   buildDocumentManifest,
+  hasPdfSignature,
   isPrivateIp,
   readResponseBufferWithLimit,
   removeRepeatedSourceMetadata,
@@ -96,6 +98,36 @@ test('私有文件跨域重定向时不会把 Authorization 带到 CDN', async (
 test('PDF 页数在文字提取前受硬上限保护', () => {
   const spawn = () => ({ status: 0, stdout: 'Pages: 121\n', stderr: '' });
   assert.throws(() => assertPdfPageLimit('/tmp/source.pdf', 120, spawn), /121\/120/);
+});
+
+test('PDF 在进入 Poppler/Datalab 前验证真实签名，Slack 登录页返回 files:read 指引', async () => {
+  assert.equal(hasPdfSignature(Buffer.from('%PDF-1.7\n')), true);
+  assert.equal(hasPdfSignature(Buffer.from('prefix\n%PDF-1.7\n')), true);
+  assert.equal(hasPdfSignature(Buffer.from('<!DOCTYPE html>')), false);
+  assert.throws(() => assertPdfResponse({
+    buffer: Buffer.from('<!DOCTYPE html><html><title>Slack</title></html>'),
+    sourceUrl: 'https://files.slack.com/files-pri/T1-F1/download/report.pdf',
+    contentType: 'text/html; charset=utf-8',
+  }), /files:read.*重新安装 App/);
+  assert.throws(() => assertPdfResponse({
+    buffer: Buffer.from('not a pdf'),
+    sourceUrl: 'https://example.com/report.pdf',
+    contentType: 'text/plain',
+  }), /不是有效 PDF.*text\/plain/);
+
+  await assert.rejects(() => acquireSourceDocument({
+    sourceUrl: 'https://files.slack.com/files-pri/T1-F1/download/report.pdf',
+    workDir: tempDir(),
+    requestHeaders: { Authorization: 'Bearer xoxb-secret' },
+    fetchFn: async () => new Response(
+      '<!DOCTYPE html><html><title>Slack</title><body>Sign in</body></html>',
+      { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } },
+    ),
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+    config: { browserEnabled: false, datalabApiKey: 'datalab-key' },
+    dnsLookup: PUBLIC_DNS,
+    scope: { kind: 'all', requestedText: '' },
+  }), /files:read.*重新安装 App/);
 });
 
 test('arXiv PDF 链接在未指定页码时优先读取官方 HTML', async () => {

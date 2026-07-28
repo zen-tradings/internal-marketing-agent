@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runWithRetry } from '../src/index.js';
 import { createTaskCancelledError } from '../src/lib/task-cancellation.js';
+import { isRetryableTranslationError } from '../src/workflows/translate.js';
 
 test('失败后按 retries 重试', async () => {
   let n = 0;
@@ -18,6 +19,25 @@ test('恰好在最后一次允许的尝试(第 retries+1 次)成功', async () =
   const r = await runWithRetry(async () => { n++; if (n < 3) throw new Error('x'); return 'ok'; }, 2);
   assert.equal(r, 'ok');
   assert.equal(n, 3, 'retries=2 允许 3 次尝试,应恰好在第 3 次成功');
+});
+
+test('工作流重试过滤器会立即停止确定性错误，只重试网络与服务端瞬时错误', async () => {
+  let attempts = 0;
+  await assert.rejects(() => runWithRetry(
+    async () => {
+      attempts += 1;
+      throw new Error('Slack PDF 下载返回了登录页面而不是文件');
+    },
+    3,
+    0,
+    undefined,
+    undefined,
+    isRetryableTranslationError,
+  ), /Slack PDF/);
+  assert.equal(attempts, 1);
+  assert.equal(isRetryableTranslationError(new Error('Datalab HTTP 503')), true);
+  assert.equal(isRetryableTranslationError(new Error('fetch failed: ECONNRESET')), true);
+  assert.equal(isRetryableTranslationError(new Error('PDF 页数超过上限:121/120')), false);
 });
 
 test('runWithRetry 可按工作流配置在重试间等待', async () => {

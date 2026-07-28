@@ -49,6 +49,11 @@ SLACK_ALLOWED_USER_IDS=U0123456789
 SLACK_ALLOWED_CHANNEL_IDS=C0123456789
 ```
 
+The Slack app's Bot Token Scopes must include `files:read` before it can
+download private PDF or text attachments from `files.slack.com`. After adding
+the scope, reinstall the app to the workspace and rotate `SLACK_BOT_TOKEN` in
+the protected environment if Slack issues a new token.
+
 Structured HTML and arXiv HTML translation run directly in this Node.js
 service. PDF translation sends the downloaded PDF to Datalab's hosted
 conversion API, then immediately stores the returned images inside that run's
