@@ -52,14 +52,14 @@ Slack 消息只需要包含标准 `https://...` 页面链接。Bot 不通过 Sla
 
 ## 部署前后验收
 
-凭据只写入未纳入 Git 的 `.env` 和 DigitalOcean `/opt/zen-content-hub/.env`，不要粘贴到 Slack、提交记录或任务 Prompt。
+凭据只写入未纳入 Git 的本机 `.env` 和 DigitalOcean `/etc/zen-content-hub/zen-content-hub.env`，不要粘贴到 Slack、提交记录或任务 Prompt。
 
 ```bash
 npm run check
 npm run check:documents -- "<私有 Notion 链接>" "<私有 Google Docs 链接>"
 ```
 
-生产部署后，在服务器执行同一个 `check:documents` 命令。最后分别从允许名单内的 Slack 用户发送：
+生产部署后，在服务器执行同一个 `check:documents` 命令；脚本会自动读取 `/etc/zen-content-hub/zen-content-hub.env`，如使用其它受保护路径可通过 `ZEN_CONTENT_HUB_ENV_FILE` 指定。最后分别从允许名单内的 Slack 用户发送：
 
 ```text
 请根据这份原文分析：https://...

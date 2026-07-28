@@ -1,11 +1,16 @@
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import dotenv from 'dotenv';
 import { loadConfig } from '../src/config/index.js';
 import { loadDirectUserSources } from '../src/core/user-sources.js';
 
-dotenv.config();
+const envPath = process.env.ZEN_CONTENT_HUB_ENV_FILE
+  || (fsSync.existsSync('/etc/zen-content-hub/zen-content-hub.env')
+    ? '/etc/zen-content-hub/zen-content-hub.env'
+    : '.env');
+dotenv.config({ path: envPath });
 const urls = process.argv.slice(2).map((value) => String(value || '').trim()).filter(Boolean);
 if (!urls.length) {
   console.error('用法：npm run check:documents -- "<Notion 或 Google Docs 私有链接>" [...]');
