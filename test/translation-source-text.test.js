@@ -504,6 +504,46 @@ test('同段多个英文月份可忠实翻译为对应月份数字，其它数�
   assert.match(renderTranslatedDocument(translated), /1995 年 1 月.*2009 年 12 月.*8\.04%/);
 });
 
+test('长文正常翻译批次最多 24 个单元，尽早写入分块 checkpoint', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'pdf',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a.pdf',
+    title: 'Batch Test',
+    author: '',
+    sha256: 'bounded-translation-batches',
+    blocks: Array.from({ length: 25 }, (_, index) => ({
+      id: `b${String(index + 1).padStart(6, '0')}`,
+      order: index,
+      type: 'paragraph',
+      text: `Source item ${index + 1}.`,
+    })),
+  };
+  const batchSizes = [];
+  const workDir = tempDir();
+  await translateDocument({
+    source,
+    workDir,
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      batchSizes.push(payload.units.length);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title' ? '批次测试' : `译文条目 ${unit.text.match(/\d+/)[0]}。`,
+        })),
+      });
+    },
+  });
+  const checkpoint = JSON.parse(fs.readFileSync(path.join(workDir, 'translation-checkpoint.json'), 'utf8'));
+  assert.deepEqual(batchSizes, [24, 2]);
+  assert.equal(checkpoint.translations.length, 26);
+});
+
 test('完整性门禁拒绝额外添加或遗漏图片、表格和公式', () => {
   const tablePath = path.join(tempDir(), 'table.png');
   fs.writeFileSync(tablePath, Buffer.from([1]));

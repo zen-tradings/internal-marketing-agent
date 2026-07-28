@@ -15,7 +15,7 @@ const METHODOLOGY = `【直译任务 — 专属要求,与通用规范冲突时�
 
 export function isRetryableTranslationError(error) {
   const message = String(error?.message || error || '');
-  return /(?:fetch failed|network|socket|econnreset|econnrefused|etimedout|enotfound|eai_again|429|rate limit|超时|网络|连接重置|Datalab HTTP 5\d\d|原文获取失败:5\d\d|OpenRouter completion failed: 5\d\d)/i
+  return /(?:fetch failed|network|socket|econnreset|econnrefused|etimedout|timed out|timeout|enotfound|eai_again|429|rate limit|超时|网络|连接重置|Datalab HTTP 5\d\d|原文获取失败:5\d\d|OpenRouter completion failed: 5\d\d)/i
     .test(message);
 }
 

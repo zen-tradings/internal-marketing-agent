@@ -24,6 +24,10 @@ import {
 // 单一现役直译源：保留正文结构与视觉素材，模型只替换可翻译文字单元。
 const DOCUMENT_VERSION = 5;
 const CHECKPOINT_VERSION = 6;
+const TRANSLATION_BATCH_MAX_CHARS = 8000;
+const TRANSLATION_BATCH_MAX_ITEMS = 24;
+const REPAIR_BATCH_MAX_CHARS = 4000;
+const REPAIR_BATCH_MAX_ITEMS = 6;
 const DEFAULT_LIMITS = {
   maxSourceBytes: 50 * 1024 * 1024,
   maxPdfPages: 120,
@@ -707,7 +711,11 @@ export async function translateDocument({
     } catch {}
   }
 
-  const batches = batchUnits(units.filter((unit) => !completed.has(unit.id)), 14000, 36);
+  const batches = batchUnits(
+    units.filter((unit) => !completed.has(unit.id)),
+    TRANSLATION_BATCH_MAX_CHARS,
+    TRANSLATION_BATCH_MAX_ITEMS,
+  );
   await report(onProgress, {
     stage: 'translation',
     message: completed.size
@@ -725,7 +733,11 @@ export async function translateDocument({
     let invalid = validateBatchTranslations(batch, translations);
     if (invalid.length) {
       const repaired = [];
-      for (const repairBatch of batchUnits(invalid, 5000, 8)) {
+      for (const repairBatch of batchUnits(
+        invalid,
+        REPAIR_BATCH_MAX_CHARS,
+        REPAIR_BATCH_MAX_ITEMS,
+      )) {
         throwIfTaskCancelled(signal);
         repaired.push(...await requestTranslationBatch({
           batch: repairBatch,
