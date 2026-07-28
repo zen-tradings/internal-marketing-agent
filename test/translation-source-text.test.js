@@ -332,7 +332,7 @@ test('正文翻译保持高亮密度，但拒绝标题和整段加粗', async ()
   }), /结构化翻译校验失败/);
 });
 
-test('长段落高亮不足时拒绝产稿，避免再次出现几乎没有高亮的译文', async () => {
+test('长段落高亮不足时机械补足高亮，不改动任何译文文字', async () => {
   const source = {
     version: 5,
     contentMode: 'structured-document',
@@ -349,7 +349,8 @@ test('长段落高亮不足时拒绝产稿，避免再次出现几乎没有高�
       text: 'The benchmark evaluates realistic agent tasks and identifies the decisive system bottleneck. '.repeat(4),
     }],
   };
-  await assert.rejects(() => translateDocument({
+  const body = `这是一段只包含一处**核心观点**、但整体长度已经超过两百字的中文译文。${'系统需要在真实任务中持续验证能力边界与性能瓶颈。'.repeat(10)}`;
+  const translated = await translateDocument({
     source,
     workDir: tempDir(),
     model: 'test-model',
@@ -359,13 +360,15 @@ test('长段落高亮不足时拒绝产稿，避免再次出现几乎没有高�
       return JSON.stringify({
         translations: payload.units.map((unit) => ({
           id: unit.id,
-          text: unit.kind === 'title'
-            ? '标题'
-            : `这是一段只包含一处**核心观点**、但整体长度已经超过两百字的中文译文。${'系统需要在真实任务中持续验证能力边界与性能瓶颈。'.repeat(10)}`,
+          text: unit.kind === 'title' ? '标题' : body,
         })),
       });
     },
-  }), /结构化翻译校验失败/);
+  });
+  const output = translated.blocks[0].translatedText;
+  assert.equal(output.replaceAll('**', ''), body.replaceAll('**', ''));
+  assert.ok((output.match(/\*\*[^*\n]+\*\*/g) || []).length >= 2);
+  assert.match(output, /\*\*核心观点\*\*/);
 });
 
 test('短段落没有高亮也能通过校验，不再整篇任务失败', async () => {
@@ -467,18 +470,16 @@ test('校验失败会说明原因，并在重试提示中回传给模型', async
       return JSON.stringify({
         translations: payload.units.map((unit) => ({
           id: unit.id,
-          text: unit.kind === 'title'
-            ? '标题'
-            : `这是一段完全没有高亮的中文译文。${'系统需要在真实任务中持续验证能力边界与性能瓶颈。'.repeat(10)}`,
+          text: unit.kind === 'title' ? '标题' : unit.text,
         })),
       });
     },
-  }), /结构化翻译校验失败:b000001\(可见 \d+ 字需要/);
+  }), /结构化翻译校验失败:b000001\(译文仍是英文/);
   assert.equal(repairPrompts.length, 2);
-  assert.match(repairPrompts[0], /- b000001:可见 \d+ 字需要 \d+–\d+ 处 \*\* 加粗，实际只有 0 处/);
+  assert.match(repairPrompts[0], /- b000001:译文仍是英文，没有翻译成中文/);
   const invalid = JSON.parse(fs.readFileSync(path.join(workDir, 'translation-invalid.json'), 'utf8'));
   assert.equal(invalid.units[0].kind, 'paragraph');
-  assert.match(invalid.units[0].reason, /加粗/);
+  assert.match(invalid.units[0].reason, /英文/);
 });
 
 test('完整性门禁拒绝额外添加或遗漏图片、表格和公式', () => {

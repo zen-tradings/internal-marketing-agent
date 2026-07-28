@@ -729,6 +729,15 @@ export async function translateDocument({
       invalid = validateBatchTranslations(batch, translations);
     }
     if (invalid.length) {
+      const byId = new Map(translations.map((item) => [item.id, item]));
+      for (const { unit } of invalid) {
+        const item = byId.get(unit.id);
+        if (item) item.text = addFallbackHighlights(unit, item.text);
+      }
+      translations = [...byId.values()];
+      invalid = validateBatchTranslations(batch, translations);
+    }
+    if (invalid.length) {
       writeJsonAtomic(path.join(workDir, 'translation-invalid.json'), {
         failedAt: new Date().toISOString(),
         units: invalid.map(({ unit, reason }) => ({ id: unit.id, kind: unit.kind, reason, source: unit.text })),
@@ -1379,6 +1388,31 @@ function highlightBudget(value) {
   const visible = Math.max(1, String(value).replace(/\*\*/g, '').length);
   const min = visible < MIN_HIGHLIGHTED_LENGTH ? 0 : Math.max(1, Math.ceil(visible / 200));
   return { visible, min, max: Math.max(min, 1, Math.ceil(visible / 65)) };
+}
+
+// 模型多次不补高亮时的兵底：只在现有子句两端加 **，不改动、不新增任何文字。
+function addFallbackHighlights(unit, translated) {
+  const value = String(translated || '');
+  if (!HIGHLIGHTED_KINDS.has(unit.kind)) return value;
+  const budget = highlightBudget(value);
+  const existing = highlightPhrases(value);
+  let missing = budget.min - existing.length;
+  if (missing <= 0) return value;
+  let highlighted = existing.reduce((sum, text) => sum + text.length, 0);
+  const maxHighlighted = Math.floor(budget.visible * MAX_HIGHLIGHT_RATIO);
+  return value
+    .split(/(?<=[。！？；;])/)
+    .map((sentence) => {
+      if (missing <= 0) return sentence;
+      const clause = /^(\s*)([^*\n，,、：:。！？；;]{4,24})(?=[，,、：:。！？；;])/.exec(sentence);
+      const phrase = clause?.[2]?.trim();
+      if (!phrase || /⟦ZEN_|https?:\/\//i.test(phrase)) return sentence;
+      if (highlighted + phrase.length > maxHighlighted) return sentence;
+      missing -= 1;
+      highlighted += phrase.length;
+      return `${clause[1]}**${phrase}**${sentence.slice(clause[0].length)}`;
+    })
+    .join('');
 }
 
 // 只做不改动文字的机械修正：拆掉多余、过长或不成对的加粗，避免整篇任务因排版细节失败。
