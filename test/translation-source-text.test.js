@@ -467,6 +467,43 @@ test('样式可降级，但数字不一致仍由内容级硬门禁拒绝', async
   }), /结构化翻译校验失败:b000001/);
 });
 
+test('同段多个英文月份可忠实翻译为对应月份数字，其它数字仍保持一致', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'pdf',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a.pdf',
+    title: 'Monthly Returns',
+    author: '',
+    sha256: 'multiple-months',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: 'The sample runs from January 1995 through December 2009, with a reported return of 8.04%.',
+    }],
+  };
+  const translated = await translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title'
+            ? '月度回报'
+            : '**样本期**从 1995 年 1 月持续到 2009 年 12 月，报告回报率为 8.04%。',
+        })),
+      });
+    },
+  });
+  assert.match(renderTranslatedDocument(translated), /1995 年 1 月.*2009 年 12 月.*8\.04%/);
+});
+
 test('完整性门禁拒绝额外添加或遗漏图片、表格和公式', () => {
   const tablePath = path.join(tempDir(), 'table.png');
   fs.writeFileSync(tablePath, Buffer.from([1]));

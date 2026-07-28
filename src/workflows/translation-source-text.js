@@ -1476,9 +1476,9 @@ function sameInvariantTokens(source, translated) {
   const sourceNumbers = invariantNumbers(source);
   const translatedNumbers = invariantNumbers(translated);
   if (JSON.stringify(sourceNumbers) === JSON.stringify(translatedNumbers)) return true;
-  const monthNumber = englishMonthNumber(source);
-  return Boolean(monthNumber)
-    && JSON.stringify([...sourceNumbers, monthNumber].sort()) === JSON.stringify(translatedNumbers);
+  const monthNumbers = englishMonthNumbers(source);
+  return monthNumbers.length > 0
+    && JSON.stringify([...sourceNumbers, ...monthNumbers].sort()) === JSON.stringify(translatedNumbers);
 }
 
 function invariantNumbers(value) {
@@ -1496,15 +1496,17 @@ function isClearlyUntranslated(source, translated) {
   return words.length >= 10 && han < 4;
 }
 
-function englishMonthNumber(value) {
+function englishMonthNumbers(value) {
   const months = {
     jan: '1', january: '1', feb: '2', february: '2', mar: '3', march: '3',
     apr: '4', april: '4', may: '5', jun: '6', june: '6', jul: '7', july: '7',
     aug: '8', august: '8', sep: '9', sept: '9', september: '9', oct: '10',
     october: '10', nov: '11', november: '11', dec: '12', december: '12',
   };
-  const match = String(value).match(/\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sept?(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b/i);
-  return match ? months[match[1].toLowerCase()] : '';
+  const matches = String(value).matchAll(
+    /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sept?(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b/gi,
+  );
+  return [...matches].map((match) => months[match[1].toLowerCase()]).filter(Boolean);
 }
 
 function createSourceDocument({
