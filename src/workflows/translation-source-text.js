@@ -13,6 +13,7 @@ import {
   cancellationErrorFromSignal,
   throwIfTaskCancelled,
 } from '../lib/task-cancellation.js';
+import { isGoogleDocUrl, resolveGoogleDocsSource } from '../lib/google-docs.js';
 import { convertPdfWithDatalab } from './datalab-parser.js';
 import {
   applyTranslationScope,
@@ -60,6 +61,7 @@ export async function generateStructuredTranslation({
   completeArticle,
   onProgress,
   translationConfig = {},
+  documentConfig = {},
   resumeFromCheckpoint = false,
   signal,
 }) {
@@ -80,6 +82,7 @@ export async function generateStructuredTranslation({
     fetchFn,
     fetchWithRetry,
     config: translationConfig,
+    documentConfig,
     dnsLookup: translationConfig.dnsLookup,
     scope,
     onProgress,
@@ -151,6 +154,7 @@ export async function acquireSourceDocument({
   fetchFn = globalThis.fetch,
   fetchWithRetry,
   config = {},
+  documentConfig = {},
   dnsLookup = dns.lookup,
   scope = { kind: 'all' },
   onProgress,
@@ -162,11 +166,28 @@ export async function acquireSourceDocument({
   await assertSafeHttpUrl(sourceUrl, { dnsLookup });
   fs.mkdirSync(workDir, { recursive: true });
   const acquisition = { attempts: [], fallbacks: [] };
+  const googleDocs = isGoogleDocUrl(sourceUrl)
+    ? await resolveGoogleDocsSource({
+        sourceUrl,
+        config: documentConfig,
+        fetchFn,
+        timeoutMs: limits.fetchTimeoutMs,
+      })
+    : null;
   const arxiv = arxivSourceUrls(sourceUrl);
-  let acquisitionUrl = arxiv
+  let acquisitionUrl = googleDocs?.acquisitionUrl || (arxiv
     ? scope.kind === 'pages' ? arxiv.pdf : arxiv.html
-    : sourceUrl;
-  if (acquisitionUrl !== sourceUrl) acquisition.attempts.push(scope.kind === 'pages' ? 'arxiv-pdf' : 'arxiv-html');
+    : sourceUrl);
+  if (googleDocs) {
+    acquisition.attempts.push(googleDocs.authenticated
+      ? 'google-drive-oauth-export'
+      : 'google-docs-public-export');
+  } else if (acquisitionUrl !== sourceUrl) {
+    acquisition.attempts.push(scope.kind === 'pages' ? 'arxiv-pdf' : 'arxiv-html');
+  }
+  const acquisitionHeaders = googleDocs
+    ? { ...requestHeaders, ...googleDocs.requestHeaders }
+    : requestHeaders;
 
   if (isNotionUrl(acquisitionUrl) && config.notionApiToken) {
     if (scope.kind === 'pages') {
@@ -200,7 +221,7 @@ export async function acquireSourceDocument({
       return document;
     } catch (error) {
       throwIfTaskCancelled(signal);
-      acquisition.fallbacks.push(`notion-api:${safeError(error)}`);
+      throw actionableNotionError(error);
     }
   }
 
@@ -214,10 +235,13 @@ export async function acquireSourceDocument({
       limits,
       dnsLookup,
       accept: 'text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.5',
-      headers: requestHeaders,
+      headers: acquisitionHeaders,
     });
   } catch (error) {
     throwIfTaskCancelled(signal);
+    if (googleDocs) {
+      throw actionableGoogleDocsError(error, googleDocs.authenticated);
+    }
     if (arxiv && acquisitionUrl === arxiv.html) {
       acquisition.fallbacks.push(`arxiv-html:${safeError(error)}`);
       acquisitionUrl = arxiv.pdf;
@@ -229,7 +253,7 @@ export async function acquireSourceDocument({
         limits,
         dnsLookup,
         accept: 'application/pdf,*/*;q=0.5',
-        headers: requestHeaders,
+        headers: acquisitionHeaders,
       });
     } else {
       if (scope.kind === 'pages' && !/\.pdf(?:$|[?#])/i.test(acquisitionUrl)) {
@@ -289,6 +313,9 @@ export async function acquireSourceDocument({
   }
 
   const html = decodeHtmlBuffer(fetched.buffer, fetched.contentType);
+  if (googleDocs) {
+    assertGoogleDocsExportResponse(html, fetched.finalUrl, googleDocs.authenticated);
+  }
   assertUsableArticleResponse(html, fetched.finalUrl);
   try {
     const document = await sourceDocumentFromHtml({
@@ -1286,6 +1313,49 @@ async function fetchNotionMarkdown({ sourceUrl, token, fetchFn, fetchWithRetry, 
     author: data.author || '',
     publishedDate: data.last_edited_time || '',
   };
+}
+
+function actionableNotionError(error) {
+  const message = safeError(error);
+  if (/Notion Markdown 获取失败:401/.test(message)) {
+    return new Error('私有 Notion 读取失败：NOTION_API_TOKEN 无效或已失效');
+  }
+  if (/Notion Markdown 获取失败:403/.test(message)) {
+    return new Error('私有 Notion 读取失败：integration 缺少 Read content 权限');
+  }
+  if (/Notion Markdown 获取失败:404/.test(message)) {
+    return new Error('私有 Notion 读取失败：请在页面右上角 Add connections，将页面共享给该 integration');
+  }
+  return new Error(`Notion API 读取失败:${message}`);
+}
+
+function actionableGoogleDocsError(error, authenticated) {
+  const message = safeError(error);
+  if (authenticated && /原文获取失败:401/.test(message)) {
+    return new Error('私有 Google Docs 读取失败：OAuth access token 无效，请检查 refresh token 配置');
+  }
+  if (authenticated && /原文获取失败:(?:403|404)/.test(message)) {
+    return new Error('私有 Google Docs 读取失败：授权账号无权查看该文档，或文档禁止下载/导出');
+  }
+  if (!authenticated) {
+    return new Error(`Google Docs 无法公开读取；若为私有文档，请配置 Google OAuth refresh token。原错误:${message}`);
+  }
+  return new Error(`Google Docs 导出失败:${message}`);
+}
+
+function assertGoogleDocsExportResponse(html, finalUrl, authenticated) {
+  const text = String(html || '');
+  const finalHost = (() => {
+    try { return new URL(finalUrl).hostname.toLowerCase(); } catch { return ''; }
+  })();
+  const loginPage = finalHost === 'accounts.google.com'
+    || /(?:accounts\.google\.com|ServiceLogin|<title>\s*Sign in(?:\s*-\s*Google Accounts)?\s*<\/title>)/i
+      .test(text.slice(0, 20000));
+  if (!loginPage) return;
+  if (authenticated) {
+    throw new Error('私有 Google Docs 读取失败：授权账号无权查看该文档');
+  }
+  throw new Error('Google Docs 不是公开可读文档；请配置 Google OAuth refresh token');
 }
 
 async function requestTranslationBatch({

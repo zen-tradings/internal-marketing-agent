@@ -13,6 +13,7 @@ export async function generateStrictTranslation({
   onProgress,
   resumeFromCheckpoint = false,
   translationConfig = {},
+  documentConfig = {},
   signal,
 }) {
   const result = await generateStructuredTranslation({
@@ -26,6 +27,7 @@ export async function generateStrictTranslation({
     completeArticle,
     onProgress,
     translationConfig,
+    documentConfig,
     resumeFromCheckpoint,
     signal,
   });

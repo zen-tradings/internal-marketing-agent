@@ -150,7 +150,7 @@ npm run trace:research -- company
 
 HTML 直译不需要 Datalab。PDF 直译必须设置 `DATALAB_API_KEY`；Bot、翻译编排、图片持久化、固定模板渲染和草稿创建仍全部运行在 DigitalOcean，外部服务只负责临时解析 PDF。当前 2GB Droplet 不需要安装 Marker/MinerU 模型。原创分析不要求 Datalab：有文字层的 PDF 可由 Poppler 提取；扫描件或需要图表、表格、公式结构时仍应配置 Datalab。
 
-Notion 页面配置 `NOTION_API_TOKEN` 后通过官方 Markdown 接口读取；公开 Google Docs 可直接导出 HTML，私有文档需要轮换 `GOOGLE_DOCS_ACCESS_TOKEN`；GitHub 公共仓库无需 token，私有仓库或较高限额可配置只读 `GITHUB_TOKEN`。GitHub 读取会先取得仓库树，再并行读取 README、规则文件、manifest、入口、核心源码和测试等最多 10 个高价值文本文件，避免逐文件串行浏览。这里采用项目内的只读 API 适配器，而不是给常驻 Bot 增加可写 MCP 权限。
+Notion 页面配置 `NOTION_API_TOKEN` 后通过官方 Markdown 接口读取，私有页面还必须在 Notion 页面右上角通过 `Add connections` 共享给该 integration。公开 Google Docs 可直接导出 HTML；私有文档推荐配置 `GOOGLE_DOCS_CLIENT_ID`、`GOOGLE_DOCS_CLIENT_SECRET` 和 `GOOGLE_DOCS_REFRESH_TOKEN`，服务会自动刷新短期 access token，旧的 `GOOGLE_DOCS_ACCESS_TOKEN` 仅作为兼容回退。分析和完整直译共用同一只读认证入口；用户主动提供的 Notion/Google Docs 无法读取时任务会停止，不会忽略原文后继续搜索。GitHub 公共仓库无需 token，私有仓库或较高限额可配置只读 `GITHUB_TOKEN`。详细配置和验收见 [`docs/private-documents.md`](docs/private-documents.md)。
 
 所有文章、PDF、文档 API 和重定向都逐跳拒绝内网地址，并受原文大小、PDF 页数和重定向次数限制。首次配置新来源、浏览器、Notion、Google Docs 或 GitHub 时，应先执行 `HUB_DRY_RUN=1` 的真实链接验收；配置示例见 `.env.example`。
 

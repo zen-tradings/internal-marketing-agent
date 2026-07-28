@@ -30,6 +30,7 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal(c.analysis.searchMaxQueries, 8);
   assert.equal(c.analysis.recentWindowDays, 60);
   assert.equal(c.documents.googleDocsAccessToken, '');
+  assert.equal(c.documents.googleDocsRefreshToken, '');
   assert.equal(c.documents.githubToken, '');
   assert.equal(c.slack.editDebounceMs, 5000);
   assert.equal(c.translation.browserEnabled, true);
@@ -54,6 +55,9 @@ test('结构化直译抓取、浏览器、PDF、图片、Notion 与 Datalab 配�
     TRANSLATION_MAX_ASSET_COUNT: '30',
     NOTION_API_TOKEN: 'notion-secret',
     GOOGLE_DOCS_ACCESS_TOKEN: 'google-read-token',
+    GOOGLE_DOCS_CLIENT_ID: 'google-client-id',
+    GOOGLE_DOCS_CLIENT_SECRET: 'google-client-secret',
+    GOOGLE_DOCS_REFRESH_TOKEN: 'google-refresh-token',
     GITHUB_TOKEN: 'github-read-token',
     DATALAB_API_KEY: 'datalab-secret',
     DATALAB_MODE: 'accurate',
@@ -64,6 +68,9 @@ test('结构化直译抓取、浏览器、PDF、图片、Notion 与 Datalab 配�
   assert.equal(c.translation.maxAssetCount, 30);
   assert.equal(c.translation.notionApiToken, 'notion-secret');
   assert.equal(c.documents.googleDocsAccessToken, 'google-read-token');
+  assert.equal(c.documents.googleDocsClientId, 'google-client-id');
+  assert.equal(c.documents.googleDocsClientSecret, 'google-client-secret');
+  assert.equal(c.documents.googleDocsRefreshToken, 'google-refresh-token');
   assert.equal(c.documents.githubToken, 'github-read-token');
   assert.equal(c.translation.datalabApiKey, 'datalab-secret');
   assert.equal(c.translation.datalabMode, 'accurate');

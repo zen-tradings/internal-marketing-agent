@@ -10,6 +10,8 @@
     "start": "node src/index.js",
     "check:openrouter": "node scripts/check-openrouter.mjs",
     "check:translation": "node scripts/check-translation.mjs",
+    "check:documents": "node scripts/check-documents.mjs",
+    "auth:google-docs": "node scripts/google-docs-oauth.mjs",
     "check:customerio": "node scripts/check-customerio.mjs",
     "check:egress": "node scripts/check-egress.mjs",
     "preview:newsletter": "node scripts/preview-newsletter.mjs",

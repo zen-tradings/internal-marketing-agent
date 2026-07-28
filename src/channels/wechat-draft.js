@@ -112,6 +112,8 @@ export function makeChannel({
           config.slack?.botToken,
           config.slack?.appToken,
           config.documents?.googleDocsAccessToken,
+          config.documents?.googleDocsClientSecret,
+          config.documents?.googleDocsRefreshToken,
           config.documents?.githubToken,
           config.wechat?.appSecret,
           config.customerio?.appApiKey,

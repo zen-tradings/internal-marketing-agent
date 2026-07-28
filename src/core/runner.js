@@ -118,6 +118,7 @@ export async function runWriter({
         completeArticle,
         fetchWithRetry,
         translationConfig: config.translation || {},
+        documentConfig: config.documents || {},
         onProgress: async (progress) => {
           throwIfTaskCancelled(signal);
           trace.translationProgress = { ...progress, updatedAt: new Date().toISOString() };
@@ -590,7 +591,16 @@ async function searchExaV2({
     searchPromise,
     workflowSearchPromise,
   ]);
-  if (directResult.errors.length) trace.directUserSourceErrors = directResult.errors;
+  if (directResult.errors.length) {
+    trace.directUserSourceErrors = directResult.errors;
+    const privateDocumentErrors = directResult.errors
+      .filter((entry) => ['notion', 'google-doc'].includes(entry.kind));
+    if (privateDocumentErrors.length) {
+      throw new Error(`用户文档读取失败:${privateDocumentErrors
+        .map((entry) => `${entry.name || entry.url}: ${entry.error}`)
+        .join('; ')}`);
+    }
+  }
   const userSources = [
     ...directResult.sources,
     ...(exaContentsResult.status === 'fulfilled'

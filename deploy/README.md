@@ -42,7 +42,11 @@ ANALYSIS_RECENT_WINDOW_DAYS=60
 EXA_EXCLUDED_MEDIA_DOMAINS=
 EXA_INDEPENDENT_MEDIA_DOMAINS=
 NOTION_API_TOKEN=replace-if-private-notion-pages-are-used
-GOOGLE_DOCS_ACCESS_TOKEN=replace-if-private-google-docs-are-used
+GOOGLE_DOCS_CLIENT_ID=replace-if-private-google-docs-are-used
+GOOGLE_DOCS_CLIENT_SECRET=replace-if-private-google-docs-are-used
+GOOGLE_DOCS_REFRESH_TOKEN=replace-if-private-google-docs-are-used
+# Legacy short-lived fallback only:
+GOOGLE_DOCS_ACCESS_TOKEN=
 GITHUB_TOKEN=replace-if-private-github-repositories-are-used
 SLACK_EDIT_DEBOUNCE_MS=5000
 SLACK_ALLOWED_USER_IDS=U0123456789
@@ -65,8 +69,8 @@ service environment, never in the repository.
 For original analysis, text-layer PDFs can fall back to Poppler `pdftotext`;
 scanned PDFs still require Datalab OCR. Public Google Docs and GitHub
 repositories work without access tokens. Configure the optional read-only
-tokens above only for private material, and rotate the Google OAuth access
-token when it expires.
+credentials above only for private material; the service exchanges the Google
+refresh token for short-lived access tokens automatically.
 
 The application does not enforce a public-IP allowlist and does not reject
 proxy environment variables. Outbound routing follows the host and Node.js

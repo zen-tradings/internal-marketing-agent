@@ -848,3 +848,55 @@ test('Notion 授权页面优先调用官方 Markdown 接口并过滤非正文内
   assert.equal(figure.caption, 'ignored');
   assert.ok(fs.existsSync(figure.images[0].localPath));
 });
+
+test('私有 Notion 未共享给 integration 时给出明确授权提示', async () => {
+  await assert.rejects(() => acquireSourceDocument({
+    sourceUrl: 'https://workspace.notion.site/Private-0123456789abcdef0123456789abcdef',
+    workDir: tempDir(),
+    fetchFn: async () => new Response(JSON.stringify({
+      object: 'error',
+      code: 'object_not_found',
+    }), { status: 404, headers: { 'content-type': 'application/json' } }),
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+    config: { notionApiToken: 'secret', browserEnabled: false },
+    dnsLookup: PUBLIC_DNS,
+  }), /Add connections/);
+});
+
+test('直译入口使用 Google OAuth refresh token 导出私有 Google Docs', async () => {
+  const calls = [];
+  const document = await acquireSourceDocument({
+    sourceUrl: 'https://docs.google.com/document/d/private-translation-doc/edit',
+    workDir: tempDir(),
+    fetchFn: async (url, options = {}) => {
+      calls.push({ url: String(url), options });
+      if (String(url) === 'https://oauth2.googleapis.com/token') {
+        return new Response(JSON.stringify({
+          access_token: 'translation-access-token',
+          expires_in: 3600,
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(`<!doctype html><html><head><title>Private Translation</title></head>
+        <body><article><h1>Private Translation</h1>
+        <p>${'The private source document must be translated faithfully. '.repeat(20)}</p>
+        </article></body></html>`, {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      });
+    },
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+    config: { browserEnabled: false },
+    documentConfig: {
+      googleDocsClientId: 'translation-client-id',
+      googleDocsClientSecret: 'translation-client-secret',
+      googleDocsRefreshToken: 'translation-refresh-token',
+    },
+    dnsLookup: PUBLIC_DNS,
+  });
+  assert.equal(document.extractor, 'readability-static');
+  assert.match(document.blocks.map((block) => block.text || '').join(' '), /private source document/);
+  assert.equal(calls[0].url, 'https://oauth2.googleapis.com/token');
+  assert.match(calls[1].url, /googleapis\.com\/drive\/v3\/files\/private-translation-doc\/export/);
+  assert.equal(calls[1].options.headers.Authorization, 'Bearer translation-access-token');
+  assert.ok(document.acquisition.attempts.includes('google-drive-oauth-export'));
+});

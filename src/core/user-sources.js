@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { isGoogleDocUrl } from '../lib/google-docs.js';
 import {
   acquireSourceDocument,
   assertPdfPageLimit,
@@ -91,6 +92,7 @@ export async function loadDirectUserSources({
     const descriptor = descriptors[index];
     if (result.status === 'fulfilled') sources.push(result.value);
     else errors.push({
+      kind: descriptor.kind,
       url: descriptor.originalUrl,
       name: descriptor.name,
       error: safeError(result.reason),
@@ -156,18 +158,9 @@ async function loadDescriptor({
     const translationConfig = config?.translation || {};
     const documentConfig = config?.documents || {};
     const sourceDir = path.join(workDir, 'user-sources', `source-${index + 1}`);
-    let acquisitionUrl = descriptor.acquisitionUrl;
+    const acquisitionUrl = descriptor.acquisitionUrl;
     let requestHeaders = {};
-    if (descriptor.kind === 'google-doc') {
-      const fileId = googleDocId(descriptor.originalUrl);
-      if (!fileId) throw new Error('无法识别 Google Docs 文档 ID');
-      if (documentConfig.googleDocsAccessToken) {
-        acquisitionUrl = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/export?mimeType=text%2Fhtml`;
-        requestHeaders = { Authorization: `Bearer ${documentConfig.googleDocsAccessToken}` };
-      } else {
-        acquisitionUrl = `https://docs.google.com/document/d/${encodeURIComponent(fileId)}/export?format=html`;
-      }
-    } else if (descriptor.kind === 'slack') {
+    if (descriptor.kind === 'slack') {
       requestHeaders = sourceRequestHeadersForAttachment(descriptor.attachment, config?.slack?.botToken);
       if (!isPdfAttachment(descriptor.attachment)) {
         const fetched = await safeFetchResource({
@@ -222,6 +215,7 @@ async function loadDescriptor({
       fetchFn,
       fetchWithRetry,
       config: translationConfig,
+      documentConfig,
       dnsLookup: translationConfig.dnsLookup,
       requestHeaders,
       scope: { kind: 'all' },
@@ -339,6 +333,7 @@ async function loadGithubSource({ descriptor, config, fetchFn, fetchWithRetry })
   const parsed = parseGithubUrl(descriptor.originalUrl);
   if (!parsed) throw new Error('无法识别 GitHub 仓库或文件链接');
   const token = config?.documents?.githubToken;
+  const dnsLookup = config?.translation?.dnsLookup;
   const headers = {
     Accept: 'application/vnd.github+json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -349,18 +344,20 @@ async function loadGithubSource({ descriptor, config, fetchFn, fetchWithRetry })
     headers,
     fetchFn,
     fetchWithRetry,
+    dnsLookup,
     maxBytes: 2 * 1024 * 1024,
   });
   const ref = parsed.ref || metadata.default_branch || 'main';
   const paths = parsed.filePath
     ? [parsed.filePath]
-    : await selectGithubPaths({ parsed, ref, headers, fetchFn, fetchWithRetry });
+    : await selectGithubPaths({ parsed, ref, headers, fetchFn, fetchWithRetry, dnsLookup });
   const fileResults = await Promise.allSettled(paths.map(async (filePath) => {
     const encodedPath = filePath.split('/').map(encodeURIComponent).join('/');
     const fetched = await safeFetchResource({
       url: `https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`,
       fetchFn,
       fetchWithRetry,
+      dnsLookup,
       headers: { ...headers, Accept: 'application/vnd.github.raw+json' },
       accept: 'application/vnd.github.raw+json,text/plain;q=0.9,*/*;q=0.5',
       maxBytes: MAX_GITHUB_FILE_BYTES,
@@ -399,12 +396,13 @@ async function loadGithubSource({ descriptor, config, fetchFn, fetchWithRetry })
   };
 }
 
-async function selectGithubPaths({ parsed, ref, headers, fetchFn, fetchWithRetry }) {
+async function selectGithubPaths({ parsed, ref, headers, fetchFn, fetchWithRetry, dnsLookup }) {
   const tree = await fetchJsonResource({
     url: `https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}/git/trees/${encodeURIComponent(ref)}?recursive=1`,
     headers,
     fetchFn,
     fetchWithRetry,
+    dnsLookup,
     maxBytes: 8 * 1024 * 1024,
   });
   return (Array.isArray(tree.tree) ? tree.tree : [])
@@ -432,11 +430,12 @@ function isImportantCodeFile(filePath) {
   return /(?:^|\/)(?:README(?:\.[^/]+)?|AGENTS\.md|CLAUDE\.md|Gemfile|Dockerfile|Makefile|pom\.xml|package\.json|pyproject\.toml|Cargo\.toml|go\.mod)$/i.test(filePath || '');
 }
 
-async function fetchJsonResource({ url, headers, fetchFn, fetchWithRetry, maxBytes }) {
+async function fetchJsonResource({ url, headers, fetchFn, fetchWithRetry, dnsLookup, maxBytes }) {
   const fetched = await safeFetchResource({
     url,
     fetchFn,
     fetchWithRetry,
+    dnsLookup,
     headers,
     accept: 'application/vnd.github+json,application/json',
     maxBytes,
@@ -465,15 +464,10 @@ function directUrlKind(rawUrl) {
   try { url = new URL(rawUrl); } catch { return ''; }
   const host = url.hostname.toLowerCase();
   if (host === 'github.com' || host === 'www.github.com') return 'github';
-  if (host === 'docs.google.com' && /^\/document\/d\//.test(url.pathname)) return 'google-doc';
+  if (isGoogleDocUrl(rawUrl)) return 'google-doc';
   if (host === 'notion.so' || host.endsWith('.notion.so') || host === 'notion.site' || host.endsWith('.notion.site')) return 'notion';
   if (/\.pdf(?:$|[?#])/i.test(rawUrl)) return 'pdf';
   return '';
-}
-
-function googleDocId(rawUrl) {
-  try { return new URL(rawUrl).pathname.match(/^\/document\/d\/([^/]+)/)?.[1]; }
-  catch { return ''; }
 }
 
 function isReadableAttachment(attachment) {

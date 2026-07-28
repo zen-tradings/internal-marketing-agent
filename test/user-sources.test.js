@@ -75,7 +75,7 @@ test('Google Docs 链接通过 Drive export 读取并保留原始链接为一级
     },
     fetchFn,
   });
-  assert.equal(result.errors.length, 0);
+  assert.equal(result.errors.length, 0, JSON.stringify(result.errors));
   assert.equal(result.sources.length, 1);
   assert.equal(result.sources[0].url, originalUrl);
   assert.equal(result.sources[0].userSpecified, true);
@@ -83,6 +83,65 @@ test('Google Docs 链接通过 Drive export 读取并保留原始链接为一级
   assert.match(calls[0].url, /googleapis\.com\/drive\/v3\/files\/doc-123\/export/);
   assert.equal(calls[0].options.headers.Authorization, 'Bearer google-token');
   assert.equal(isDirectUserUrl(originalUrl), true);
+});
+
+test('Google Docs refresh token 自动换取 access token，分析文档与直译共用认证', async () => {
+  const calls = [];
+  const fetchFn = async (url, options = {}) => {
+    const target = String(url);
+    calls.push({ url: target, options });
+    if (target === 'https://oauth2.googleapis.com/token') {
+      return new Response(JSON.stringify({
+        access_token: 'refreshed-access-token',
+        expires_in: 3600,
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return response(`<!doctype html><html><head><title>Private Note</title></head><body><article>
+      <h1>Private Note</h1>
+      <p>${'Private Google Docs content supplied by the user. '.repeat(20)}</p>
+    </article></body></html>`);
+  };
+  const originalUrl = 'https://docs.google.com/document/u/0/d/private-doc-456/edit';
+  const result = await loadDirectUserSources({
+    userUrls: [originalUrl],
+    workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'google-doc-refresh-source-')),
+    config: {
+      translation: { browserEnabled: false, dnsLookup: publicDns },
+      documents: {
+        googleDocsClientId: 'client-id-refresh-test',
+        googleDocsClientSecret: 'client-secret',
+        googleDocsRefreshToken: 'refresh-token',
+      },
+    },
+    fetchFn,
+  });
+  assert.equal(result.errors.length, 0, JSON.stringify(result.errors));
+  assert.equal(result.sources.length, 1);
+  assert.match(result.sources[0].text, /Private Google Docs content/);
+  assert.equal(calls[0].url, 'https://oauth2.googleapis.com/token');
+  assert.match(String(calls[0].options.body), /grant_type=refresh_token/);
+  assert.match(String(calls[0].options.body), /refresh_token=refresh-token/);
+  assert.match(calls[1].url, /googleapis\.com\/drive\/v3\/files\/private-doc-456\/export/);
+  assert.equal(calls[1].options.headers.Authorization, 'Bearer refreshed-access-token');
+  assert.equal(isDirectUserUrl(originalUrl), true);
+});
+
+test('Google Docs OAuth 配置不完整时返回可操作错误', async () => {
+  const result = await loadDirectUserSources({
+    userUrls: ['https://docs.google.com/document/d/private-doc/edit'],
+    workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'google-doc-incomplete-oauth-')),
+    config: {
+      translation: { browserEnabled: false, dnsLookup: publicDns },
+      documents: { googleDocsClientId: 'client-id-only' },
+    },
+    fetchFn: async () => {
+      throw new Error('不应发起网络请求');
+    },
+  });
+  assert.equal(result.sources.length, 0);
+  assert.equal(result.errors[0].kind, 'google-doc');
+  assert.match(result.errors[0].error, /OAuth 配置不完整/);
+  assert.match(result.errors[0].error, /GOOGLE_DOCS_CLIENT_SECRET/);
 });
 
 test('GitHub 仓库先读 tree，再并行读取高价值代码文件', async () => {
@@ -127,7 +186,7 @@ test('GitHub 仓库先读 tree，再并行读取高价值代码文件', async ()
     },
     fetchFn,
   });
-  assert.equal(result.errors.length, 0);
+  assert.equal(result.errors.length, 0, JSON.stringify(result.errors));
   assert.equal(result.sources[0].extractor, 'github-rest-parallel');
   assert.equal(result.sources[0].official, undefined);
   assert.match(result.sources[0].text, /FILE: README\.md/);

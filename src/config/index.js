@@ -98,6 +98,9 @@ export function loadConfig(env = process.env) {
     },
     documents: {
       googleDocsAccessToken: env.GOOGLE_DOCS_ACCESS_TOKEN || '',
+      googleDocsClientId: env.GOOGLE_DOCS_CLIENT_ID || '',
+      googleDocsClientSecret: env.GOOGLE_DOCS_CLIENT_SECRET || '',
+      googleDocsRefreshToken: env.GOOGLE_DOCS_REFRESH_TOKEN || '',
       githubToken: env.GITHUB_TOKEN || '',
     },
     wechat: { appId: need('WECHAT_APP_ID'), appSecret: need('WECHAT_APP_SECRET') },
