@@ -1504,9 +1504,12 @@ function sameInvariantTokens(source, translated) {
   const sourceNumbers = invariantNumericSignature(source);
   const translatedNumbers = invariantNumericSignature(translated);
   if (JSON.stringify(sourceNumbers) === JSON.stringify(translatedNumbers)) return true;
-  const monthNumbers = englishMonthNumbers(source);
-  return monthNumbers.length > 0
-    && JSON.stringify([...sourceNumbers, ...monthNumbers].sort()) === JSON.stringify(translatedNumbers);
+  const semanticNumbers = [
+    ...englishMonthNumbers(source),
+    ...englishIntegerNumbers(source),
+  ];
+  return semanticNumbers.length > 0
+    && isAllowedNumericExpansion(sourceNumbers, translatedNumbers, semanticNumbers);
 }
 
 function invariantNumbers(value) {
@@ -1572,6 +1575,26 @@ function normalizeMagnitudeAmount(value, multiplier) {
   return `${sign < 0n ? '-' : ''}${whole}.${decimals}`;
 }
 
+function isAllowedNumericExpansion(sourceNumbers, translatedNumbers, semanticNumbers) {
+  const sourceCounts = countTokens(sourceNumbers);
+  const translatedCounts = countTokens(translatedNumbers);
+  const allowedCounts = countTokens(semanticNumbers);
+  for (const [token, count] of sourceCounts) {
+    if ((translatedCounts.get(token) || 0) < count) return false;
+  }
+  for (const [token, count] of translatedCounts) {
+    const extra = count - (sourceCounts.get(token) || 0);
+    if (extra > (allowedCounts.get(token) || 0)) return false;
+  }
+  return true;
+}
+
+function countTokens(tokens) {
+  const counts = new Map();
+  for (const token of tokens) counts.set(token, (counts.get(token) || 0) + 1);
+  return counts;
+}
+
 function isClearlyUntranslated(source, translated) {
   const sourceEnglish = (String(source).match(/[A-Za-z]/g) || []).length;
   if (sourceEnglish < 40) return false;
@@ -1594,6 +1617,17 @@ function englishMonthNumbers(value) {
     /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sept?(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b/gi,
   );
   return [...matches].map((match) => months[match[1].toLowerCase()]).filter(Boolean);
+}
+
+function englishIntegerNumbers(value) {
+  const numbers = {
+    one: '1', two: '2', three: '3', four: '4', five: '5',
+    six: '6', seven: '7', eight: '8', nine: '9', ten: '10',
+  };
+  const matches = String(value).matchAll(
+    /\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/gi,
+  );
+  return [...matches].map((match) => numbers[match[1].toLowerCase()]).filter(Boolean);
 }
 
 function createSourceDocument({

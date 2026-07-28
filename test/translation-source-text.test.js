@@ -584,6 +584,43 @@ test('英文 billion 与中文亿按数值等价校验，修复稿多出数字�
   assert.doesNotMatch(renderTranslatedDocument(translated), /\$50 0 亿美元/);
 });
 
+test('英文数字词可选择性译为阿拉伯数字，但原有数字仍必须全部保留', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'pdf',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a.pdf',
+    title: 'Constraints',
+    author: '',
+    sha256: 'selective-word-number-expansion',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: 'Sharpe (1992) requires all weights to sum to one and allows each weight to be above one. The S&P 500 benchmark is retained.',
+    }],
+  };
+  const translated = await translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title'
+            ? '约束'
+            : 'Sharpe（1992）的**权重约束**要求全部权重之和为 1，并允许单项权重大于 1，同时保留 S&P 500 基准。',
+        })),
+      });
+    },
+  });
+  assert.match(renderTranslatedDocument(translated), /1992.*为 1.*大于 1.*500/);
+});
+
 test('长文正常翻译批次最多 24 个单元，尽早写入分块 checkpoint', async () => {
   const source = {
     version: 5,
