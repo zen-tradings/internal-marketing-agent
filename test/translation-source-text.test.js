@@ -368,6 +368,119 @@ test('长段落高亮不足时拒绝产稿，避免再次出现几乎没有高�
   }), /结构化翻译校验失败/);
 });
 
+test('短段落没有高亮也能通过校验，不再整篇任务失败', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a',
+    title: 'Title',
+    author: '',
+    sha256: 'short-paragraph-source',
+    blocks: [{ id: 'b000001', order: 0, type: 'paragraph', text: 'Attention is all you need here.' }],
+  };
+  const translated = await translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title' ? '标题' : '这里只需要注意力机制。',
+        })),
+      });
+    },
+  });
+  assert.match(renderTranslatedDocument(translated), /这里只需要注意力机制。/);
+});
+
+test('过密或超长的加粗被机械收敛，不再让整批翻译失败', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a',
+    title: 'Title',
+    author: '',
+    sha256: 'over-highlight-source',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: 'The benchmark evaluates realistic agent tasks and identifies the decisive system bottleneck.',
+    }],
+  };
+  const translated = await translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title'
+            ? '**标题**'
+            : '该基准衡量**真实**的**智能体**任务，并**识别**出**决定性**的系统瓶颈。',
+        })),
+      });
+    },
+  });
+  const article = renderTranslatedDocument(translated);
+  assert.match(article, /^title: "标题"$/m);
+  assert.match(article, /^该基准衡量\*\*真实\*\*的智能体任务，并识别出决定性的系统瓶颈。$/m);
+});
+
+test('校验失败会说明原因，并在重试提示中回传给模型', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a',
+    title: 'Title',
+    author: '',
+    sha256: 'repair-hint-source',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: 'The benchmark evaluates realistic agent tasks and identifies the decisive system bottleneck. '.repeat(4),
+    }],
+  };
+  const workDir = tempDir();
+  const repairPrompts = [];
+  await assert.rejects(() => translateDocument({
+    source,
+    workDir,
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      if (/上一次译文被拒绝的原因/.test(prompt)) repairPrompts.push(prompt);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title'
+            ? '标题'
+            : `这是一段完全没有高亮的中文译文。${'系统需要在真实任务中持续验证能力边界与性能瓶颈。'.repeat(10)}`,
+        })),
+      });
+    },
+  }), /结构化翻译校验失败:b000001\(可见 \d+ 字需要/);
+  assert.equal(repairPrompts.length, 2);
+  assert.match(repairPrompts[0], /- b000001:可见 \d+ 字需要 \d+–\d+ 处 \*\* 加粗，实际只有 0 处/);
+  const invalid = JSON.parse(fs.readFileSync(path.join(workDir, 'translation-invalid.json'), 'utf8'));
+  assert.equal(invalid.units[0].kind, 'paragraph');
+  assert.match(invalid.units[0].reason, /加粗/);
+});
+
 test('完整性门禁拒绝额外添加或遗漏图片、表格和公式', () => {
   const tablePath = path.join(tempDir(), 'table.png');
   fs.writeFileSync(tablePath, Buffer.from([1]));
