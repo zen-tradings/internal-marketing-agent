@@ -1314,6 +1314,7 @@ async function requestTranslationBatch({
 - 按 kind 翻译标题、正文、标题层级、图注和表题，不总结、不改写、不删减。表格正文直接保留原文截图，不进入翻译输入。
 - 不添加输入中不存在的图、表、公式、引用、分析或内容概括。
 - 不改变数字、单位、Ticker 和正文中原有的 URL。
+- 金融语境中的 pre-fee 必须译为“费前”或“费用前”，不得译为“税前”；after-fee 或 net of fees 译为“费后”或“扣除费用后”。
 - 所有 ⟦ZEN_INLINE_NNN⟧ 都是公式、链接或引用占位符，必须原样、原位置、各保留一次。
 - 专有名词首次出现可保留英文，普通叙述必须翻译成中文。
 - paragraph、quote、list_item 必须提高关键词和核心观点高亮密度：正文每约 200 个汉字至少 1 处，目标 2–3 处；优先高亮关键术语、核心机制、中心句或开头关键句。
@@ -1462,10 +1463,25 @@ function applyTranslations(source, completed) {
   const document = structuredClone(source);
   document.translatedTitle = completed.get('meta:title') || source.title;
   for (const block of document.blocks) {
-    if (completed.has(block.id)) block.translatedText = completed.get(block.id);
-    if (completed.has(`${block.id}:caption`)) block.translatedCaption = completed.get(`${block.id}:caption`);
+    if (completed.has(block.id)) {
+      block.translatedText = normalizeKnownFinancialTerms(block.text, completed.get(block.id));
+    }
+    if (completed.has(`${block.id}:caption`)) {
+      block.translatedCaption = normalizeKnownFinancialTerms(
+        block.caption,
+        completed.get(`${block.id}:caption`),
+      );
+    }
   }
   return document;
+}
+
+function normalizeKnownFinancialTerms(source, translated) {
+  let value = String(translated || '');
+  if (/\bpre-fee\b/i.test(String(source || ''))) {
+    value = value.replace(/税前(?=(?:回报|收益))/g, '费用前');
+  }
+  return value;
 }
 
 function translatedUnitText(document, id) {

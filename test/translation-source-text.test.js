@@ -621,6 +621,56 @@ test('英文数字词可选择性译为阿拉伯数字，但原有数字仍必�
   assert.match(renderTranslatedDocument(translated), /1992.*为 1.*大于 1.*500/);
 });
 
+test('金融语境 pre-fee 不得误译为税前，历史断点译文也会确定性纠正', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'pdf',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a.pdf',
+    title: 'Returns',
+    author: '',
+    sha256: 'pre-fee-terminology',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: 'We estimate a pre-fee return of 11.42% for the complete sample.',
+    }],
+  };
+  const workDir = tempDir();
+  await translateDocument({
+    source,
+    workDir,
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title' ? '回报' : '我们估计完整样本的**税前回报**为 11.42%。',
+        })),
+      });
+    },
+  });
+  const checkpoint = JSON.parse(fs.readFileSync(path.join(workDir, 'translation-checkpoint.json'), 'utf8'));
+  assert.match(checkpoint.translations.find((item) => item.id === 'b000001').text, /税前回报/);
+  const translated = await translateDocument({
+    source,
+    workDir,
+    model: 'test-model',
+    writer: {},
+    resumeFromCheckpoint: true,
+    completeArticle: async () => {
+      throw new Error('有效断点不应重新调用模型');
+    },
+  });
+  const article = renderTranslatedDocument(translated);
+  assert.match(article, /费用前回报/);
+  assert.doesNotMatch(article, /税前回报/);
+});
+
 test('长文正常翻译批次最多 24 个单元，尽早写入分块 checkpoint', async () => {
   const source = {
     version: 5,
