@@ -338,7 +338,7 @@ test('论文标题页的重复标题、作者和机构列表在摘要前被移�
   assert.equal(document.metadataBlocksRemoved, 3);
 });
 
-test('正文翻译保持高亮密度，但拒绝标题和整段加粗', async () => {
+test('正文翻译保持合理高亮，标题或整段异常加粗会安全降级为纯文本', async () => {
   const source = {
     version: 5,
     contentMode: 'structured-document',
@@ -375,7 +375,7 @@ test('正文翻译保持高亮密度，但拒绝标题和整段加粗', async ()
   });
   assert.match(renderTranslatedDocument(translated), /\*\*核心性能瓶颈\*\*/);
 
-  await assert.rejects(() => translateDocument({
+  const normalized = await translateDocument({
     source: { ...source, sha256: 'invalid-highlight-source' },
     workDir: tempDir(),
     model: 'test-model',
@@ -389,10 +389,14 @@ test('正文翻译保持高亮密度，但拒绝标题和整段加粗', async ()
         })),
       });
     },
-  }), /结构化翻译校验失败/);
+  });
+  const normalizedArticle = renderTranslatedDocument(normalized);
+  assert.doesNotMatch(normalized.translatedTitle, /\*\*/);
+  assert.doesNotMatch(normalized.blocks[0].translatedText, /\*\*/);
+  assert.match(normalizedArticle, /整段文字全部被错误加粗/);
 });
 
-test('长段落高亮不足时拒绝产稿，避免再次出现几乎没有高亮的译文', async () => {
+test('长段落高亮不足在修复后不阻断忠实译文', async () => {
   const source = {
     version: 5,
     contentMode: 'structured-document',
@@ -409,7 +413,7 @@ test('长段落高亮不足时拒绝产稿，避免再次出现几乎没有高�
       text: 'The benchmark evaluates realistic agent tasks and identifies the decisive system bottleneck. '.repeat(4),
     }],
   };
-  await assert.rejects(() => translateDocument({
+  const translated = await translateDocument({
     source,
     workDir: tempDir(),
     model: 'test-model',
@@ -425,7 +429,42 @@ test('长段落高亮不足时拒绝产稿，避免再次出现几乎没有高�
         })),
       });
     },
-  }), /结构化翻译校验失败/);
+  });
+  assert.match(renderTranslatedDocument(translated), /\*\*核心观点\*\*/);
+});
+
+test('样式可降级，但数字不一致仍由内容级硬门禁拒绝', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a',
+    title: 'Title',
+    author: '',
+    sha256: 'invariant-mismatch',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: 'The reported portfolio return was 100 percent.',
+    }],
+  };
+  await assert.rejects(() => translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title' ? '标题' : '报告的投资组合回报率为 99%。',
+        })),
+      });
+    },
+  }), /结构化翻译校验失败:b000001/);
 });
 
 test('完整性门禁拒绝额外添加或遗漏图片、表格和公式', () => {

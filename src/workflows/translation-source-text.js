@@ -725,10 +725,10 @@ export async function translateDocument({
     let invalid = validateBatchTranslations(batch, translations);
     if (invalid.length) {
       const repaired = [];
-      for (const unit of invalid) {
+      for (const repairBatch of batchUnits(invalid, 5000, 8)) {
         throwIfTaskCancelled(signal);
         repaired.push(...await requestTranslationBatch({
-          batch: [unit],
+          batch: repairBatch,
           source,
           model,
           writer,
@@ -741,15 +741,20 @@ export async function translateDocument({
       const repairedById = new Map(repaired.map((item) => [item.id, item]));
       const originalById = new Map(translations.map((item) => [item.id, item]));
       translations = batch.map((unit) => repairedById.get(unit.id) || originalById.get(unit.id)).filter(Boolean);
-      invalid = validateBatchTranslations(batch, translations);
+      // 高亮是公众号样式增强，不能在忠实译文已经完整时反向阻断整篇任务。
+      // 修复请求后只保留结构、数字/链接和漏译等内容级硬门禁；不安全的
+      // Markdown 高亮会在落 checkpoint 前降级为纯文本。
+      invalid = validateBatchTranslations(batch, translations, { checkHighlights: false });
     }
     if (invalid.length) {
       writeJsonAtomic(path.join(workDir, 'translation-invalid.json'), {
         failedAt: new Date().toISOString(),
         units: invalid.map((unit) => ({ id: unit.id, source: unit.text })),
+        received: translations.map((item) => ({ id: item.id, text: item.text })),
       });
       throw new Error(`结构化翻译校验失败:${invalid.map((unit) => unit.id).join(',')}`);
     }
+    translations = normalizeBatchHighlights(batch, translations);
     for (const item of translations) completed.set(item.id, item.text.trim());
     writeJsonAtomic(checkpointPath, {
       version: CHECKPOINT_VERSION,
@@ -1344,7 +1349,7 @@ ${JSON.stringify({ units })}`,
     }));
 }
 
-function validateBatchTranslations(batch, translations) {
+function validateBatchTranslations(batch, translations, { checkHighlights = true } = {}) {
   const byId = new Map();
   for (const item of translations) {
     if (byId.has(item.id)) return batch;
@@ -1355,11 +1360,22 @@ function validateBatchTranslations(batch, translations) {
     return !text?.trim()
       || !sameInvariantTokens(unit.text, text)
       || isClearlyUntranslated(unit.text, text)
-      || !hasValidSelectiveHighlights(unit, text);
+      || (checkHighlights && !hasValidSelectiveHighlights(unit, text));
   });
 }
 
 function hasValidSelectiveHighlights(unit, translated) {
+  if (!hasSafeSelectiveHighlights(unit, translated)) return false;
+  const value = String(translated || '');
+  const highlights = [...value.matchAll(/\*\*([^*\n]+)\*\*/g)].map((match) => match[1].trim());
+  const allowed = ['paragraph', 'quote', 'list_item'].includes(unit.kind);
+  if (!allowed) return true;
+  const visibleCharacters = Math.max(1, value.replace(/\*\*/g, '').length);
+  const minHighlights = visibleCharacters < 30 ? 0 : Math.max(1, Math.ceil(visibleCharacters / 120));
+  return highlights.length >= minHighlights;
+}
+
+function hasSafeSelectiveHighlights(unit, translated) {
   const value = String(translated || '');
   const markers = value.match(/\*\*/g) || [];
   const highlights = [...value.matchAll(/\*\*([^*\n]+)\*\*/g)].map((match) => match[1].trim());
@@ -1367,13 +1383,20 @@ function hasValidSelectiveHighlights(unit, translated) {
   const allowed = ['paragraph', 'quote', 'list_item'].includes(unit.kind);
   if (!allowed) return highlights.length === 0;
   const visibleCharacters = Math.max(1, value.replace(/\*\*/g, '').length);
-  const minHighlights = visibleCharacters < 30 ? 0 : Math.max(1, Math.ceil(visibleCharacters / 120));
-  const maxHighlights = visibleCharacters < 30 ? 1 : Math.max(minHighlights, Math.ceil(visibleCharacters / 65));
-  if (highlights.length < minHighlights) return false;
+  const maxHighlights = visibleCharacters < 30 ? 1 : Math.max(1, Math.ceil(visibleCharacters / 65));
   if (highlights.length > maxHighlights) return false;
   if (highlights.some((text) => text.length < 2 || text.length > 64)) return false;
   const highlightedCharacters = highlights.reduce((sum, text) => sum + text.length, 0);
   return highlightedCharacters / visibleCharacters <= 0.45;
+}
+
+function normalizeBatchHighlights(batch, translations) {
+  const unitsById = new Map(batch.map((unit) => [unit.id, unit]));
+  return translations.map((item) => {
+    const unit = unitsById.get(item.id);
+    if (!unit || hasSafeSelectiveHighlights(unit, item.text)) return item;
+    return { ...item, text: String(item.text).replaceAll('**', '') };
+  });
 }
 
 function protectInvariantText(value) {
