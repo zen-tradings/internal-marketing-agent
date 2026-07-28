@@ -34,6 +34,11 @@ const DEFAULT_LIMITS = {
   maxAssetBytes: 40 * 1024 * 1024,
   maxSingleAssetBytes: 10 * 1024 * 1024,
 };
+const HIGHLIGHTED_KINDS = new Set(['paragraph', 'quote', 'list_item']);
+const MAX_HIGHLIGHT_LENGTH = 64;
+const MAX_HIGHLIGHT_RATIO = 0.45;
+const MIN_HIGHLIGHTED_LENGTH = 40;
+const MAX_TRANSLATION_REPAIRS = 2;
 const DOCUMENT_BLOCK_TYPES = new Set([
   'heading', 'paragraph', 'quote', 'list_item', 'figure', 'table', 'equation', 'code', 'reference',
 ]);
@@ -702,9 +707,9 @@ export async function translateDocument({
       batch, source, model, writer, fetchFn, completeArticle, timeoutMs,
     });
     let invalid = validateBatchTranslations(batch, translations);
-    if (invalid.length) {
+    for (let attempt = 0; attempt < MAX_TRANSLATION_REPAIRS && invalid.length; attempt += 1) {
       const repaired = [];
-      for (const unit of invalid) {
+      for (const { unit, reason } of invalid) {
         throwIfTaskCancelled(signal);
         repaired.push(...await requestTranslationBatch({
           batch: [unit],
@@ -715,6 +720,7 @@ export async function translateDocument({
           completeArticle,
           timeoutMs,
           repair: true,
+          issues: new Map([[unit.id, reason]]),
         }));
       }
       const repairedById = new Map(repaired.map((item) => [item.id, item]));
@@ -723,11 +729,20 @@ export async function translateDocument({
       invalid = validateBatchTranslations(batch, translations);
     }
     if (invalid.length) {
+      const byId = new Map(translations.map((item) => [item.id, item]));
+      for (const { unit } of invalid) {
+        const item = byId.get(unit.id);
+        if (item) item.text = addFallbackHighlights(unit, item.text);
+      }
+      translations = [...byId.values()];
+      invalid = validateBatchTranslations(batch, translations);
+    }
+    if (invalid.length) {
       writeJsonAtomic(path.join(workDir, 'translation-invalid.json'), {
         failedAt: new Date().toISOString(),
-        units: invalid.map((unit) => ({ id: unit.id, source: unit.text })),
+        units: invalid.map(({ unit, reason }) => ({ id: unit.id, kind: unit.kind, reason, source: unit.text })),
       });
-      throw new Error(`结构化翻译校验失败:${invalid.map((unit) => unit.id).join(',')}`);
+      throw new Error(`结构化翻译校验失败:${invalid.map(({ unit, reason }) => `${unit.id}(${reason})`).join(',')}`);
     }
     for (const item of translations) completed.set(item.id, item.text.trim());
     writeJsonAtomic(checkpointPath, {
@@ -1236,6 +1251,7 @@ async function requestTranslationBatch({
   completeArticle,
   timeoutMs,
   repair = false,
+  issues,
 }) {
   const protections = new Map();
   const units = batch.map((unit) => {
@@ -1255,10 +1271,11 @@ async function requestTranslationBatch({
 - 不改变数字、单位、Ticker 和正文中原有的 URL。
 - 所有 ⟦ZEN_INLINE_NNN⟧ 都是公式、链接或引用占位符，必须原样、原位置、各保留一次。
 - 专有名词首次出现可保留英文，普通叙述必须翻译成中文。
-- paragraph、quote、list_item 必须提高关键词和核心观点高亮密度：正文每约 200 个汉字至少 1 处，目标 2–3 处；优先高亮关键术语、核心机制、中心句或开头关键句。
-- 每处使用 Markdown **加粗**，可包住 2–64 个字符的关键短语或短句，不能把整段全部加粗，也不能改动原意。
+- paragraph、quote、list_item 必须提高关键词和核心观点高亮密度：译文每约 200 个汉字至少 1 处，最多每 65 个汉字 1 处；不足 40 字的短句可以不加高亮。优先高亮关键术语、核心机制、中心句或开头关键句。
+- 每处使用 Markdown **加粗**，可包住 2–64 个字符的关键短语或短句，加粗总字数不得超过该段可见字数的 45%，不能把整段全部加粗，也不能改动原意。
 - title、heading、figure_caption、table_caption 禁止添加 **加粗**；除正文高亮外不得添加其它 Markdown 格式。
 ${repair ? '- 输入中的 ⟦ZEN_KEEP_N⟧ 是不可翻译占位符，必须原样、原位置、各保留一次。' : ''}
+${issuesInstruction(batch, issues)}
 
 文档标题:${source.title}
 来源:${source.sourceUrl}
@@ -1303,44 +1320,118 @@ ${JSON.stringify({ units })}`,
   }
   const parsed = parseJsonPayload(raw);
   if (!Array.isArray(parsed?.translations)) return [];
+  const unitsById = new Map(batch.map((unit) => [unit.id, unit]));
   return parsed.translations
     .filter((item) => item && typeof item.id === 'string' && typeof item.text === 'string')
-    .map((item) => ({
-      id: item.id,
-      text: repair ? restoreInvariantText(item.text, protections.get(item.id) || []) : item.text,
-    }));
+    .map((item) => {
+      const text = repair ? restoreInvariantText(item.text, protections.get(item.id) || []) : item.text;
+      const unit = unitsById.get(item.id);
+      return { id: item.id, text: unit ? normalizeHighlights(unit, text) : text };
+    });
+}
+
+function issuesInstruction(batch, issues) {
+  if (!issues?.size) return '';
+  const lines = batch
+    .filter((unit) => issues.get(unit.id))
+    .map((unit) => `- ${unit.id}:${issues.get(unit.id)}`);
+  return lines.length ? `\n上一次译文被拒绝的原因，必须逐条修正:\n${lines.join('\n')}\n` : '';
 }
 
 function validateBatchTranslations(batch, translations) {
   const byId = new Map();
   for (const item of translations) {
-    if (byId.has(item.id)) return batch;
+    if (byId.has(item.id)) return batch.map((unit) => ({ unit, reason: '译文 ID 重复' }));
     byId.set(item.id, item.text);
   }
-  return batch.filter((unit) => {
-    const text = byId.get(unit.id);
-    return !text?.trim()
-      || !sameInvariantTokens(unit.text, text)
-      || isClearlyUntranslated(unit.text, text)
-      || !hasValidSelectiveHighlights(unit, text);
-  });
+  return batch
+    .map((unit) => ({ unit, reason: translationIssue(unit, byId.get(unit.id)) }))
+    .filter((item) => item.reason);
 }
 
-function hasValidSelectiveHighlights(unit, translated) {
+function translationIssue(unit, translated) {
+  if (!translated?.trim()) return '译文为空';
+  if (!sameInvariantTokens(unit.text, translated)) return '公式占位符、链接、Ticker 或数字与原文不一致';
+  if (isClearlyUntranslated(unit.text, translated)) return '译文仍是英文，没有翻译成中文';
+  return highlightIssue(unit, translated);
+}
+
+function highlightIssue(unit, translated) {
   const value = String(translated || '');
   const markers = value.match(/\*\*/g) || [];
-  const highlights = [...value.matchAll(/\*\*([^*\n]+)\*\*/g)].map((match) => match[1].trim());
-  if (markers.length !== highlights.length * 2) return false;
-  const allowed = ['paragraph', 'quote', 'list_item'].includes(unit.kind);
-  if (!allowed) return highlights.length === 0;
-  const visibleCharacters = Math.max(1, value.replace(/\*\*/g, '').length);
-  const minHighlights = visibleCharacters < 30 ? 0 : Math.max(1, Math.ceil(visibleCharacters / 120));
-  const maxHighlights = visibleCharacters < 30 ? 1 : Math.max(minHighlights, Math.ceil(visibleCharacters / 65));
-  if (highlights.length < minHighlights) return false;
-  if (highlights.length > maxHighlights) return false;
-  if (highlights.some((text) => text.length < 2 || text.length > 64)) return false;
-  const highlightedCharacters = highlights.reduce((sum, text) => sum + text.length, 0);
-  return highlightedCharacters / visibleCharacters <= 0.45;
+  const highlights = highlightPhrases(value);
+  if (markers.length !== highlights.length * 2) return '存在未成对或跨行的 ** 加粗标记';
+  if (!HIGHLIGHTED_KINDS.has(unit.kind)) {
+    return highlights.length ? `${unit.kind} 单元禁止使用 ** 加粗` : '';
+  }
+  const budget = highlightBudget(value);
+  if (highlights.length < budget.min) {
+    return `可见 ${budget.visible} 字需要 ${budget.min}–${budget.max} 处 ** 加粗，实际只有 ${highlights.length} 处`;
+  }
+  if (highlights.length > budget.max) {
+    return `可见 ${budget.visible} 字最多 ${budget.max} 处 ** 加粗，实际有 ${highlights.length} 处`;
+  }
+  if (highlights.some((text) => text.length < 2 || text.length > MAX_HIGHLIGHT_LENGTH)) {
+    return `每处 ** 加粗必须覆盖 2–${MAX_HIGHLIGHT_LENGTH} 个字符`;
+  }
+  const highlighted = highlights.reduce((sum, text) => sum + text.length, 0);
+  if (highlighted / budget.visible > MAX_HIGHLIGHT_RATIO) return '加粗字数超过可见字数的 45%';
+  return '';
+}
+
+function highlightPhrases(value) {
+  return [...String(value).matchAll(/\*\*([^*\n]+)\*\*/g)].map((match) => match[1].trim());
+}
+
+// 高亮密度与提示词保持一致：短单元不强制高亮，长正文按每约 200 字一处的下限计算。
+function highlightBudget(value) {
+  const visible = Math.max(1, String(value).replace(/\*\*/g, '').length);
+  const min = visible < MIN_HIGHLIGHTED_LENGTH ? 0 : Math.max(1, Math.ceil(visible / 200));
+  return { visible, min, max: Math.max(min, 1, Math.ceil(visible / 65)) };
+}
+
+// 模型多次不补高亮时的兵底：只在现有子句两端加 **，不改动、不新增任何文字。
+function addFallbackHighlights(unit, translated) {
+  const value = String(translated || '');
+  if (!HIGHLIGHTED_KINDS.has(unit.kind)) return value;
+  const budget = highlightBudget(value);
+  const existing = highlightPhrases(value);
+  let missing = budget.min - existing.length;
+  if (missing <= 0) return value;
+  let highlighted = existing.reduce((sum, text) => sum + text.length, 0);
+  const maxHighlighted = Math.floor(budget.visible * MAX_HIGHLIGHT_RATIO);
+  return value
+    .split(/(?<=[。！？；;])/)
+    .map((sentence) => {
+      if (missing <= 0) return sentence;
+      const clause = /^(\s*)([^*\n，,、：:。！？；;]{4,24})(?=[，,、：:。！？；;])/.exec(sentence);
+      const phrase = clause?.[2]?.trim();
+      if (!phrase || /⟦ZEN_|https?:\/\//i.test(phrase)) return sentence;
+      if (highlighted + phrase.length > maxHighlighted) return sentence;
+      missing -= 1;
+      highlighted += phrase.length;
+      return `${clause[1]}**${phrase}**${sentence.slice(clause[0].length)}`;
+    })
+    .join('');
+}
+
+// 只做不改动文字的机械修正：拆掉多余、过长或不成对的加粗，避免整篇任务因排版细节失败。
+function normalizeHighlights(unit, translated) {
+  let value = String(translated || '');
+  if (!value.includes('**')) return value;
+  const markers = value.match(/\*\*/g) || [];
+  if (markers.length !== highlightPhrases(value).length * 2) return value.replaceAll('**', '');
+  if (!HIGHLIGHTED_KINDS.has(unit.kind)) return value.replaceAll('**', '');
+  value = value.replace(
+    /\*\*([^*\n]+)\*\*/g,
+    (match, text) => (text.trim().length >= 2 && text.trim().length <= MAX_HIGHLIGHT_LENGTH ? match : text),
+  );
+  const { max } = highlightBudget(value);
+  let kept = 0;
+  return value.replace(/\*\*([^*\n]+)\*\*/g, (match, text) => {
+    kept += 1;
+    return kept <= max ? match : text;
+  });
 }
 
 function protectInvariantText(value) {
