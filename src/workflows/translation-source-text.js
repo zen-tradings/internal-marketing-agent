@@ -730,6 +730,8 @@ export async function translateDocument({
     let translations = await requestTranslationBatch({
       batch, source, model, writer, fetchFn, completeArticle, timeoutMs,
     });
+    const originalTranslations = translations;
+    let repairedTranslations = [];
     let invalid = validateBatchTranslations(batch, translations);
     if (invalid.length) {
       const repaired = [];
@@ -750,9 +752,16 @@ export async function translateDocument({
           repair: true,
         }));
       }
+      repairedTranslations = repaired;
       const repairedById = new Map(repaired.map((item) => [item.id, item]));
       const originalById = new Map(translations.map((item) => [item.id, item]));
-      translations = batch.map((unit) => repairedById.get(unit.id) || originalById.get(unit.id)).filter(Boolean);
+      translations = batch.map((unit) => {
+        const repairedItem = repairedById.get(unit.id);
+        const originalItem = originalById.get(unit.id);
+        if (isHardValidTranslation(unit, repairedItem)) return repairedItem;
+        if (isHardValidTranslation(unit, originalItem)) return originalItem;
+        return repairedItem || originalItem;
+      }).filter(Boolean);
       // 高亮是公众号样式增强，不能在忠实译文已经完整时反向阻断整篇任务。
       // 修复请求后只保留结构、数字/链接和漏译等内容级硬门禁；不安全的
       // Markdown 高亮会在落 checkpoint 前降级为纯文本。
@@ -763,6 +772,8 @@ export async function translateDocument({
         failedAt: new Date().toISOString(),
         units: invalid.map((unit) => ({ id: unit.id, source: unit.text })),
         received: translations.map((item) => ({ id: item.id, text: item.text })),
+        originalReceived: originalTranslations.map((item) => ({ id: item.id, text: item.text })),
+        repairReceived: repairedTranslations.map((item) => ({ id: item.id, text: item.text })),
       });
       throw new Error(`结构化翻译校验失败:${invalid.map((unit) => unit.id).join(',')}`);
     }
@@ -1374,6 +1385,11 @@ function validateBatchTranslations(batch, translations, { checkHighlights = true
       || isClearlyUntranslated(unit.text, text)
       || (checkHighlights && !hasValidSelectiveHighlights(unit, text));
   });
+}
+
+function isHardValidTranslation(unit, item) {
+  if (!item || item.id !== unit.id) return false;
+  return validateBatchTranslations([unit], [item], { checkHighlights: false }).length === 0;
 }
 
 function hasValidSelectiveHighlights(unit, translated) {

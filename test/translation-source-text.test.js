@@ -544,6 +544,49 @@ test('长文正常翻译批次最多 24 个单元，尽早写入分块 checkpoin
   assert.equal(checkpoint.translations.length, 26);
 });
 
+test('样式修复稿破坏数字时回退到内容完整的原始译稿', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'pdf',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a.pdf',
+    title: 'Returns',
+    author: '',
+    sha256: 'prefer-hard-valid-original',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: 'The reported portfolio return was 100% and remained stable across the complete sample.',
+    }],
+  };
+  let calls = 0;
+  const translated = await translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      calls += 1;
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title'
+            ? '回报'
+            : calls === 1
+              ? '**报告的投资组合回报率为 100%，并在整个完整样本期间持续保持稳定且没有明显变化。**'
+              : '报告的投资组合回报率为 99%，并在整个完整样本期间持续保持稳定且没有明显变化。',
+        })),
+      });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.match(renderTranslatedDocument(translated), /100%/);
+  assert.doesNotMatch(renderTranslatedDocument(translated), /99%/);
+});
+
 test('完整性门禁拒绝额外添加或遗漏图片、表格和公式', () => {
   const tablePath = path.join(tempDir(), 'table.png');
   fs.writeFileSync(tablePath, Buffer.from([1]));
