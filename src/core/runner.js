@@ -134,12 +134,21 @@ export async function runWriter({
       trace.translation = {
         manifest: result.manifest,
         completeness: result.completeness,
+        warnings: result.warnings,
       };
       writeResearchTrace(researchTracePath, trace);
       if (!hasTitleFrontmatter(result.article)) throw new Error('直译输出缺少 title frontmatter');
       throwIfTaskCancelled(signal);
       fs.writeFileSync(articlePath, result.article);
-      return { ok: true, articlePath, model, researchTracePath, sources: [result.sourceUrl], completeness: result.completeness };
+      return {
+        ok: true,
+        articlePath,
+        model,
+        researchTracePath,
+        sources: [result.sourceUrl],
+        completeness: result.completeness,
+        warnings: result.warnings,
+      };
     }
 
     const preserveSpecializedLegalV1 = LEGAL_TASK_RE.test(String(input || ''))

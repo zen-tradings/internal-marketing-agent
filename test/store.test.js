@@ -67,13 +67,17 @@ test('recoverRunningWorkflow 只自动恢复指定工作流的运行中任务', 
   assert.equal(s.getRun('wechat').status, 'interrupted');
 });
 
-test('requeueRecoverableTranslation 可恢复中断、历史出口、发布或网络生成失败的直译', () => {
+test('requeueRecoverableTranslation 可恢复中断、历史出口、发布、网络或结构化校验失败的直译', () => {
   const s = openStore(':memory:');
-  for (const id of ['egress', 'publish', 'generate', 'content']) {
+  for (const id of ['egress', 'publish', 'generate', 'validation', 'content']) {
     s.createRun({ id, workflowId: 'translate', source: 'slack', input: '直译', notify: {} });
     s.setStatus(id, 'failed', {
-      stage: ['generate', 'content'].includes(id) ? 'generate' : id,
-      error: id === 'generate' ? '网络请求失败:fetch failed (ECONNRESET)' : id,
+      stage: ['generate', 'validation', 'content'].includes(id) ? 'generate' : id,
+      error: id === 'generate'
+        ? '网络请求失败:fetch failed (ECONNRESET)'
+        : id === 'validation'
+          ? '结构化翻译校验失败:b000067'
+          : id,
       finishedAt: 2,
     });
   }
@@ -83,6 +87,8 @@ test('requeueRecoverableTranslation 可恢复中断、历史出口、发布或�
   assert.equal(s.getRun('publish').status, 'queued');
   assert.equal(s.requeueRecoverableTranslation('generate'), 1);
   assert.equal(s.getRun('generate').status, 'queued');
+  assert.equal(s.requeueRecoverableTranslation('validation'), 1);
+  assert.equal(s.getRun('validation').status, 'queued');
   assert.equal(s.requeueRecoverableTranslation('content'), 0);
   assert.equal(s.getRun('content').status, 'failed');
 });

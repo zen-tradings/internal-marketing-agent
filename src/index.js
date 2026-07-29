@@ -128,11 +128,14 @@ export function makeHandler(deps) {
         if (!res.ok) { const err = new Error(res.stderr); err.stage = 'generate'; throw err; }
         throwIfTaskCancelled(signal);
         if (Array.isArray(res.warnings) && res.warnings.length) {
+          const warningHeading = runtimeWorkflow.mode === 'translation'
+            ? `直译校验放行 ${res.warnings.length} 项低置信度差异，建议在草稿中人工抽查:`
+            : `事实审计已自动处理 ${res.warnings.length} 项:`;
           await notifyBestEffort(
             deps.notifier,
             'warn',
             notify,
-            `事实审计已自动处理 ${res.warnings.length} 项:\n${res.warnings.slice(0, 6).map((item) => `• ${item}`).join('\n')}`,
+            `${warningHeading}\n${res.warnings.slice(0, 6).map((item) => `• ${item}`).join('\n')}`,
           );
         }
 

@@ -53,6 +53,7 @@ export async function generateStrictTranslation({
         parserAttempts: result.manifest.parserAttempts,
       },
       completeness: result.completeness,
+      validationWarnings: result.warnings,
     };
   }
   return result;

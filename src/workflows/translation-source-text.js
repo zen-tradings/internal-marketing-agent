@@ -145,6 +145,7 @@ export async function generateStructuredTranslation({
       scope: source.scope,
     },
     completeness,
+    warnings: completeness.warnings,
   };
 }
 
@@ -735,14 +736,25 @@ export async function translateDocument({
     .update(JSON.stringify({ version: CHECKPOINT_VERSION, source: source.sha256, model, units }))
     .digest('hex');
   const completed = new Map();
+  const validationWarnings = new Map();
   if (resumeFromCheckpoint) {
     try {
       const saved = JSON.parse(fs.readFileSync(checkpointPath, 'utf8'));
       if (saved.key === checkpointKey) {
         for (const item of saved.translations || []) completed.set(item.id, item.text);
+        for (const item of saved.warnings || []) {
+          if (item?.id && Array.isArray(item.messages)) validationWarnings.set(item.id, item.messages);
+        }
       }
     } catch {}
   }
+  const writeCheckpoint = () => writeJsonAtomic(checkpointPath, {
+    version: CHECKPOINT_VERSION,
+    key: checkpointKey,
+    translations: [...completed].map(([id, text]) => ({ id, text })),
+    warnings: [...validationWarnings].map(([id, messages]) => ({ id, messages })),
+    updatedAt: new Date().toISOString(),
+  });
 
   const batches = batchUnits(
     units.filter((unit) => !completed.has(unit.id)),
@@ -765,11 +777,18 @@ export async function translateDocument({
     });
     const originalTranslations = translations;
     let repairedTranslations = [];
-    let invalid = validateBatchTranslations(batch, translations);
-    if (invalid.length) {
+    let assessments = assessBatchTranslations(batch, translations);
+    let repairTargets = assessments
+      .filter((item) => item.hardErrors.length || item.repairableIssues.length)
+      .map((item) => ({
+        ...item.unit,
+        currentTranslation: item.text || '',
+        issues: [...item.hardErrors, ...item.repairableIssues],
+      }));
+    if (repairTargets.length) {
       const repaired = [];
       for (const repairBatch of batchUnits(
-        invalid,
+        repairTargets,
         REPAIR_BATCH_MAX_CHARS,
         REPAIR_BATCH_MAX_ITEMS,
       )) {
@@ -791,43 +810,55 @@ export async function translateDocument({
       translations = batch.map((unit) => {
         const repairedItem = repairedById.get(unit.id);
         const originalItem = originalById.get(unit.id);
-        if (isHardValidTranslation(unit, repairedItem)) return repairedItem;
-        if (isHardValidTranslation(unit, originalItem)) return originalItem;
-        return repairedItem || originalItem;
+        return preferredTranslation(unit, originalItem, repairedItem);
       }).filter(Boolean);
-      // 高亮是公众号样式增强，不能在忠实译文已经完整时反向阻断整篇任务。
-      // 修复请求后只保留结构、数字/链接和漏译等内容级硬门禁；不安全的
-      // Markdown 高亮会在落 checkpoint 前降级为纯文本。
-      invalid = validateBatchTranslations(batch, translations, { checkHighlights: false });
+      assessments = assessBatchTranslations(batch, translations, { afterRepair: true });
     }
+
+    translations = normalizeBatchHighlights(batch, translations);
+    assessments = assessBatchTranslations(batch, translations, { afterRepair: true });
+    const acceptedIds = new Set();
+    for (const assessment of assessments) {
+      if (assessment.hardErrors.length) continue;
+      const text = String(assessment.text || '').trim();
+      if (!text) continue;
+      completed.set(assessment.unit.id, text);
+      acceptedIds.add(assessment.unit.id);
+      if (assessment.warnings.length) {
+        validationWarnings.set(
+          assessment.unit.id,
+          assessment.warnings.map((warning) => `${assessment.unit.id}: ${warning}`),
+        );
+      } else {
+        validationWarnings.delete(assessment.unit.id);
+      }
+      // 每个通过硬门禁的文本单元立即落盘。即使同批另一个单元失败，
+      // 已完成进度也会在续跑时保留。
+      writeCheckpoint();
+    }
+
+    const invalid = assessments.filter((item) => item.hardErrors.length);
     if (invalid.length) {
       const receivedById = new Map(translations.map((item) => [item.id, item.text]));
-      const validation = invalid.map((unit) => ({
-        id: unit.id,
-        reasons: translationValidationReasons(unit, receivedById.get(unit.id), {
-          checkHighlights: false,
-        }),
+      const validation = invalid.map((item) => ({
+        id: item.unit.id,
+        reasons: item.hardErrors,
+        warnings: item.warnings,
       }));
       writeJsonAtomic(path.join(workDir, 'translation-invalid.json'), {
         failedAt: new Date().toISOString(),
-        units: invalid.map((unit) => ({ id: unit.id, source: unit.text })),
+        units: invalid.map((item) => ({ id: item.unit.id, source: item.unit.text })),
         validation,
         received: translations.map((item) => ({ id: item.id, text: item.text })),
         originalReceived: originalTranslations.map((item) => ({ id: item.id, text: item.text })),
         repairReceived: repairedTranslations.map((item) => ({ id: item.id, text: item.text })),
+        checkpointed: [...acceptedIds],
       });
       throw new Error(`结构化翻译校验失败:${validation
         .map((item) => `${item.id}(${item.reasons.join('+')})`)
         .join(',')}`);
     }
-    translations = normalizeBatchHighlights(batch, translations);
-    for (const item of translations) completed.set(item.id, item.text.trim());
-    writeJsonAtomic(checkpointPath, {
-      version: CHECKPOINT_VERSION,
-      key: checkpointKey,
-      translations: [...completed].map(([id, text]) => ({ id, text })),
-      updatedAt: new Date().toISOString(),
-    });
+    writeCheckpoint();
     await report(onProgress, {
       stage: 'translation',
       message: `结构化翻译进度 ${completed.size}/${units.length}`,
@@ -837,7 +868,9 @@ export async function translateDocument({
   }
   throwIfTaskCancelled(signal);
   if (completed.size !== units.length) throw new Error(`结构化翻译缺块:${completed.size}/${units.length}`);
-  return applyTranslations(source, completed);
+  const translated = applyTranslations(source, completed);
+  translated.validationWarnings = [...validationWarnings.values()].flat();
+  return translated;
 }
 
 export function renderTranslatedDocument(document) {
@@ -891,6 +924,7 @@ export function renderTranslatedDocument(document) {
 
 export function validateTranslationArtifact({ source, translated, article }) {
   const errors = [];
+  const warnings = [...new Set(translated.validationWarnings || [])];
   const sourceIds = source.blocks.map((block) => block.id);
   const translatedIds = translated.blocks.map((block) => block.id);
   if (sourceIds.join('|') !== translatedIds.join('|')) errors.push('结构块 ID 或顺序发生变化');
@@ -898,9 +932,9 @@ export function validateTranslationArtifact({ source, translated, article }) {
   if (translated.blocks.some((block) => !DOCUMENT_BLOCK_TYPES.has(block.type))) errors.push('译文含未知结构块');
   for (const unit of translationUnits(source)) {
     const target = translatedUnitText(translated, unit.id);
-    if (!target?.trim()) errors.push(`译文为空:${unit.id}`);
-    else if (!sameInvariantTokens(unit.text, target)) errors.push(`数字或链接不一致:${unit.id}`);
-    else if (isClearlyUntranslated(unit.text, target)) errors.push(`疑似漏译英文正文:${unit.id}`);
+    const assessment = assessTranslationUnit(unit, target, { afterRepair: true });
+    errors.push(...assessment.hardErrors.map((reason) => `${reason}:${unit.id}`));
+    warnings.push(...assessment.warnings.map((reason) => `${unit.id}: ${reason}`));
   }
   const value = String(article || '');
   if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(value)) errors.push('译文含控制字符');
@@ -932,6 +966,7 @@ export function validateTranslationArtifact({ source, translated, article }) {
   }
   return {
     errors,
+    warnings: [...new Set(warnings)],
     blocks: source.blocks.length,
     headings: source.blocks.filter((block) => block.type === 'heading').length,
     paragraphs: source.blocks.filter((block) => ['paragraph', 'quote', 'list_item'].includes(block.type)).length,
@@ -1389,24 +1424,34 @@ async function requestTranslationBatch({
     if (!repair) return unit;
     const protectedText = protectInvariantText(unit.text);
     protections.set(unit.id, protectedText.tokens);
-    return { ...unit, text: protectedText.text };
+    return {
+      id: unit.id,
+      kind: unit.kind,
+      text: protectedText.text,
+      currentTranslation: String(unit.currentTranslation || ''),
+      issues: Array.isArray(unit.issues) ? unit.issues : [],
+    };
   });
   const request = {
-    prompt: `将下面 JSON 中每个 text 完整、忠实、逐句翻译为简体中文。
+    prompt: `${repair
+      ? '只修复下面 JSON 中 currentTranslation 明确列出的问题；以 text 原文为准，返回完整的修复后简体中文译文。'
+      : '将下面 JSON 中每个 text 完整、忠实、逐句翻译为简体中文。'}
 
 硬性规则:
 - 只返回合法 JSON，格式严格为 {"translations":[{"id":"原 ID","text":"完整译文"}]}。
 - translations 必须与输入数量相同，ID 必须逐字相同且不得重复、遗漏或新增。
 - 按 kind 翻译标题、正文、标题层级、图注和表题，不总结、不改写、不删减。表格正文直接保留原文截图，不进入翻译输入。
 - 不添加输入中不存在的图、表、公式、引用、分析或内容概括。
-- 不改变数字、单位、Ticker 和正文中原有的 URL。
+- 不改变任何数值含义、Ticker、型号、占位符和正文中原有的 URL。数字词可译成等价阿拉伯数字，K/M/B/T、千分位、百分比、万/亿等可使用等价中文写法，但严禁把数值改成不等价值。
 - 金融语境中的 pre-fee 必须译为“费前”或“费用前”，不得译为“税前”；after-fee 或 net of fees 译为“费后”或“扣除费用后”。
 - 所有 ⟦ZEN_INLINE_NNN⟧ 都是公式、链接或引用占位符，必须原样、原位置、各保留一次。
 - 专有名词首次出现可保留英文，普通叙述必须翻译成中文。
 - paragraph、quote、list_item 必须提高关键词和核心观点高亮密度：正文每约 200 个汉字至少 1 处，目标 2–3 处；优先高亮关键术语、核心机制、中心句或开头关键句。
 - 每处使用 Markdown **加粗**，可包住 2–64 个字符的关键短语或短句，不能把整段全部加粗，也不能改动原意。
 - title、heading、figure_caption、table_caption 禁止添加 **加粗**；除正文高亮外不得添加其它 Markdown 格式。
-${repair ? '- 输入中的 ⟦ZEN_KEEP_N⟧ 是不可翻译占位符，必须原样、原位置、各保留一次。' : ''}
+${repair ? `- 输入中的 ⟦ZEN_KEEP_N⟧ 是不可翻译占位符，必须原样、原位置、各保留一次。
+- 每个单元都包含 currentTranslation 和 issues。只修复 issues 指出的块内问题，不重新发挥、总结或扩写。
+- 即使 currentTranslation 为空，也必须根据 text 返回该 ID 的完整译文。` : ''}
 
 文档标题:${source.title}
 来源:${source.sourceUrl}
@@ -1417,7 +1462,7 @@ ${JSON.stringify({ units })}`,
     writer: { ...writer, temperature: 0 },
     fetchFn,
     timeoutMs,
-    systemPrompt: '你是严谨的结构化文档翻译器。忠实翻译输入的标题、正文及图表标题；按要求在正文关键术语和核心观点上稳定添加 Markdown 高亮，绝不改动占位符、数字、链接或结构，只输出合法 JSON。',
+    systemPrompt: '你是严谨的结构化文档翻译器。忠实翻译输入的标题、正文及图表标题；按要求在正文关键术语和核心观点上稳定添加 Markdown 高亮。数字可采用等价中文格式，但数值含义、占位符、链接、型号和结构绝不能改变。只输出合法 JSON。',
   };
   const responseFormat = {
     type: 'json_schema',
@@ -1486,42 +1531,65 @@ function hasExpectedTranslationSet(batch, translations) {
   return received.size === expected.size && [...expected].every((id) => received.has(id));
 }
 
-function validateBatchTranslations(batch, translations, { checkHighlights = true } = {}) {
+function assessBatchTranslations(batch, translations, { afterRepair = false } = {}) {
   const byId = new Map();
-  for (const item of translations) {
-    if (byId.has(item.id)) return batch;
-    byId.set(item.id, item.text);
+  const duplicateIds = new Set();
+  for (const item of translations || []) {
+    if (!item?.id) continue;
+    if (byId.has(item.id)) duplicateIds.add(item.id);
+    else byId.set(item.id, item.text);
   }
-  return batch.filter((unit) => translationValidationReasons(
-    unit,
-    byId.get(unit.id),
-    { checkHighlights },
-  ).length > 0);
+  return batch.map((unit) => {
+    const assessment = assessTranslationUnit(unit, byId.get(unit.id), { afterRepair });
+    if (duplicateIds.has(unit.id)) {
+      assessment.hardErrors.unshift('重复文本块');
+      assessment.repairableIssues.unshift('重复文本块');
+    }
+    return { unit, text: byId.get(unit.id), ...assessment };
+  });
 }
 
-function translationValidationReasons(unit, text, { checkHighlights = true } = {}) {
-  const reasons = [];
-  if (!text?.trim()) return ['缺失译文'];
-  if (!sameInvariantTokens(unit.text, text)) reasons.push('数字或链接不等价');
-  if (isClearlyUntranslated(unit.text, text)) reasons.push('疑似未完成翻译');
-  if (checkHighlights && !hasValidSelectiveHighlights(unit, text)) reasons.push('高亮格式');
-  return reasons;
+export function assessTranslationUnit(unit, text, { afterRepair = false } = {}) {
+  const hardErrors = [];
+  const repairableIssues = [];
+  const warnings = [];
+  if (!text?.trim()) {
+    hardErrors.push('缺失译文');
+    repairableIssues.push('缺失译文');
+    return { hardErrors, repairableIssues, warnings };
+  }
+
+  const exactMismatch = compareExactInvariantTokens(unit.text, text);
+  if (exactMismatch) {
+    hardErrors.push(exactMismatch);
+    repairableIssues.push(exactMismatch);
+  }
+
+  const numeric = assessNumericEquivalence(unit.text, text);
+  hardErrors.push(...numeric.hardErrors);
+  warnings.push(...numeric.warnings);
+  if (!afterRepair) repairableIssues.push(...numeric.hardErrors, ...numeric.warnings);
+
+  if (isClearlyUntranslated(unit.text, text)) {
+    hardErrors.push('疑似未完成翻译');
+    repairableIssues.push('疑似未完成翻译');
+  }
+  return {
+    hardErrors: [...new Set(hardErrors)],
+    repairableIssues: [...new Set(repairableIssues)],
+    warnings: [...new Set(warnings)],
+  };
 }
 
-function isHardValidTranslation(unit, item) {
-  if (!item || item.id !== unit.id) return false;
-  return validateBatchTranslations([unit], [item], { checkHighlights: false }).length === 0;
-}
-
-function hasValidSelectiveHighlights(unit, translated) {
-  if (!hasSafeSelectiveHighlights(unit, translated)) return false;
-  const value = String(translated || '');
-  const highlights = [...value.matchAll(/\*\*([^*\n]+)\*\*/g)].map((match) => match[1].trim());
-  const allowed = ['paragraph', 'quote', 'list_item'].includes(unit.kind);
-  if (!allowed) return true;
-  const visibleCharacters = Math.max(1, value.replace(/\*\*/g, '').length);
-  const minHighlights = visibleCharacters < 30 ? 0 : Math.max(1, Math.ceil(visibleCharacters / 120));
-  return highlights.length >= minHighlights;
+function preferredTranslation(unit, originalItem, repairedItem) {
+  const score = (item) => {
+    if (!item || item.id !== unit.id || !item.text?.trim()) return Number.POSITIVE_INFINITY;
+    const assessment = assessTranslationUnit(unit, item.text, { afterRepair: true });
+    return assessment.hardErrors.length * 100 + assessment.warnings.length;
+  };
+  return score(repairedItem) < score(originalItem)
+    ? repairedItem
+    : (originalItem || repairedItem);
 }
 
 function hasSafeSelectiveHighlights(unit, translated) {
@@ -1630,36 +1698,87 @@ function batchUnits(units, maxChars, maxItems) {
   return batches;
 }
 
-function sameInvariantTokens(source, translated) {
-  const tokens = (value) => [
-    ...(String(value).match(/⟦ZEN_INLINE_\d{3}⟧/g) || []),
-    ...(String(value).match(/https?:\/\/[^\s)\]}>"']+/gi) || []),
-    ...(String(value).match(/\$[A-Z]{1,6}\b|\b(?:NASDAQ|NYSE|AMEX|OTC)\s*:\s*[A-Z]{1,6}\b/g) || []),
+function exactInvariantTokens(value) {
+  const text = String(value || '');
+  const tokens = [
+    ...(text.match(/⟦ZEN_INLINE_\d{3}⟧/g) || []),
+    ...(text.match(/https?:\/\/[^\s)\]}>"']+/gi) || []),
+    ...(text.match(/\$[A-Z]{1,6}\b|\b(?:NASDAQ|NYSE|AMEX|OTC)\s*:\s*[A-Z]{1,6}\b/g) || []),
+    ...(text.match(/\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+\b/g) || []),
+    ...(text.match(/\b(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z][A-Za-z0-9]{2,}\b/g) || []),
+  ];
+  return tokens.sort();
+}
+
+function compareExactInvariantTokens(source, translated) {
+  const sourceTokens = exactInvariantTokens(source);
+  const targetTokens = exactInvariantTokens(translated);
+  return JSON.stringify(sourceTokens) === JSON.stringify(targetTokens)
+    ? null
+    : 'URL、占位符、Ticker 或型号标识不一致';
+}
+
+function maskExactInvariantTokens(value) {
+  let text = String(value || '');
+  for (const token of exactInvariantTokens(text).sort((a, b) => b.length - a.length)) {
+    text = text.replaceAll(token, ' '.repeat(token.length));
+  }
+  return text;
+}
+
+function explicitNumericSignature(value) {
+  const masked = maskExactInvariantTokens(value);
+  return [
+    ...invariantNumericSignature(masked, {
+      expandShorthand: true,
+      normalizePercentWords: true,
+    }),
+    ...chineseWrittenNumbers(masked),
   ].sort();
-  if (JSON.stringify(tokens(source)) !== JSON.stringify(tokens(translated))) return false;
-  const semanticNumbers = [
-    ...englishMonthNumbers(source),
-    ...englishIntegerNumbers(source),
-  ];
-  const variants = [
-    {},
-    { expandShorthand: true },
-    { normalizePercentWords: true },
-    { expandShorthand: true, normalizePercentWords: true },
-  ];
-  return variants.some((options) => {
-    const candidateSourceNumbers = invariantNumericSignature(source, options);
-    const candidateTranslatedNumbers = invariantNumericSignature(translated, options);
-    if (JSON.stringify(candidateSourceNumbers) === JSON.stringify(candidateTranslatedNumbers)) {
-      return true;
+}
+
+function assessNumericEquivalence(source, translated) {
+  const sourceNumbers = explicitNumericSignature(source);
+  const targetNumbers = explicitNumericSignature(translated);
+  if (JSON.stringify(sourceNumbers) === JSON.stringify(targetNumbers)) {
+    return { hardErrors: [], warnings: [] };
+  }
+
+  const sourceCounts = countTokens(sourceNumbers);
+  const targetCounts = countTokens(targetNumbers);
+  const allowanceCounts = countTokens([
+    ...englishMonthNumbers(maskExactInvariantTokens(source)),
+    ...englishNumberPhraseNumbers(maskExactInvariantTokens(source)),
+  ]);
+  const missing = [];
+  const unexplained = [];
+  for (const [token, count] of sourceCounts) {
+    const missingCount = count - (targetCounts.get(token) || 0);
+    if (missingCount > 0) missing.push(`${token}×${missingCount}`);
+  }
+  for (const [token, count] of targetCounts) {
+    const extra = count - (sourceCounts.get(token) || 0);
+    if (extra > (allowanceCounts.get(token) || 0)) {
+      unexplained.push(`${token}×${extra - (allowanceCounts.get(token) || 0)}`);
     }
-    return semanticNumbers.length > 0
-      && isAllowedNumericExpansion(
-        candidateSourceNumbers,
-        candidateTranslatedNumbers,
-        semanticNumbers,
-      );
-  });
+  }
+  if (missing.length) {
+    return {
+      hardErrors: [`数字或链接不等价（明确阿拉伯数字缺失或改变：${missing.join('、')}）`],
+      warnings: [],
+    };
+  }
+  if (!unexplained.length) return { hardErrors: [], warnings: [] };
+  if (containsNumericLanguage(source)) {
+    return {
+      hardErrors: [],
+      warnings: [`低置信度数字格式差异（请人工抽查：${unexplained.join('、')}）`],
+    };
+  }
+  return {
+    hardErrors: [`数字或链接不等价（译文新增不等值数字：${unexplained.join('、')}）`],
+    warnings: [],
+  };
 }
 
 function invariantNumbers(value) {
@@ -1768,20 +1887,6 @@ function normalizeMagnitudeAmount(value, multiplier) {
   return `${sign < 0n ? '-' : ''}${whole}.${decimals}`;
 }
 
-function isAllowedNumericExpansion(sourceNumbers, translatedNumbers, semanticNumbers) {
-  const sourceCounts = countTokens(sourceNumbers);
-  const translatedCounts = countTokens(translatedNumbers);
-  const allowedCounts = countTokens(semanticNumbers);
-  for (const [token, count] of sourceCounts) {
-    if ((translatedCounts.get(token) || 0) < count) return false;
-  }
-  for (const [token, count] of translatedCounts) {
-    const extra = count - (sourceCounts.get(token) || 0);
-    if (extra > (allowedCounts.get(token) || 0)) return false;
-  }
-  return true;
-}
-
 function countTokens(tokens) {
   const counts = new Map();
   for (const token of tokens) counts.set(token, (counts.get(token) || 0) + 1);
@@ -1815,18 +1920,148 @@ function englishMonthNumbers(value) {
     .map((number) => `NUM:${number}`);
 }
 
-function englishIntegerNumbers(value) {
-  const numbers = {
-    one: '1', two: '2', three: '3', four: '4', five: '5',
-    six: '6', seven: '7', eight: '8', nine: '9', ten: '10',
-  };
-  const matches = String(value).matchAll(
-    /\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/gi,
-  );
+function englishNumberPhraseNumbers(value) {
+  const word = [
+    'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
+    'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen',
+    'seventeen', 'eighteen', 'nineteen', 'twenty', 'thirty', 'forty', 'fifty',
+    'sixty', 'seventy', 'eighty', 'ninety', 'hundred', 'thousand', 'million',
+    'billion', 'trillion', 'and', 'first', 'second', 'third', 'fourth', 'fifth',
+    'sixth', 'seventh', 'eighth', 'ninth', 'tenth', 'eleventh', 'twelfth',
+    'thirteenth', 'fourteenth', 'fifteenth', 'sixteenth', 'seventeenth',
+    'eighteenth', 'nineteenth', 'twentieth', 'thirtieth', 'fortieth', 'fiftieth',
+    'sixtieth', 'seventieth', 'eightieth', 'ninetieth', 'single', 'double',
+    'triple', 'dozen',
+  ].join('|');
+  const matches = String(value).matchAll(new RegExp(`\\b(?:${word})(?:[\\s-]+(?:${word}))*\\b`, 'gi'));
   return [...matches]
-    .map((match) => numbers[match[1].toLowerCase()])
-    .filter(Boolean)
+    .flatMap((match) => {
+      const phrase = match[0];
+      if (/\band\b/i.test(phrase) && !/\b(?:hundred|thousand|million|billion|trillion)\b/i.test(phrase)) {
+        return phrase.split(/\band\b/i).map((part) => parseEnglishNumberPhrase(part.trim()));
+      }
+      return [parseEnglishNumberPhrase(phrase)];
+    })
+    .filter((number) => number !== null)
     .map((number) => `NUM:${number}`);
+}
+
+function parseEnglishNumberPhrase(value) {
+  const small = {
+    zero: 0n, one: 1n, two: 2n, three: 3n, four: 4n, five: 5n,
+    six: 6n, seven: 7n, eight: 8n, nine: 9n, ten: 10n, eleven: 11n,
+    twelve: 12n, thirteen: 13n, fourteen: 14n, fifteen: 15n, sixteen: 16n,
+    seventeen: 17n, eighteen: 18n, nineteen: 19n, twenty: 20n, thirty: 30n,
+    forty: 40n, fifty: 50n, sixty: 60n, seventy: 70n, eighty: 80n, ninety: 90n,
+    first: 1n, second: 2n, third: 3n, fourth: 4n, fifth: 5n, sixth: 6n,
+    seventh: 7n, eighth: 8n, ninth: 9n, tenth: 10n, eleventh: 11n,
+    twelfth: 12n, thirteenth: 13n, fourteenth: 14n, fifteenth: 15n,
+    sixteenth: 16n, seventeenth: 17n, eighteenth: 18n, nineteenth: 19n,
+    twentieth: 20n, thirtieth: 30n, fortieth: 40n, fiftieth: 50n,
+    sixtieth: 60n, seventieth: 70n, eightieth: 80n, ninetieth: 90n,
+    single: 1n, double: 2n, triple: 3n, dozen: 12n,
+  };
+  const scales = {
+    hundred: 100n,
+    thousand: 1_000n,
+    million: 1_000_000n,
+    billion: 1_000_000_000n,
+    trillion: 1_000_000_000_000n,
+  };
+  const words = String(value).toLowerCase().split(/[\s-]+/).filter((item) => item !== 'and');
+  if (!words.length || !words.some((item) => Object.hasOwn(small, item) || Object.hasOwn(scales, item))) {
+    return null;
+  }
+  let total = 0n;
+  let current = 0n;
+  for (const item of words) {
+    if (Object.hasOwn(small, item)) {
+      current += small[item];
+      continue;
+    }
+    const scale = scales[item];
+    if (!scale) return null;
+    if (scale === 100n) {
+      current = (current || 1n) * scale;
+    } else {
+      total += (current || 1n) * scale;
+      current = 0n;
+    }
+  }
+  return `${total + current}`;
+}
+
+function chineseWrittenNumbers(value) {
+  let text = String(value || '');
+  const tokens = [];
+  text = text.replace(/百分之([负零〇一二两三四五六七八九十百千万亿兆点]+)/g, (match, amount) => {
+    const parsed = parseChineseNumber(amount);
+    if (parsed !== null) tokens.push(`PCT:${parsed}`);
+    return ' '.repeat(match.length);
+  });
+  for (const match of text.matchAll(/[负零〇一二两三四五六七八九十百千万亿兆点]+/g)) {
+    const raw = match[0];
+    const before = text[match.index - 1] || '';
+    const after = text[(match.index || 0) + raw.length] || '';
+    const prefixText = text.slice(0, match.index).trimEnd();
+    const prefix = prefixText.at(-1) || '';
+    if (/[0-9.]$/.test(prefix) && /^[十百千万亿兆]/.test(raw)) continue;
+    const standalone = raw.length === 1
+      && /(?:第|为|等于|设为|共|约|近|达|至|到)$/.test(prefixText)
+      && !/[零〇一二两三四五六七八九]/.test(before)
+      && !/[零〇一二两三四五六七八九]/.test(after);
+    if (raw.length < 2 && !/[十百千万亿兆点]/.test(raw) && !standalone) continue;
+    const parsed = parseChineseNumber(raw);
+    if (parsed !== null) tokens.push(`NUM:${parsed}`);
+  }
+  return tokens;
+}
+
+function parseChineseNumber(value) {
+  const digits = { 零: 0n, 〇: 0n, 一: 1n, 二: 2n, 两: 2n, 三: 3n, 四: 4n, 五: 5n, 六: 6n, 七: 7n, 八: 8n, 九: 9n };
+  const raw = String(value);
+  const negative = raw.startsWith('负');
+  const unsigned = (negative ? raw.slice(1) : raw).replaceAll('万亿', '兆');
+  if (!unsigned) return null;
+  if (unsigned.includes('点')) {
+    const [wholeRaw, fractionRaw, ...rest] = unsigned.split('点');
+    if (rest.length || !fractionRaw || [...fractionRaw].some((char) => !Object.hasOwn(digits, char))) return null;
+    const whole = parseChineseNumber(wholeRaw || '零');
+    if (whole === null) return null;
+    const decimal = `${whole}.${[...fractionRaw].map((char) => digits[char]).join('')}`;
+    return negative ? `-${decimal}` : decimal;
+  }
+  if ([...unsigned].every((char) => Object.hasOwn(digits, char))) {
+    const number = [...unsigned].map((char) => digits[char]).join('').replace(/^0+(?=\d)/, '');
+    return `${negative ? '-' : ''}${number || '0'}`;
+  }
+  const units = { 十: 10n, 百: 100n, 千: 1_000n, 万: 10_000n, 亿: 100_000_000n, 兆: 1_000_000_000_000n };
+  let total = 0n;
+  let section = 0n;
+  let number = 0n;
+  for (const char of unsigned) {
+    if (Object.hasOwn(digits, char)) {
+      number = digits[char];
+      continue;
+    }
+    const unit = units[char];
+    if (!unit) return null;
+    if (unit < 10_000n) {
+      section += (number || 1n) * unit;
+    } else {
+      section += number;
+      total += (section || 1n) * unit;
+      section = 0n;
+    }
+    number = 0n;
+  }
+  const parsed = total + section + number;
+  return `${negative ? -parsed : parsed}`;
+}
+
+function containsNumericLanguage(value) {
+  return /\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|trillion|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|single|double|triple|dozen|percent|per\s+cent|january|february|march|april|may|june|july|august|september|october|november|december)\b/i
+    .test(String(value || ''));
 }
 
 function createSourceDocument({

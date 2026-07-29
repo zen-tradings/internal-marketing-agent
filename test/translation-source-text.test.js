@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   acquireSourceDocument,
+  assessTranslationUnit,
   assertPdfPageLimit,
   assertPdfResponse,
   assertSafeHttpUrl,
@@ -396,7 +397,7 @@ test('正文翻译保持合理高亮，标题或整段异常加粗会安全降�
   assert.match(normalizedArticle, /整段文字全部被错误加粗/);
 });
 
-test('长段落高亮不足在修复后不阻断忠实译文', async () => {
+test('长段落高亮不足不触发重译，也不阻断忠实译文', async () => {
   const source = {
     version: 5,
     contentMode: 'structured-document',
@@ -425,7 +426,7 @@ test('长段落高亮不足在修复后不阻断忠实译文', async () => {
           id: unit.id,
           text: unit.kind === 'title'
             ? '标题'
-            : `这是一段只包含一处**核心观点**、但整体长度已经超过两百字的中文译文。${'系统需要在真实任务中持续验证能力边界与性能瓶颈。'.repeat(10)}`,
+            : `这是一段只包含一处**核心观点**、但整体篇幅已经很长的中文译文。${'系统需要在真实任务中持续验证能力边界与性能瓶颈。'.repeat(10)}`,
         })),
       });
     },
@@ -538,7 +539,7 @@ test('数量级写法可以变化，但不等价的数值仍被拒绝并给出�
         })),
       });
     },
-  }), /b000001\(数字或链接不等价\)/);
+  }), /b000001\(数字或链接不等价/);
 });
 
 test('自动修复返回空数组时重试一次并要求完整 ID 集合', async () => {
@@ -665,7 +666,7 @@ test('英文分数词组和月份可转换为对应数字且不放宽其它数�
   assert.match(renderTranslatedDocument(translated), /1\.5 万亿美元.*1995 年 1 月.*2009 年 12 月.*8,400/);
 });
 
-test('英文 billion 与中文亿按数值等价校验，修复稿多出数字时保留原译稿', async () => {
+test('英文 billion 与中文亿按数值等价校验，异常高亮只做安全清理', async () => {
   const source = {
     version: 5,
     contentMode: 'structured-document',
@@ -703,7 +704,7 @@ test('英文 billion 与中文亿按数值等价校验，修复稿多出数字�
       });
     },
   });
-  assert.equal(calls, 2);
+  assert.equal(calls, 1);
   assert.match(renderTranslatedDocument(translated), /500 亿美元/);
   assert.doesNotMatch(renderTranslatedDocument(translated), /\$50 0 亿美元/);
 });
@@ -743,6 +744,122 @@ test('英文数字词可选择性译为阿拉伯数字，但原有数字仍必�
     },
   });
   assert.match(renderTranslatedDocument(translated), /1992.*为 1.*大于 1.*500/);
+});
+
+test('b000067 回归：zero/one 可忠实译为 0/1，型号中的数字保持独立', () => {
+  const assessment = assessTranslationUnit({
+    id: 'b000067',
+    kind: 'paragraph',
+    text: 'The Mamba-2 state is set to one, reset to zero, and remains between zero and one.',
+  }, 'Mamba-2 状态设为 1、重置为 0，并保持在 0 和 1 之间。', { afterRepair: true });
+  assert.deepEqual(assessment.hardErrors, []);
+  assert.deepEqual(assessment.warnings, []);
+});
+
+test('复合英文数字词、序数和中文数字表达按数值等价通过', () => {
+  const complex = assessTranslationUnit({
+    id: 'b000001',
+    kind: 'paragraph',
+    text: 'Twenty-two thousand five hundred and eighty samples were split into first, second, and fourth groups.',
+  }, '22,580 个样本被分成第 1、第 2 和第 4 组。', { afterRepair: true });
+  assert.deepEqual(complex.hardErrors, []);
+  assert.deepEqual(complex.warnings, []);
+
+  const chinesePercent = assessTranslationUnit({
+    id: 'b000002',
+    kind: 'paragraph',
+    text: 'The reported value was 100%.',
+  }, '报告值为百分之百。', { afterRepair: true });
+  assert.deepEqual(chinesePercent.hardErrors, []);
+});
+
+test('低置信度数字差异在定向修复后只告警并写入 checkpoint', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a',
+    title: 'Phases',
+    author: '',
+    sha256: 'numeric-warning',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: 'The first phase uses a pair of branches.',
+    }],
+  };
+  const workDir = tempDir();
+  let calls = 0;
+  const translated = await translateDocument({
+    source,
+    workDir,
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      calls += 1;
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      if (calls === 2) {
+        assert.equal(payload.units[0].id, 'b000001');
+        assert.match(payload.units[0].currentTranslation, /2 个分支/);
+        assert.match(payload.units[0].issues.join(' '), /低置信度数字格式差异/);
+      }
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title' ? '阶段' : '第 1 阶段使用 2 个分支。',
+        })),
+      });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(translated.validationWarnings.length, 1);
+  assert.match(translated.validationWarnings[0], /低置信度数字格式差异/);
+  const checkpoint = JSON.parse(fs.readFileSync(path.join(workDir, 'translation-checkpoint.json'), 'utf8'));
+  assert.equal(checkpoint.warnings.length, 1);
+});
+
+test('同批硬失败只丢弃问题单元，已通过单元立即保留到 checkpoint', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a',
+    title: 'Batch',
+    author: '',
+    sha256: 'partial-batch-checkpoint',
+    blocks: [
+      { id: 'b000001', order: 0, type: 'paragraph', text: 'The first value is 100.' },
+      { id: 'b000002', order: 1, type: 'paragraph', text: 'The second value is 200.' },
+    ],
+  };
+  const workDir = tempDir();
+  await assert.rejects(() => translateDocument({
+    source,
+    workDir,
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title'
+            ? '批次'
+            : unit.id === 'b000001'
+              ? '第一个值是 100。'
+              : '第二个值是 199。',
+        })),
+      });
+    },
+  }), /b000002/);
+  const checkpoint = JSON.parse(fs.readFileSync(path.join(workDir, 'translation-checkpoint.json'), 'utf8'));
+  assert.deepEqual(
+    checkpoint.translations.map((item) => item.id).sort(),
+    ['b000001', 'meta:title'],
+  );
 });
 
 test('金融语境 pre-fee 不得误译为税前，历史断点译文也会确定性纠正', async () => {
@@ -835,7 +952,7 @@ test('长文正常翻译批次最多 24 个单元，尽早写入分块 checkpoin
   assert.equal(checkpoint.translations.length, 26);
 });
 
-test('样式修复稿破坏数字时回退到内容完整的原始译稿', async () => {
+test('异常高亮不会触发内容重译，安全清理后保留完整数字', async () => {
   const source = {
     version: 5,
     contentMode: 'structured-document',
@@ -873,7 +990,7 @@ test('样式修复稿破坏数字时回退到内容完整的原始译稿', async
       });
     },
   });
-  assert.equal(calls, 2);
+  assert.equal(calls, 1);
   assert.match(renderTranslatedDocument(translated), /100%/);
   assert.doesNotMatch(renderTranslatedDocument(translated), /99%/);
 });

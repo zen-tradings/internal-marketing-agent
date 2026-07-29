@@ -165,6 +165,7 @@ export function openStore(dbPath) {
               error LIKE '%fetch failed%'
               OR error LIKE '网络请求失败%'
               OR error LIKE '%ECONNRESET%'
+              OR error LIKE '结构化翻译校验失败:%'
             ))
           )
       `).run(id).changes;
