@@ -467,6 +467,130 @@ test('样式可降级，但数字不一致仍由内容级硬门禁拒绝', async
   }), /结构化翻译校验失败:b000001/);
 });
 
+test('K/M/B/T、中文数量单位、千分位和百分比只要数值等价即可通过', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a',
+    title: 'Model Scale',
+    author: '',
+    sha256: 'equivalent-number-formats',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: 'Overall, with about 50k possible tokens, 124M parameters, 8,400 samples, and 100 percent coverage, the baseline is compact.',
+    }],
+  };
+  let calls = 0;
+  const translated = await translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      calls += 1;
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title'
+            ? '模型规模'
+            : '总体而言，约 5 万个可能的 token、1.24 亿个参数、8,400 个样本和 100% 的覆盖率构成了**紧凑的基线模型**。',
+        })),
+      });
+    },
+  });
+  assert.equal(calls, 1);
+  assert.match(renderTranslatedDocument(translated), /5 万.*1\.24 亿.*8,400.*100%/);
+});
+
+test('数量级写法可以变化，但不等价的数值仍被拒绝并给出具体原因', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a',
+    title: 'Model Scale',
+    author: '',
+    sha256: 'wrong-shorthand-value',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: 'The model supports about 50k possible tokens.',
+    }],
+  };
+  await assert.rejects(() => translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title' ? '模型规模' : '该模型支持约 6 万个可能的 token。',
+        })),
+      });
+    },
+  }), /b000001\(数字或链接不等价\)/);
+});
+
+test('自动修复返回空数组时重试一次并要求完整 ID 集合', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/a',
+    title: 'Returns',
+    author: '',
+    sha256: 'empty-repair-retry',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: 'The reported portfolio return was 100%.',
+    }],
+  };
+  const requests = [];
+  const translated = await translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle: async (request) => {
+      requests.push(request);
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(request.prompt)[1]);
+      if (requests.length === 1) {
+        return JSON.stringify({
+          translations: payload.units.map((unit) => ({
+            id: unit.id,
+            text: unit.kind === 'title' ? '回报率' : '报告的投资组合回报率为 99%。',
+          })),
+        });
+      }
+      if (requests.length === 2) return JSON.stringify({ translations: [] });
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: '报告的投资组合回报率为 ⟦ZEN_KEEP_1⟧。',
+        })),
+      });
+    },
+  });
+  assert.equal(requests.length, 3);
+  assert.equal(requests[1].responseFormat.json_schema.schema.properties.translations.minItems, 1);
+  assert.equal(requests[1].responseFormat.json_schema.schema.properties.translations.maxItems, 1);
+  assert.match(requests[2].prompt, /上一次修复响应缺少输入块/);
+  assert.match(renderTranslatedDocument(translated), /100%/);
+});
+
 test('同段多个英文月份可忠实翻译为对应月份数字，其它数字仍保持一致', async () => {
   const source = {
     version: 5,

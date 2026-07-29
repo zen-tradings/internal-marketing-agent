@@ -801,14 +801,24 @@ export async function translateDocument({
       invalid = validateBatchTranslations(batch, translations, { checkHighlights: false });
     }
     if (invalid.length) {
+      const receivedById = new Map(translations.map((item) => [item.id, item.text]));
+      const validation = invalid.map((unit) => ({
+        id: unit.id,
+        reasons: translationValidationReasons(unit, receivedById.get(unit.id), {
+          checkHighlights: false,
+        }),
+      }));
       writeJsonAtomic(path.join(workDir, 'translation-invalid.json'), {
         failedAt: new Date().toISOString(),
         units: invalid.map((unit) => ({ id: unit.id, source: unit.text })),
+        validation,
         received: translations.map((item) => ({ id: item.id, text: item.text })),
         originalReceived: originalTranslations.map((item) => ({ id: item.id, text: item.text })),
         repairReceived: repairedTranslations.map((item) => ({ id: item.id, text: item.text })),
       });
-      throw new Error(`结构化翻译校验失败:${invalid.map((unit) => unit.id).join(',')}`);
+      throw new Error(`结构化翻译校验失败:${validation
+        .map((item) => `${item.id}(${item.reasons.join('+')})`)
+        .join(',')}`);
     }
     translations = normalizeBatchHighlights(batch, translations);
     for (const item of translations) completed.set(item.id, item.text.trim());
@@ -1421,32 +1431,59 @@ ${JSON.stringify({ units })}`,
         properties: {
           translations: {
             type: 'array',
+            minItems: units.length,
+            maxItems: units.length,
             items: {
               type: 'object',
               additionalProperties: false,
               required: ['id', 'text'],
-              properties: { id: { type: 'string' }, text: { type: 'string' } },
+              properties: {
+                id: { type: 'string', enum: units.map((unit) => unit.id) },
+                text: { type: 'string', minLength: 1 },
+              },
             },
           },
         },
       },
     },
   };
-  let raw;
-  try {
-    raw = await completeArticle({ ...request, responseFormat });
-  } catch (error) {
-    if (!/(?:response[_ -]?format|json[_ -]?schema|structured output|HTTP 400|OpenRouter 400)/i.test(safeError(error))) throw error;
-    raw = await completeArticle(request);
-  }
-  const parsed = parseJsonPayload(raw);
-  if (!Array.isArray(parsed?.translations)) return [];
-  return parsed.translations
-    .filter((item) => item && typeof item.id === 'string' && typeof item.text === 'string')
-    .map((item) => ({
-      id: item.id,
-      text: repair ? restoreInvariantText(item.text, protections.get(item.id) || []) : item.text,
+  const complete = async (nextRequest) => {
+    try {
+      return await completeArticle({ ...nextRequest, responseFormat });
+    } catch (error) {
+      if (!/(?:response[_ -]?format|json[_ -]?schema|structured output|HTTP 400|OpenRouter 400)/i.test(safeError(error))) throw error;
+      return completeArticle(nextRequest);
+    }
+  };
+  const parseTranslations = (raw) => {
+    const parsed = parseJsonPayload(raw);
+    if (!Array.isArray(parsed?.translations)) return [];
+    return parsed.translations
+      .filter((item) => item && typeof item.id === 'string' && typeof item.text === 'string')
+      .map((item) => ({
+        id: item.id,
+        text: repair ? restoreInvariantText(item.text, protections.get(item.id) || []) : item.text,
+      }));
+  };
+  let translations = parseTranslations(await complete(request));
+  if (repair && !hasExpectedTranslationSet(batch, translations)) {
+    const retryInstruction = `上一次修复响应缺少输入块。请重新返回全部 ${batch.length} 个块；只允许使用这些 ID：${batch.map((unit) => unit.id).join('、')}。`;
+    translations = parseTranslations(await complete({
+      ...request,
+      prompt: request.prompt.replace(
+        '\n\n输入 JSON:\n',
+        `\n\n${retryInstruction}\n\n输入 JSON:\n`,
+      ),
     }));
+  }
+  return translations;
+}
+
+function hasExpectedTranslationSet(batch, translations) {
+  if (translations.length !== batch.length) return false;
+  const expected = new Set(batch.map((unit) => unit.id));
+  const received = new Set(translations.map((item) => item.id));
+  return received.size === expected.size && [...expected].every((id) => received.has(id));
 }
 
 function validateBatchTranslations(batch, translations, { checkHighlights = true } = {}) {
@@ -1455,13 +1492,20 @@ function validateBatchTranslations(batch, translations, { checkHighlights = true
     if (byId.has(item.id)) return batch;
     byId.set(item.id, item.text);
   }
-  return batch.filter((unit) => {
-    const text = byId.get(unit.id);
-    return !text?.trim()
-      || !sameInvariantTokens(unit.text, text)
-      || isClearlyUntranslated(unit.text, text)
-      || (checkHighlights && !hasValidSelectiveHighlights(unit, text));
-  });
+  return batch.filter((unit) => translationValidationReasons(
+    unit,
+    byId.get(unit.id),
+    { checkHighlights },
+  ).length > 0);
+}
+
+function translationValidationReasons(unit, text, { checkHighlights = true } = {}) {
+  const reasons = [];
+  if (!text?.trim()) return ['缺失译文'];
+  if (!sameInvariantTokens(unit.text, text)) reasons.push('数字或链接不等价');
+  if (isClearlyUntranslated(unit.text, text)) reasons.push('疑似未完成翻译');
+  if (checkHighlights && !hasValidSelectiveHighlights(unit, text)) reasons.push('高亮格式');
+  return reasons;
 }
 
 function isHardValidTranslation(unit, item) {
@@ -1593,22 +1637,42 @@ function sameInvariantTokens(source, translated) {
     ...(String(value).match(/\$[A-Z]{1,6}\b|\b(?:NASDAQ|NYSE|AMEX|OTC)\s*:\s*[A-Z]{1,6}\b/g) || []),
   ].sort();
   if (JSON.stringify(tokens(source)) !== JSON.stringify(tokens(translated))) return false;
-  const sourceNumbers = invariantNumericSignature(source);
-  const translatedNumbers = invariantNumericSignature(translated);
-  if (JSON.stringify(sourceNumbers) === JSON.stringify(translatedNumbers)) return true;
   const semanticNumbers = [
     ...englishMonthNumbers(source),
     ...englishIntegerNumbers(source),
   ];
-  return semanticNumbers.length > 0
-    && isAllowedNumericExpansion(sourceNumbers, translatedNumbers, semanticNumbers);
+  const variants = [
+    {},
+    { expandShorthand: true },
+    { normalizePercentWords: true },
+    { expandShorthand: true, normalizePercentWords: true },
+  ];
+  return variants.some((options) => {
+    const candidateSourceNumbers = invariantNumericSignature(source, options);
+    const candidateTranslatedNumbers = invariantNumericSignature(translated, options);
+    if (JSON.stringify(candidateSourceNumbers) === JSON.stringify(candidateTranslatedNumbers)) {
+      return true;
+    }
+    return semanticNumbers.length > 0
+      && isAllowedNumericExpansion(
+        candidateSourceNumbers,
+        candidateTranslatedNumbers,
+        semanticNumbers,
+      );
+  });
 }
 
 function invariantNumbers(value) {
-  return (String(value).match(/(?<![A-Za-z0-9])[-+]?\d+(?:[,.]\d+)*(?:%|‰)?/g) || []).sort();
+  return (String(value).match(/(?<![A-Za-z0-9])[-+]?\d+(?:[,.]\d+)*(?:%|‰)?/g) || [])
+    .map((token) => canonicalInvariantNumber(token))
+    .filter(Boolean)
+    .sort();
 }
 
-function invariantNumericSignature(value) {
+function invariantNumericSignature(
+  value,
+  { expandShorthand = false, normalizePercentWords = false } = {},
+) {
   const magnitudeMultipliers = {
     thousand: 1_000n,
     million: 1_000_000n,
@@ -1625,12 +1689,41 @@ function invariantNumericSignature(value) {
     万亿: 1_000_000_000_000n,
   };
   const magnitudeTokens = [];
-  let masked = String(value).replaceAll('**', '');
+  let masked = String(value).replaceAll('**', '').replaceAll('−', '-');
+  if (normalizePercentWords) {
+    masked = masked.replace(
+      /(?<![A-Za-z0-9])([-+]?\d+(?:[,.]\d+)*)\s*(?:percent|per\s+cent)\b/gi,
+      (match, amount) => {
+        const normalized = normalizeMagnitudeAmount(amount, 1n);
+        if (normalized) magnitudeTokens.push(`PCT:${normalized}`);
+        return ' '.repeat(match.length);
+      },
+    );
+  }
+  if (expandShorthand) {
+    const shorthandMultipliers = {
+      k: 1_000n,
+      m: 1_000_000n,
+      b: 1_000_000_000n,
+      t: 1_000_000_000_000n,
+    };
+    masked = masked.replace(
+      /(?<![A-Za-z0-9])(?:[$€£¥]\s*)?([-+]?\d+(?:[,.]\d+)*)([KMBT])\b/gi,
+      (match, amount, unit) => {
+        const normalized = normalizeMagnitudeAmount(
+          amount,
+          shorthandMultipliers[unit.toLowerCase()],
+        );
+        if (normalized) magnitudeTokens.push(`NUM:${normalized}`);
+        return ' '.repeat(match.length);
+      },
+    );
+  }
   masked = masked.replace(
     /(?<![A-Za-z0-9])(?:[$€£¥]\s*)?(one\s+and\s+(?:a|one)\s+half|[-+]?\d+(?:[,.]\d+)*)\s*(thousand|million|billion|trillion)\b(?:\s+(?:U\.?S\.?\s+)?dollars?)?/gi,
     (match, amount, unit) => {
       const normalized = normalizeMagnitudeAmount(amount, magnitudeMultipliers[unit.toLowerCase()]);
-      if (normalized) magnitudeTokens.push(`MAG:${normalized}`);
+      if (normalized) magnitudeTokens.push(`NUM:${normalized}`);
       return ' '.repeat(match.length);
     },
   );
@@ -1638,11 +1731,19 @@ function invariantNumericSignature(value) {
     /(?<![A-Za-z0-9])(?:[$€£¥]\s*)?([-+]?\d+(?:[,.]\d+)*)\s*(万亿|千亿|百亿|十亿|千万|百万|十万|亿|万)(?:\s*(?:美元|美金|人民币|欧元|英镑|日元|元))?/g,
     (match, amount, unit) => {
       const normalized = normalizeMagnitudeAmount(amount, magnitudeMultipliers[unit]);
-      if (normalized) magnitudeTokens.push(`MAG:${normalized}`);
+      if (normalized) magnitudeTokens.push(`NUM:${normalized}`);
       return ' '.repeat(match.length);
     },
   );
   return [...invariantNumbers(masked), ...magnitudeTokens].sort();
+}
+
+function canonicalInvariantNumber(token) {
+  const value = String(token);
+  const suffix = value.endsWith('%') ? 'PCT' : value.endsWith('‰') ? 'PERMILLE' : 'NUM';
+  const amount = suffix === 'NUM' ? value : value.slice(0, -1);
+  const normalized = normalizeMagnitudeAmount(amount, 1n);
+  return normalized ? `${suffix}:${normalized}` : null;
 }
 
 function normalizeMagnitudeAmount(value, multiplier) {
@@ -1708,7 +1809,10 @@ function englishMonthNumbers(value) {
   const matches = String(value).matchAll(
     /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sept?(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b/gi,
   );
-  return [...matches].map((match) => months[match[1].toLowerCase()]).filter(Boolean);
+  return [...matches]
+    .map((match) => months[match[1].toLowerCase()])
+    .filter(Boolean)
+    .map((number) => `NUM:${number}`);
 }
 
 function englishIntegerNumbers(value) {
@@ -1719,7 +1823,10 @@ function englishIntegerNumbers(value) {
   const matches = String(value).matchAll(
     /\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/gi,
   );
-  return [...matches].map((match) => numbers[match[1].toLowerCase()]).filter(Boolean);
+  return [...matches]
+    .map((match) => numbers[match[1].toLowerCase()])
+    .filter(Boolean)
+    .map((number) => `NUM:${number}`);
 }
 
 function createSourceDocument({
