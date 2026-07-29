@@ -163,7 +163,12 @@ export async function acquireSourceDocument({
 }) {
   throwIfTaskCancelled(signal);
   const limits = limitsFor(config);
-  await assertSafeHttpUrl(sourceUrl, { dnsLookup });
+  const notionApiSource = isNotionUrl(sourceUrl) && Boolean(config.notionApiToken);
+  // Authenticated Notion reads only parse the page UUID from an allowlisted
+  // Notion URL, then call the fixed api.notion.com endpoint. Do not resolve or
+  // fetch the browser URL first: managed DNS/proxy clients may map it to a
+  // synthetic reserved address even though the official API remains reachable.
+  if (!notionApiSource) await assertSafeHttpUrl(sourceUrl, { dnsLookup });
   fs.mkdirSync(workDir, { recursive: true });
   const acquisition = { attempts: [], fallbacks: [] };
   const googleDocs = isGoogleDocUrl(sourceUrl)
@@ -189,40 +194,41 @@ export async function acquireSourceDocument({
     ? { ...requestHeaders, ...googleDocs.requestHeaders }
     : requestHeaders;
 
-  if (isNotionUrl(acquisitionUrl) && config.notionApiToken) {
+  if (notionApiSource) {
     if (scope.kind === 'pages') {
       throw new Error('Notion 网页没有可验证的 PDF 分页；请改用章节范围');
     }
     acquisition.attempts.push('notion-markdown-api');
+    let notion;
     try {
-      const notion = await fetchNotionMarkdown({
+      notion = await fetchNotionMarkdown({
         sourceUrl: acquisitionUrl,
         token: config.notionApiToken,
         fetchFn,
         fetchWithRetry,
         timeoutMs: limits.fetchTimeoutMs,
       });
-      const document = await sourceDocumentFromMarkdown({
-        markdown: notion.markdown,
-        sourceUrl,
-        title: notion.title,
-        author: notion.author,
-        publishedDate: notion.publishedDate,
-        extractor: 'notion-markdown-api',
-        workDir,
-        fetchFn,
-        fetchWithRetry,
-        config,
-        dnsLookup,
-        scope,
-        signal,
-      });
-      document.acquisition = acquisition;
-      return document;
     } catch (error) {
       throwIfTaskCancelled(signal);
       throw actionableNotionError(error);
     }
+    const document = await sourceDocumentFromMarkdown({
+      markdown: notion.markdown,
+      sourceUrl,
+      title: notion.title,
+      author: notion.author,
+      publishedDate: notion.publishedDate,
+      extractor: 'notion-markdown-api',
+      workDir,
+      fetchFn,
+      fetchWithRetry,
+      config,
+      dnsLookup,
+      scope,
+      signal,
+    });
+    document.acquisition = acquisition;
+    return document;
   }
 
   acquisition.attempts.push('static-http');
@@ -2448,17 +2454,23 @@ function parseJsonPayload(raw) {
 }
 
 function notionPageId(rawUrl) {
-  const compact = `${new URL(rawUrl).pathname}${new URL(rawUrl).search}`.replace(/-/g, '');
-  const match = compact.match(/[a-f0-9]{32}/i);
-  if (!match) return undefined;
-  const id = match[0].toLowerCase();
+  const url = new URL(rawUrl);
+  const value = decodeURIComponent(`${url.pathname}${url.search}`);
+  const compactMatches = [...value.matchAll(/(?<![a-f0-9])([a-f0-9]{32})(?![a-f0-9])/ig)];
+  const dashedMatches = [...value.matchAll(
+    /(?<![a-f0-9])([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})(?![a-f0-9])/ig,
+  )];
+  const rawId = compactMatches.at(-1)?.[1] || dashedMatches.at(-1)?.[1];
+  if (!rawId) return undefined;
+  const id = rawId.replace(/-/g, '').toLowerCase();
   return `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
 }
 
 function isNotionUrl(rawUrl) {
   try {
     const host = new URL(rawUrl).hostname.toLowerCase();
-    return host === 'notion.so' || host.endsWith('.notion.so')
+    return host === 'app.notion.com'
+      || host === 'notion.so' || host.endsWith('.notion.so')
       || host === 'notion.site' || host.endsWith('.notion.site');
   } catch { return false; }
 }

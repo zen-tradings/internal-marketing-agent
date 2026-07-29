@@ -144,6 +144,36 @@ test('Google Docs OAuth 配置不完整时返回可操作错误', async () => {
   assert.match(result.errors[0].error, /GOOGLE_DOCS_CLIENT_SECRET/);
 });
 
+test('Notion 新版 app.notion.com/p 链接作为一级用户来源读取', async () => {
+  const originalUrl = 'https://app.notion.com/p/baseten-blog-22580-From-GPT2-to-Kimi3-Explained-0123456789abcdef0123456789abcdef?source=copy_link';
+  const result = await loadDirectUserSources({
+    userUrls: [originalUrl],
+    workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'notion-app-source-')),
+    config: {
+      translation: {
+        browserEnabled: false,
+        dnsLookup: publicDns,
+        notionApiToken: 'notion-token',
+      },
+      documents: {},
+    },
+    fetchFn: async (url, options = {}) => {
+      assert.match(String(url), /api\.notion\.com\/v1\/pages\/01234567-89ab-cdef-0123-456789abcdef\/markdown/);
+      assert.equal(options.headers.Authorization, 'Bearer notion-token');
+      return new Response(JSON.stringify({
+        markdown: `# Private report\n\n${'Private user-provided Notion research. '.repeat(20)}`,
+        truncated: false,
+        unknown_block_ids: [],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+  assert.equal(result.errors.length, 0, JSON.stringify(result.errors));
+  assert.equal(result.sources.length, 1);
+  assert.equal(result.sources[0].url, originalUrl);
+  assert.match(result.sources[0].text, /Private user-provided Notion research/);
+  assert.equal(isDirectUserUrl(originalUrl), true);
+});
+
 test('GitHub 仓库先读 tree，再并行读取高价值代码文件', async () => {
   let activeFiles = 0;
   let maxActiveFiles = 0;

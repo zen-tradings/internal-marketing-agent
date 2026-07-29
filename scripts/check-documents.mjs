@@ -3,7 +3,6 @@ import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import dotenv from 'dotenv';
-import { loadConfig } from '../src/config/index.js';
 import { loadDirectUserSources } from '../src/core/user-sources.js';
 
 const envPath = process.env.ZEN_CONTENT_HUB_ENV_FILE
@@ -17,7 +16,25 @@ if (!urls.length) {
   process.exit(1);
 }
 
-const config = loadConfig(process.env);
+const config = {
+  translation: {
+    browserEnabled: process.env.TRANSLATION_BROWSER_ENABLED !== 'false',
+    browserExecutablePath: process.env.TRANSLATION_BROWSER_EXECUTABLE || '',
+    notionApiToken: process.env.NOTION_API_TOKEN || '',
+    datalabApiKey: process.env.DATALAB_API_KEY || '',
+    datalabBaseUrl: process.env.DATALAB_API_BASE_URL || 'https://www.datalab.to/api/v1',
+  },
+  documents: {
+    googleDocsAccessToken: process.env.GOOGLE_DOCS_ACCESS_TOKEN || '',
+    googleDocsClientId: process.env.GOOGLE_DOCS_CLIENT_ID || '',
+    googleDocsClientSecret: process.env.GOOGLE_DOCS_CLIENT_SECRET || '',
+    googleDocsRefreshToken: process.env.GOOGLE_DOCS_REFRESH_TOKEN || '',
+    githubToken: process.env.GITHUB_TOKEN || '',
+  },
+  slack: {
+    botToken: process.env.SLACK_BOT_TOKEN || '',
+  },
+};
 const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'zen-private-doc-check-'));
 try {
   const result = await loadDirectUserSources({

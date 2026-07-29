@@ -822,7 +822,7 @@ test('验证码页面拒绝产稿', async () => {
 test('Notion 授权页面优先调用官方 Markdown 接口并过滤非正文内容', async () => {
   const calls = [];
   const document = await acquireSourceDocument({
-    sourceUrl: 'https://workspace.notion.site/Report-0123456789abcdef0123456789abcdef',
+    sourceUrl: 'https://app.notion.com/p/baseten-blog-22580-From-GPT2-to-Kimi3-Explained-0123456789abcdef0123456789abcdef?source=copy_link',
     workDir: tempDir(),
     fetchFn: async (url) => {
       calls.push(String(url));

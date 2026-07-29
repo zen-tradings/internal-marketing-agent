@@ -465,7 +465,11 @@ function directUrlKind(rawUrl) {
   const host = url.hostname.toLowerCase();
   if (host === 'github.com' || host === 'www.github.com') return 'github';
   if (isGoogleDocUrl(rawUrl)) return 'google-doc';
-  if (host === 'notion.so' || host.endsWith('.notion.so') || host === 'notion.site' || host.endsWith('.notion.site')) return 'notion';
+  if (host === 'app.notion.com'
+    || host === 'notion.so'
+    || host.endsWith('.notion.so')
+    || host === 'notion.site'
+    || host.endsWith('.notion.site')) return 'notion';
   if (/\.pdf(?:$|[?#])/i.test(rawUrl)) return 'pdf';
   return '';
 }
