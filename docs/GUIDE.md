@@ -38,7 +38,8 @@
    生产默认运行 V2；V1 路径只通过 ANALYSIS_PIPELINE_VERSION 保留为单实例紧急回退，
    不作为日常运行模式。翻译、晨报和 Newsletter 不进入 V2。
    调 OpenRouter chat completions(正文模型 = .env 的 OPENROUTER_MODEL),
-   每个任务使用独立的 workDir/runs/<run-id>/，产出其中的 article.md
+   每个任务使用 `runWorkDir()` 计算的独立
+   `workDir/runs/<readable-run-id>-<hash>/`，产出其中的 article.md
    (必须有 title frontmatter，这是硬契约，checkpoint 和生成素材也不得跨任务复用)。
 
 ④ 发布     src/index.js → src/channels/wechat-draft.js  (publish)
@@ -76,8 +77,10 @@
 | 直译范围识别 | `src/workflows/translation-scope.js` | 页码和章节范围；用户页码为 1-based，Datalab 请求转换为 0-based |
 | 直译内容提取/结构 | `src/workflows/translation-source-text.js` | arXiv HTML 优先、普通 HTML/Notion；保留标题、段落、图表、公式、代码和引用 |
 | PDF 结构化解析 | `src/workflows/datalab-parser.js` | 直译/扫描件走托管 Datalab；有文字层的分析型 PDF 可在 `user-sources.js` 用 Poppler 降级读取 |
-| 直译翻译/完整性/续跑 | `src/workflows/translate-engine.js` | 逐文本节点翻译、原文表格转图片、确定性重组、高亮密度、图表公式完整性门禁与 checkpoint |
-| 文档抓取配置 | `.env` 的 `TRANSLATION_*` / `NOTION_API_TOKEN` / `GOOGLE_DOCS_ACCESS_TOKEN` / `GITHUB_TOKEN` / `DATALAB_*` | 控制来源、私有文档、PDF 页数、浏览器、解析质量、超时和重定向 |
+| 直译翻译/完整性/checkpoint | `src/workflows/translation-source-text.js` | 逐文本节点翻译、等价数字分级校验、定向修复、逐单元 checkpoint、异常高亮安全清理及图表公式完整性门禁 |
+| 直译执行与研究轨迹 | `src/workflows/translate-engine.js` | 调用结构化直译并把 manifest、完整性和低置信度告警写入 trace |
+| 失败直译受限续跑 | `scripts/requeue-translation.mjs` + `src/core/store.js` | 只接受数据库 run-id；要求 checkpoint，拒绝其它工作流、已有 `media_id` 和非白名单失败 |
+| 文档抓取配置 | `.env` 的 `TRANSLATION_*` / `NOTION_API_TOKEN` / `GOOGLE_DOCS_CLIENT_ID` / `GOOGLE_DOCS_CLIENT_SECRET` / `GOOGLE_DOCS_REFRESH_TOKEN` / `GITHUB_TOKEN` / `DATALAB_*` | 控制来源、私有文档、PDF 页数、浏览器、解析质量、超时和重定向；access token 仅为兼容回退 |
 | 单任务取消、发布阶段保护与垃圾目录清理 | `src/core/queue.js`、`src/index.js`、`src/lib/task-cancellation.js` | generate 可取消；publish 后拒绝强杀；取消后状态为 cancelled |
 | 优先信源加减域名 | `workflows/shared.js` 的清单,或 .env EXA_PRIORITY_DOMAINS | 写主域即可,子域自动匹配 |
 | 门禁规则(拦截/提醒) | `src/lib/gate.js` | 注意:投资建议敏感词已按要求移除,勿加回 |
@@ -113,6 +116,8 @@ scripts/install-launchd.sh
 目录布局、首次安装、不可变发布包、数据库备份、安全更新和健康检查见 [`../deploy/README.md`](../deploy/README.md)。更新时先在独立 release 目录执行 `npm ci && npm run check`，再切换并重启唯一的 systemd 实例；现役目录用 `.deploy-commit` 标记，不依赖在线 `git pull`。
 
 改任何 `src/` 代码后的验收顺序：`npm run check`（测试不使用真实业务凭据；依赖审计会访问 npm registry）→ 按需执行真实连接检查 → 备份 SQLite → 明确重启对应服务。不要从 Git 拉取后未经检查直接重启。
+
+结构化校验失败的直译不要手工改数据库。确认目标版本已部署后，按 [`../deploy/README.md`](../deploy/README.md) 的受限续跑步骤使用数据库 run-id 恢复；命令验证 checkpoint 和 `media_id` 后，重启唯一实例让持久化队列接管。
 
 ## 五、阅读顺序建议(第一次读代码)
 

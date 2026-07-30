@@ -38,6 +38,9 @@ scripts/
 ├── check-openrouter.mjs     检查 OpenRouter 配置
 ├── check-egress.mjs         只读检查各外部 API 的网络可达性
 ├── check-translation.mjs    生成结构化直译本地验收稿
+├── requeue-translation.mjs  受限恢复有 checkpoint 的失败直译
+├── check-documents.mjs      只读验收私有 Notion / Google Docs
+├── google-docs-oauth.mjs    本机生成 Google Docs refresh token
 ├── preview-newsletter.mjs   生成 Newsletter 本地 HTML 预览
 └── update-render-golden.mjs 更新渲染基准
 
@@ -160,7 +163,7 @@ Notion 页面配置 `NOTION_API_TOKEN` 后通过官方 Markdown 接口读取，�
 npm run check:translation -- "翻译前 11 页 https://example.com/paper.pdf"
 ```
 
-失败直译可由维护者按原 run-id 受限续跑：
+失败直译可由维护者按 SQLite `runs.id` 中的原 run-id 受限续跑；不要把带哈希的运行目录名当成 run-id：
 
 ```bash
 npm run requeue:translation -- <run-id>

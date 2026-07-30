@@ -123,6 +123,28 @@ finish; queued tasks remain in SQLite and are restored by the new process. If
 startup or readiness fails, restore the previous directory and protected
 environment-file backup before restarting the unit.
 
+## Recovering a failed translation
+
+Use the restricted recovery command only after the target release has passed
+its checks and is active. Its argument is the SQLite `runs.id`, not the
+hashed run-directory name. The command rejects non-translation workflows,
+tasks without a valid checkpoint, unsupported failure types and any task that
+already has a `media_id`.
+
+```bash
+run_id=replace-with-database-run-id
+sudo -u zenbot env \
+  DB_PATH=/var/lib/zen-content-hub/runs.db \
+  WORK_DIR=/var/lib/zen-content-hub/work \
+  npm --prefix /opt/zen-content-hub run requeue:translation -- "$run_id"
+sudo systemctl restart zen-content-hub
+```
+
+After restart, verify the same row moves from `queued` to `running` and then
+to `done`, the existing checkpoint advances, and exactly one non-empty
+`media_id` is stored. A changed source hash intentionally invalidates the old
+checkpoint and restarts translation from the beginning.
+
 Analysis V2 is the production default. `ANALYSIS_PIPELINE_VERSION=v1` remains
 only as a single-instance emergency fallback; do not run V1 and V2 as separate
 processes. Inspect `research-trace.json` during production acceptance. It records
@@ -154,3 +176,9 @@ Snapshots are written to `/var/lib/zen-content-hub/backups/` and retained for
 14 days. They protect against application-level database mistakes but remain on
 the same Droplet; use a separately confirmed off-host or DigitalOcean backup for
 Droplet-level disaster recovery.
+
+Release directories and uploaded `/tmp/zen-content-hub-*.tar` archives are not
+automatically pruned. Inventory them after live verification, preserve the
+active directory and the rollback releases required by the current retention
+decision, and remove only explicit reviewed paths. Never use a recursive
+wildcard that could match `/opt/zen-content-hub`.
