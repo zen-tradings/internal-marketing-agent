@@ -1090,6 +1090,28 @@ test('Notion 授权页面优先调用官方 Markdown 接口并过滤非正文内
   assert.ok(fs.existsSync(figure.images[0].localPath));
 });
 
+test('Notion 数据库页面链接使用路径 page ID 而不是 v 参数中的 view ID', async () => {
+  const calls = [];
+  const document = await acquireSourceDocument({
+    sourceUrl: 'https://app.notion.com/p/er-rl-env-3ac543deb661800ab6a0d34c032eb1f2?v=30a543deb661802a86a8000c2b4b9a8d&source=copy_link',
+    workDir: tempDir(),
+    fetchFn: async (url) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify({
+        markdown: '# ER RL Env\n\nComplete private report body.',
+        title: 'ER RL Env',
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+    config: { notionApiToken: 'secret', browserEnabled: false },
+    dnsLookup: PUBLIC_DNS,
+  });
+
+  assert.equal(document.extractor, 'notion-markdown-api');
+  assert.match(calls[0], /pages\/3ac543de-b661-800a-b6a0-d34c032eb1f2\/markdown$/);
+  assert.doesNotMatch(calls[0], /30a543de-b661-802a-86a8-000c2b4b9a8d/);
+});
+
 test('私有 Notion 未共享给 integration 时给出明确授权提示', async () => {
   await assert.rejects(() => acquireSourceDocument({
     sourceUrl: 'https://workspace.notion.site/Private-0123456789abcdef0123456789abcdef',

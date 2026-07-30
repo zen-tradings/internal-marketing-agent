@@ -2797,12 +2797,29 @@ function parseJsonPayload(raw) {
 
 function notionPageId(rawUrl) {
   const url = new URL(rawUrl);
-  const value = decodeURIComponent(`${url.pathname}${url.search}`);
+  const pathId = notionIdFromText(decodeURIComponent(url.pathname));
+  if (pathId) return pathId;
+
+  // A copied database-page link can include both the page ID in its path and
+  // an unrelated database view ID in `?v=`. Never let that view ID override
+  // the page ID. Query parameters are only a fallback for link shapes that do
+  // not carry an ID in the path, and `v` is deliberately excluded.
+  const queryValues = [];
+  for (const [key, value] of url.searchParams) {
+    if (['v', 'source'].includes(key.toLowerCase())) continue;
+    queryValues.push(value);
+  }
+  return notionIdFromText(decodeURIComponent(queryValues.join(' ')));
+}
+
+function notionIdFromText(value) {
   const compactMatches = [...value.matchAll(/(?<![a-f0-9])([a-f0-9]{32})(?![a-f0-9])/ig)];
   const dashedMatches = [...value.matchAll(
     /(?<![a-f0-9])([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})(?![a-f0-9])/ig,
   )];
-  const rawId = compactMatches.at(-1)?.[1] || dashedMatches.at(-1)?.[1];
+  const rawId = [...compactMatches, ...dashedMatches]
+    .sort((left, right) => left.index - right.index)
+    .at(-1)?.[1];
   if (!rawId) return undefined;
   const id = rawId.replace(/-/g, '').toLowerCase();
   return `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
