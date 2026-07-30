@@ -64,6 +64,7 @@ function extraQueries(task) {
 export default {
   id: 'company',
   mode: 'analysis',
+  editorialSkill: 'latepost-ai-writer',
   sourcePolicy: officialFirstPolicy(),
   factReview: true,
   triggers: ['slack'],

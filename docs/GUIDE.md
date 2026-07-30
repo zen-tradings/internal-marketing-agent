@@ -31,12 +31,15 @@
    公司任务同时补跑
    季度财务、监管披露和价值链三路深搜。检索结果按用户每项要求形成
    EvidenceMatrix；静态域名只用于发现，必须匹配发布主体、页面类型和目标实体才能
-   判为一手来源。GLM 5.2 只接收相关证据写作；事实审计只返回精确原句和局部动作，
+   判为一手来源。证据矩阵完成后，latepost-ai-writer 才选择受控稿型、证据可支持的
+   角度、核心矛盾和结尾约束；Slack Prompt、来源安全、用户指定结构和工作流方法始终
+   优先。GLM 5.2 只接收相关证据写作；事实审计只返回精确原句和局部动作，
    不能重写全文。缺资料和无支持句不再提问；只有用户材料与一手来源对核心前提
    形成双边、不可调和冲突时转 needs_input，同一线程回答后不重复询问。
    引用链接由系统从证据矩阵精选并确定性追加，不再由模型维护。
    生产默认运行 V2；V1 路径只通过 ANALYSIS_PIPELINE_VERSION 保留为单实例紧急回退，
-   不作为日常运行模式。翻译、晨报和 Newsletter 不进入 V2。
+   并使用确定性稿型回退，不作为日常运行模式。写作 skill 仅作用于微信原创、行业、
+   公司和财报；翻译、晨报和 Newsletter 不加载它。
    调 OpenRouter chat completions(正文模型 = .env 的 OPENROUTER_MODEL),
    每个任务使用 `runWorkDir()` 计算的独立
    `workDir/runs/<readable-run-id>-<hash>/`，产出其中的 article.md
@@ -69,6 +72,7 @@
 |---|---|---|
 | 分析 Prompt 合同、证据矩阵、局部审计 | `src/core/analysis-v2.js` | 原始 Prompt 最高优先；纯函数便于回归 |
 | 微信分析编排与外部调用 | `src/core/runner.js` 的 Analysis V2 分支 | 规划、Exa、写作、审计、确定性引用 |
+| 中文原创写作方法、稿型与质量检查 | `skills/latepost-ai-writer/` + `src/lib/editorial-skill.js` | EvidenceMatrix 后路由；trace 记录摘要、稿型与角度；不得覆盖用户结构 |
 | 用户附件与直接文档 | `src/core/user-sources.js` | Slack 私有文件、PDF、Notion、Google Docs、GitHub；并行读取并保留一级来源身份 |
 | 备用文章结构 | `src/workflows/<id>.js` 的 `defaultMethodology` | 只在用户未规定结构时补空白 |
 | 新增一种文章类型 | 新建 `src/workflows/<name>.js` + `src/index.js` WORKFLOWS 注册 | 照抄 earnings.js 的结构 |

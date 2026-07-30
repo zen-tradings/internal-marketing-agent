@@ -13,6 +13,7 @@ const METHODOLOGY = `【行业综述框架 — 专属要求】
 export default {
   id: 'sector',
   mode: 'analysis',
+  editorialSkill: 'latepost-ai-writer',
   sourcePolicy: officialFirstPolicy(),
   factReview: true,
   triggers: ['slack'],

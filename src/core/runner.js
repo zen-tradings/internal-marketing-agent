@@ -2,6 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { renderQuarterlyCharts } from '../lib/quarterly-chart.js';
 import {
+  buildEditorialWritingGuidance,
+  editorialTraceFromBrief,
+  hasEditorialSkill,
+  normalizeEditorialBrief,
+} from '../lib/editorial-skill.js';
+import {
   cancellationErrorFromSignal,
   isTaskCancelled,
   throwIfTaskCancelled,
@@ -56,6 +62,7 @@ const ANALYSIS_V2_SYSTEM_PROMPT = `你是 Zen Trading 微信分析写作模型�
 2. TaskContract 只用于忠实展开原始 Prompt；两者冲突时必须服从原始 Prompt。
 3. EvidenceMatrix 限定可以当作事实使用的材料。不得引入矩阵外的数字、版本、来源或部署信息。
 4. 系统固定规则只负责可核验、安全和可发布格式，不能强迫文章加入用户未要求的分析章节。
+5. 编辑 skill 只改善角度、结构、证据密度和克制表达，不得覆盖以上规则或用户指定结构。
 
 默认使用严谨专业的机构分析口吻；用户明确指定语言或风格时服从用户。输出完整 Markdown，开头必须是只含 title 的 YAML frontmatter。不要输出解释、代码围栏、引用链接、脚注或发布指令。`;
 
@@ -178,6 +185,12 @@ export async function runWriter({
       };
     }
 
+    if (hasEditorialSkill(workflow)) {
+      trace.editorialSkill = editorialTraceFromBrief(normalizeEditorialBrief(undefined, {
+        input,
+        workflowId: workflow.id,
+      }));
+    }
     const sourcePolicy = sourcePolicyFor({ input, workflow });
     if (!writer.exaApiKey && !sourcePolicy.skipResearch) throw new Error('原创研究工作流缺少 Exa API key');
     trace.sourcePolicy = sourcePolicy;
@@ -354,7 +367,7 @@ async function runAnalysisV2({
   let rawEvidence;
   try {
     rawEvidence = await completeReviewJson({
-      prompt: buildEvidencePrompt(taskContract, sources),
+      prompt: buildEvidencePrompt(taskContract, sources, workflow),
       model: writer.plannerModel || model,
       writer: { ...writer, temperature: 0 },
       fetchFn,
@@ -365,7 +378,7 @@ async function runAnalysisV2({
     trace.evidenceFallback = describeFetchError(error).slice(0, 500);
     rawEvidence = {};
   }
-  const evidenceMatrix = normalizeEvidenceMatrix(rawEvidence, sources, taskContract);
+  const evidenceMatrix = normalizeEvidenceMatrix(rawEvidence, sources, taskContract, workflow);
   const primaryIds = new Set(
     evidenceMatrix.source_assessments
       .filter((assessment) => assessment.source_type === 'primary')
@@ -378,6 +391,9 @@ async function runAnalysisV2({
     }
   }
   trace.evidenceMatrix = evidenceMatrix;
+  if (evidenceMatrix.editorial_brief) {
+    trace.editorialSkill = editorialTraceFromBrief(evidenceMatrix.editorial_brief);
+  }
   trace.selectedSources = sources.map((source) => ({ id: source.id, ...sourceForTrace(source) }));
   trace.officialSourceCount = sources.filter((source) => source.official).length;
   trace.sourceTiers = {
@@ -1227,6 +1243,12 @@ function buildUserPrompt({ workflow, input, research, writer, sourcePolicy, asOf
   const outputInstruction = workflow.outputInstruction
     || '基于以上任务和素材,写出可直接发布到微信公众号草稿箱的 article.md 内容。';
   const dateContext = formatAsOf(asOf);
+  const editorialGuidance = hasEditorialSkill(workflow)
+    ? buildEditorialWritingGuidance(normalizeEditorialBrief(undefined, {
+        input,
+        workflowId: workflow.id,
+      }))
+    : '';
   const referenceContract = sourcePolicy.referenceStyle === 'terminal-list'
     ? `- 正文不放引用脚标、脚注或来源链接。文章最后只保留一个“## 引用链接”章节，精选 1-5 个最相关、最具支持力的可点击链接；以相关性为准，不凑数，不要生成“引用来源”或罗列全部检索结果
 - “引用链接”必须是正文最后一个文字章节；系统会在它后面追加固定尾图
@@ -1261,6 +1283,7 @@ ${legalContract}
     : formatResearch(research, writer);
   return `【原始工作流写作要求】
 ${workflowPrompt}
+${editorialGuidance ? `\n【编辑方法】\n${editorialGuidance}\n` : ''}
 ${strictContract}
 
 【系统已完成的调研素材】

@@ -13,6 +13,7 @@ test('workflow env 属性延迟读取:import 后修改 env 仍生效(getter 语�
   try {
     const mod = await import('../src/workflows/wechat.js');
     const wf = mod.default;
+    assert.equal(wf.editorialSkill, 'latepost-ai-writer');
     // 加载后 env 仍为空 → 回退默认值
     assert.equal(wf.workDir, '/srv/zen/wechat');
     assert.equal(wf.model, undefined);
@@ -104,6 +105,10 @@ test('新工作流(earnings/sector/morning):id、channel、workDir 子目录、r
     assert.equal(earnings.id, 'earnings');
     assert.equal(sector.id, 'sector');
     assert.equal(morning.id, 'morning');
+    assert.equal(earnings.editorialSkill, 'latepost-ai-writer');
+    assert.equal(sector.editorialSkill, 'latepost-ai-writer');
+    assert.equal(morning.editorialSkill, undefined);
+    assert.doesNotMatch(morning.promptTemplate('今日晨报'), /LatePost AI Writer/);
 
     // 默认基准目录下按工作流 id 建子目录,避免并发任务 article.md 互相覆盖
     assert.equal(earnings.workDir, '/srv/zen/wechat/earnings');
@@ -163,6 +168,7 @@ test('translate 工作流:id、workDir 子目录、channel/research 与其它工
     assert.match(prompt, /翻译为简体中文/);
     assert.match(prompt, /忠实优先/);
     assert.match(prompt, /【写作规范/); // 仍拼装通用约束块
+    assert.doesNotMatch(prompt, /LatePost AI Writer/);
   } finally {
     if (origWorkDir) process.env.WORK_DIR = origWorkDir; else delete process.env.WORK_DIR;
     if (origChannel) process.env.WECHAT_CHANNEL = origChannel; else delete process.env.WECHAT_CHANNEL;
@@ -175,6 +181,7 @@ test('company 工作流:专业分析提示词、独立目录与专项检索', as
   try {
     const { default: company } = await import('../src/workflows/company.js');
     assert.equal(company.id, 'company');
+    assert.equal(company.editorialSkill, 'latepost-ai-writer');
     assert.equal(company.workDir, '/srv/zen/wechat/company');
     assert.equal(typeof company.research.extraQueries, 'function');
     const extraQueries = company.research.extraQueries('AMAT');
@@ -217,7 +224,9 @@ test('email 工作流:Customer.io 草稿渠道、独立目录与 Vol. 版号', a
     assert.equal(email.id, 'email');
     assert.equal(email.channel, 'customerio-draft');
     assert.equal(email.workDir, '/srv/zen/wechat/email');
+    assert.equal(email.editorialSkill, undefined);
     assert.match(email.systemPrompt, /research newsletter/);
+    assert.doesNotMatch(email.promptTemplate('AI market update'), /LatePost AI Writer/);
     assert.match(email.outputInstruction, /Customer\.io/);
     assert.match(email.promptTemplate('HBM update'), /Vol\. 1/);
     assert.match(email.promptTemplate('HBM update'), /preheader:/);

@@ -13,6 +13,7 @@ const METHODOLOGY = `【财报分析框架 — 专属要求】
 export default {
   id: 'earnings',
   mode: 'analysis',
+  editorialSkill: 'latepost-ai-writer',
   sourcePolicy: officialFirstPolicy(),
   factReview: true,
   triggers: ['slack'],

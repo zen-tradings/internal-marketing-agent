@@ -6,6 +6,8 @@ import path from 'node:path';
 import {
   appendDeterministicReferences,
   applyAuditIssues,
+  buildAuditPrompt,
+  buildEvidencePrompt,
   buildWritingPrompt,
   extractExplicitEntityVersions,
   fallbackTaskContract,
@@ -29,6 +31,7 @@ function workflow(overrides = {}) {
   return {
     id: 'wechat',
     mode: 'analysis',
+    editorialSkill: 'latepost-ai-writer',
     model: 'z-ai/glm-5.2',
     timeoutMs: 3000,
     workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'analysis-v2-')),
@@ -99,12 +102,62 @@ test('用户明确两方结构时 sector 方法论只能补空白，不能强制
     contract,
     evidenceMatrix: { relevant_source_ids: ['S1'] },
     sources: [{ id: 'S1', title: 'Lobbying disclosure', url: 'https://example.com/a', text: 'Evidence.' }],
-    workflow: { id: 'sector', defaultMethodology: '必须写 TAM、产业链、供需与三种情景。' },
+    workflow: {
+      id: 'sector',
+      editorialSkill: 'latepost-ai-writer',
+      defaultMethodology: '必须写 TAM、产业链、供需与三种情景。',
+    },
     asOf: '2026-07-25',
   });
   assert.match(prompt, /用户已经指定结构，不得套用任何固定行业、公司或财报框架/);
   assert.doesNotMatch(prompt, /必须写 TAM/);
+  assert.match(prompt, /LatePost AI Writer 编辑方法/);
+  assert.match(prompt, /用户已经指定结构：稿型方法只能改善段落推进和证据表达/);
+  assert.doesNotMatch(prompt, /标题备选 3 条/);
   assert.equal(contract.requested_structure.length, 1);
+});
+
+test('EvidenceMatrix 在证据判断后选择受控稿型，审计增加阶段与口径检查', () => {
+  const contract = fallbackTaskContract('实测一个 AI Agent 产品', { id: 'wechat' });
+  const sources = [{
+    id: 'S1',
+    title: 'Product test',
+    url: 'https://example.com/test',
+    text: 'The product completed one controlled task with human intervention.',
+  }];
+  const workflowWithSkill = { id: 'wechat', editorialSkill: 'latepost-ai-writer' };
+  const evidencePrompt = buildEvidencePrompt(contract, sources, workflowWithSkill);
+  assert.match(evidencePrompt, /editorial_brief/);
+  assert.match(evidencePrompt, /在完成来源评估和需求覆盖判断之后/);
+
+  const matrix = normalizeEvidenceMatrix({
+    source_assessments: [{
+      source_id: 'S1',
+      source_type: 'primary',
+      relevant: true,
+      safe_statements: ['一次受控测试需要人工介入'],
+    }],
+    relevant_source_ids: ['S1'],
+    selected_reference_ids: ['S1'],
+    editorial_brief: {
+      archetype: '产品实测',
+      angle: '一次成功还不能证明稳定能力',
+      tension: '受控演示与真实使用存在落差',
+      ending_constraint: '失败恢复和成本仍待验证',
+    },
+  }, sources, contract, workflowWithSkill);
+  assert.equal(matrix.editorial_brief.archetype, '产品实测');
+  assert.equal(matrix.editorial_brief.routing_source, 'evidence-model');
+
+  const auditPrompt = buildAuditPrompt({
+    article: '---\ntitle: 测试\n---\n\n一次成功证明产品已经规模化。',
+    contract,
+    evidenceMatrix: matrix,
+    sources,
+  });
+  assert.match(auditPrompt, /演示、内部基准、公开评测、真实用户使用/);
+  assert.match(auditPrompt, /融资额、估值、合同额、回款、确认收入和 ARR/);
+  assert.match(auditPrompt, /不得因文风偏好、段落长度或标题审美重写文章/);
 });
 
 test('中文公司任务补齐英文别名查询，并给动态来源加时效窗口', () => {
@@ -353,6 +406,12 @@ test('V2 完整链路按 Opus 5/Kimi K2 定向搜索、写作、局部审计并�
         conflicts: [],
         relevant_source_ids: ['S1', 'S2'],
         selected_reference_ids: ['S1', 'S2'],
+        editorial_brief: {
+          archetype: '技术解释',
+          angle: '两款模型的能力差异取决于具体任务与部署约束',
+          tension: '公开能力描述与真实使用边界需要分开',
+          ending_constraint: '真实任务表现仍需持续验证',
+        },
         clarification_needed: false,
       }) } }] });
     }
@@ -361,6 +420,9 @@ test('V2 完整链路按 Opus 5/Kimi K2 定向搜索、写作、局部审计并�
       assert.match(prompt, /不可修改的 Slack 原始 Prompt/);
       assert.match(prompt, /Opus 5/);
       assert.match(prompt, /Kimi K2/);
+      assert.match(prompt, /LatePost AI Writer 编辑方法/);
+      assert.match(prompt, /稿型:技术解释/);
+      assert.match(prompt, /两款模型的能力差异取决于具体任务与部署约束/);
       assert.doesNotMatch(prompt, /Opus 4\.5|Kimi K2\.6|SEC 10-Q/);
       return jsonResponse({ choices: [{ message: { content: '---\ntitle: English duplicate\n---\ntitle: Opus 5 与 Kimi K2\n---\n\n两者需要按用户指定维度比较。' } }] });
     }
@@ -390,6 +452,10 @@ test('V2 完整链路按 Opus 5/Kimi K2 定向搜索、写作、局部审计并�
   assert.equal(trace.pipelineVersion, 'v2');
   assert.equal(trace.taskContract.prompt_revision, 3);
   assert.deepEqual(trace.evidenceMatrix.entities.map((item) => item.literal), ['Opus 5', 'Kimi K2']);
+  assert.equal(trace.editorialSkill.id, 'latepost-ai-writer');
+  assert.match(trace.editorialSkill.digest, /^[a-f0-9]{64}$/);
+  assert.equal(trace.editorialSkill.archetype, '技术解释');
+  assert.equal(trace.editorialSkill.routingSource, 'evidence-model');
   assert.equal(trace.factReview.approved, true);
 });
 

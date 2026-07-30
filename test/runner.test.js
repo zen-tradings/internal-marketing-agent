@@ -149,6 +149,59 @@ test('成功:Exa 调研 + OpenRouter 写作后写出带 title frontmatter 的 ar
   assert.match(calls[1].body.messages[1].content, /写作任务:英伟达业绩/);
 });
 
+test('V1 应急链路为四个中文原创工作流注入确定性编辑方法并记录 trace', async () => {
+  const workflow = tempWorkflow({
+    id: 'wechat',
+    mode: 'analysis',
+    editorialSkill: 'latepost-ai-writer',
+    model: 'workflow/model',
+    factReview: false,
+  });
+  let writingBody;
+  const fetchFn = async (url, opts) => {
+    if (String(url).endsWith('/search')) {
+      return jsonResponse({
+        results: [{
+          title: 'Agent product test',
+          url: 'https://example.com/agent-test',
+          text: 'The product completed one controlled task with human intervention.',
+        }],
+      });
+    }
+    writingBody = JSON.parse(opts.body);
+    return jsonResponse({
+      choices: [{
+        message: {
+          content: '---\ntitle: 一次成功仍不是稳定能力\n---\n\n受控测试需要人工介入。',
+        },
+      }],
+    });
+  };
+  const result = await runWriter({
+    workflow,
+    input: '实测一个 AI Agent 产品',
+    config: {
+      analysis: { pipelineVersion: 'v1' },
+      writer: {
+        openrouterApiKey: 'or-key',
+        model: 'config/model',
+        baseUrl: 'https://openrouter.test/api/v1',
+        exaApiKey: 'exa-key',
+        exaBaseUrl: 'https://exa.test',
+      },
+    },
+    fetchFn,
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(writingBody.messages[1].content, /LatePost AI Writer 编辑方法/);
+  assert.match(writingBody.messages[1].content, /稿型:产品实测/);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.editorialSkill.id, 'latepost-ai-writer');
+  assert.equal(trace.editorialSkill.archetype, '产品实测');
+  assert.equal(trace.editorialSkill.routingSource, 'deterministic-fallback');
+});
+
 test('工作流可覆盖 system prompt 与最终产出指令', async () => {
   const workflow = tempWorkflow({
     systemPrompt: 'CUSTOM NEWSLETTER SYSTEM',
