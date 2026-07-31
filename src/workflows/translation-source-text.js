@@ -29,6 +29,12 @@ const TRANSLATION_BATCH_MAX_CHARS = 8000;
 const TRANSLATION_BATCH_MAX_ITEMS = 24;
 const REPAIR_BATCH_MAX_CHARS = 4000;
 const REPAIR_BATCH_MAX_ITEMS = 6;
+const EMBEDDED_CHART_MIN_WIDTH = 200;
+const EMBEDDED_CHART_MIN_HEIGHT = 120;
+const EMBEDDED_CHART_MAX_WIDTH = 2400;
+const EMBEDDED_CHART_MAX_HEIGHT = 5000;
+const EMBEDDED_CHART_MAX_PIXELS = 8_000_000;
+const EMBEDDED_CHART_MIN_PNG_BYTES = 4096;
 const DEFAULT_LIMITS = {
   maxSourceBytes: 50 * 1024 * 1024,
   maxPdfPages: 120,
@@ -339,8 +345,17 @@ export async function acquireSourceDocument({
       signal,
     });
     document.acquisition = acquisition;
-    if (shouldUseBrowser(document, html) && config.browserEnabled !== false) {
-      acquisition.fallbacks.push('browser:静态正文过短或疑似客户端渲染');
+    const embeddedCharts = inspectEmbeddedChartFrames(html);
+    const browserReason = embeddedCharts.detected > 0
+      ? `静态 HTML 含 ${embeddedCharts.detected} 个需截图的嵌入图表`
+      : '静态正文过短或疑似客户端渲染';
+    if ((embeddedCharts.detected > 0 || shouldUseBrowser(document, html))
+      && config.browserEnabled === false) {
+      throw new Error(`网页含动态内容但浏览器抓取已关闭:${browserReason}`);
+    }
+    if ((embeddedCharts.detected > 0 || shouldUseBrowser(document, html))
+      && config.browserEnabled !== false) {
+      acquisition.fallbacks.push(`browser:${browserReason}`);
       return acquireWithBrowser({
         sourceUrl: fetched.finalUrl,
         attributionUrl: sourceUrl,
@@ -391,9 +406,17 @@ async function acquireWithBrowser({
 }) {
   throwIfTaskCancelled(signal);
   acquisition.attempts.push('playwright-structure');
-  const rendered = await renderWithBrowser({ sourceUrl, config, limits, dnsLookup, signal });
+  const rendered = await renderWithBrowser({
+    sourceUrl,
+    workDir,
+    config,
+    limits,
+    dnsLookup,
+    signal,
+  });
   throwIfTaskCancelled(signal);
   assertUsableArticleResponse(rendered.html, rendered.finalUrl);
+  acquisition.embeddedCharts = rendered.embeddedCharts;
   const document = await sourceDocumentFromHtml({
     html: rendered.html,
     sourceUrl: attributionUrl,
@@ -404,6 +427,7 @@ async function acquireWithBrowser({
     fetchWithRetry,
     config,
     dnsLookup,
+    assetMap: rendered.assetMap,
     scope,
     signal,
   });
@@ -1296,7 +1320,14 @@ function pinnedHttpFetch(addresses) {
   };
 }
 
-async function renderWithBrowser({ sourceUrl, config, limits, dnsLookup, signal }) {
+async function renderWithBrowser({
+  sourceUrl,
+  workDir,
+  config,
+  limits,
+  dnsLookup,
+  signal,
+}) {
   throwIfTaskCancelled(signal);
   const resolved = await resolveSafeHttpUrl(sourceUrl, { dnsLookup });
   const sourceHost = resolved.url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
@@ -1337,9 +1368,37 @@ async function renderWithBrowser({ sourceUrl, config, limits, dnsLookup, signal 
     throwIfTaskCancelled(signal);
     try { await page.waitForLoadState('networkidle', { timeout: Math.min(15000, limits.browserTimeoutMs) }); } catch {}
     throwIfTaskCancelled(signal);
+    await progressivelyRevealPage(page, { signal });
+    await page.locator('iframe').evaluateAll((frames) => {
+      frames.forEach((frame, index) => {
+        frame.setAttribute('data-zen-source-frame', String(index + 1));
+      });
+    });
+    const hydratedHtml = await page.content();
+    if (Buffer.byteLength(hydratedHtml) > limits.maxSourceBytes) {
+      throw new Error(`动态网页渲染结果超过上限:${Buffer.byteLength(hydratedHtml)}/${limits.maxSourceBytes}`);
+    }
+    const captured = await captureEmbeddedChartFrames({
+      page,
+      html: hydratedHtml,
+      workDir,
+      config,
+      limits,
+      signal,
+    });
+    throwIfTaskCancelled(signal);
     const finalUrl = page.url();
     await assertSafeHttpUrl(finalUrl, { dnsLookup });
-    return { html: await page.content(), finalUrl };
+    const html = await page.content();
+    if (Buffer.byteLength(html) > limits.maxSourceBytes) {
+      throw new Error(`动态网页结构化结果超过上限:${Buffer.byteLength(html)}/${limits.maxSourceBytes}`);
+    }
+    return {
+      html,
+      finalUrl,
+      assetMap: captured.assetMap,
+      embeddedCharts: captured.embeddedCharts,
+    };
   } catch (error) {
     if (signal?.aborted) throw cancellationErrorFromSignal(signal);
     throw error;
@@ -1347,6 +1406,215 @@ async function renderWithBrowser({ sourceUrl, config, limits, dnsLookup, signal 
     signal?.removeEventListener('abort', abortBrowser);
     await browser.close();
   }
+}
+
+export function inspectEmbeddedChartFrames(html, { documentUrl = 'https://example.com/' } = {}) {
+  const dom = new JSDOM(String(html || ''), { url: documentUrl });
+  const document = dom.window.document;
+  const title = metadata(document, [
+    'meta[property="og:title"]', 'meta[name="twitter:title"]', 'title', 'h1',
+  ], 'content');
+  const structured = document.querySelector('article.ltx_document,.ltx_document');
+  const titleRoot = structured ? undefined : titleAnchoredContentRoot(document, title);
+  const articles = [...document.querySelectorAll('article')];
+  const singleArticle = articles.length === 1 ? articles[0] : undefined;
+  const root = structured
+    || titleRoot
+    || singleArticle
+    || document.querySelector('main,[role="main"]')
+    || richestArticle(articles)
+    || document.body;
+  const frames = [...(root?.querySelectorAll('iframe') || [])];
+  const candidates = frames
+    .map((frame, index) => {
+      const srcdoc = String(frame.getAttribute('srcdoc') || '');
+      const src = cleanText(frame.getAttribute('src') || '');
+      const frameTitle = cleanText(frame.getAttribute('title') || '');
+      if (!srcdoc.trim() || src || !frame.hasAttribute('sandbox') || !frameTitle) return undefined;
+      return {
+        marker: frame.getAttribute('data-zen-source-frame') || String(index + 1),
+        title: frameTitle,
+        caption: embeddedChartCaption(srcdoc, frameTitle),
+        srcdocChars: srcdoc.length,
+      };
+    })
+    .filter(Boolean);
+  return {
+    detected: candidates.length,
+    excludedExternalFrames: frames.filter((frame) => cleanText(frame.getAttribute('src') || '')).length,
+    candidates,
+  };
+}
+
+export async function captureEmbeddedChartFrames({
+  page,
+  html,
+  workDir,
+  config = {},
+  limits = DEFAULT_LIMITS,
+  signal,
+}) {
+  const inspection = inspectEmbeddedChartFrames(html);
+  if (!inspection.detected) {
+    return {
+      assetMap: {},
+      embeddedCharts: {
+        detected: 0,
+        captured: 0,
+        excludedExternalFrames: inspection.excludedExternalFrames,
+      },
+    };
+  }
+  if (!workDir) throw new Error('嵌入图表截图缺少任务工作目录');
+  if (inspection.detected > limits.maxAssetCount) {
+    throw new Error(`原文嵌入图表数量超过上限:${inspection.detected}/${limits.maxAssetCount}`);
+  }
+
+  const assetDir = path.join(workDir, 'translation-assets');
+  fs.mkdirSync(assetDir, { recursive: true });
+  const assetMap = {};
+  const captureScreenshot = config.embeddedChartScreenshot
+    || (async ({ locator, options }) => locator.screenshot(options));
+  let totalBytes = 0;
+  let captured = 0;
+
+  for (const [index, descriptor] of inspection.candidates.entries()) {
+    throwIfTaskCancelled(signal);
+    const locator = page.locator(`[data-zen-source-frame="${descriptor.marker}"]`);
+    if (await locator.count() !== 1) {
+      throw new Error(`原文嵌入图表定位失败:${descriptor.title}`);
+    }
+
+    let buffer;
+    let box;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await locator.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(250 * (attempt + 1));
+      throwIfTaskCancelled(signal);
+      box = await locator.boundingBox();
+      buffer = Buffer.from(await captureScreenshot({
+        locator,
+        descriptor,
+        attempt,
+        options: {
+          type: 'png',
+          animations: 'disabled',
+          caret: 'hide',
+          omitBackground: false,
+          timeout: limits.browserTimeoutMs,
+        },
+      }));
+      if (buffer.length >= EMBEDDED_CHART_MIN_PNG_BYTES) break;
+    }
+
+    validateEmbeddedChartScreenshot({
+      title: descriptor.title,
+      buffer,
+      width: box?.width || 0,
+      height: box?.height || 0,
+      limits,
+    });
+    totalBytes += buffer.length;
+    if (totalBytes > limits.maxAssetBytes) {
+      throw new Error(`原文嵌入图表总量超过上限:${totalBytes}/${limits.maxAssetBytes}`);
+    }
+
+    const basename = `embedded-chart-${String(index + 1).padStart(3, '0')}.png`;
+    const target = path.join(assetDir, basename);
+    fs.writeFileSync(target, buffer, { mode: 0o600 });
+    const placeholder = `asset:${basename}`;
+    assetMap[placeholder] = target;
+    assetMap[basename] = target;
+    await locator.evaluate((frame, payload) => {
+      const document = frame.ownerDocument;
+      const figure = document.createElement('figure');
+      figure.setAttribute('data-zen-embedded-chart', payload.index);
+      const image = document.createElement('img');
+      image.setAttribute('src', payload.placeholder);
+      image.setAttribute('alt', payload.title);
+      figure.appendChild(image);
+      if (payload.caption) {
+        const caption = document.createElement('figcaption');
+        caption.textContent = payload.caption;
+        figure.appendChild(caption);
+      }
+      frame.replaceWith(figure);
+    }, {
+      index: String(index + 1),
+      placeholder,
+      title: descriptor.title,
+      caption: descriptor.caption,
+    });
+    captured += 1;
+  }
+
+  return {
+    assetMap,
+    embeddedCharts: {
+      detected: inspection.detected,
+      captured,
+      excludedExternalFrames: inspection.excludedExternalFrames,
+    },
+  };
+}
+
+export function validateEmbeddedChartScreenshot({
+  title,
+  buffer,
+  width,
+  height,
+  limits = DEFAULT_LIMITS,
+}) {
+  const label = cleanText(title || '未命名图表');
+  if (width < EMBEDDED_CHART_MIN_WIDTH || height < EMBEDDED_CHART_MIN_HEIGHT
+    || width > EMBEDDED_CHART_MAX_WIDTH || height > EMBEDDED_CHART_MAX_HEIGHT
+    || width * height > EMBEDDED_CHART_MAX_PIXELS) {
+    throw new Error(`原文嵌入图表尺寸异常:${label} ${Math.round(width)}x${Math.round(height)}`);
+  }
+  if (!Buffer.isBuffer(buffer) || buffer.length < EMBEDDED_CHART_MIN_PNG_BYTES) {
+    throw new Error(`原文嵌入图表截图疑似空白:${label}`);
+  }
+  if (buffer.length > limits.maxSingleAssetBytes) {
+    throw new Error(`原文嵌入图表超过单文件上限:${label} ${buffer.length}/${limits.maxSingleAssetBytes}`);
+  }
+  if (!buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    throw new Error(`原文嵌入图表不是有效 PNG:${label}`);
+  }
+}
+
+async function progressivelyRevealPage(page, { signal } = {}) {
+  for (let step = 0; step < 60; step += 1) {
+    throwIfTaskCancelled(signal);
+    const complete = await page.evaluate(() => {
+      const before = window.scrollY;
+      window.scrollBy(0, Math.max(600, window.innerHeight * 0.85));
+      return window.scrollY === before
+        || window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2;
+    });
+    await page.waitForTimeout(75);
+    if (complete) break;
+  }
+  await page.waitForTimeout(1200);
+  throwIfTaskCancelled(signal);
+}
+
+function embeddedChartCaption(srcdoc, title) {
+  let document;
+  try { document = new JSDOM(String(srcdoc || '')).window.document; }
+  catch { return cleanText(title); }
+  const values = [
+    title,
+    document.querySelector('.table-title,h1,h2')?.textContent,
+    document.querySelector('.table-subtitle,[class*="subtitle"]')?.textContent,
+    document.querySelector('.table-footer,figcaption,[class*="caption"]')?.textContent,
+  ].map(cleanText).filter(Boolean);
+  const seen = new Set();
+  return values.filter((value) => {
+    const key = normalizedHeading(value);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).join('\n').slice(0, 4000);
 }
 
 async function fetchNotionMarkdown({ sourceUrl, token, fetchFn, fetchWithRetry, timeoutMs }) {
@@ -2589,6 +2857,24 @@ async function rasterizeImageToPng({ buffer, contentType, target, config }) {
 }
 
 function discardExcludedContent(document) {
+  for (const frame of [...document.querySelectorAll('iframe[src]')]) {
+    const rawSrc = cleanText(frame.getAttribute('src') || '');
+    let url;
+    try { url = new URL(rawSrc, document.URL); } catch { continue; }
+    const hostname = url.hostname.replace(/^www\./, '').toLowerCase();
+    if (!['youtube.com', 'youtu.be', 'vimeo.com', 'player.vimeo.com'].includes(hostname)) continue;
+    const paragraph = document.createElement('p');
+    const link = document.createElement('a');
+    link.setAttribute('href', url.href);
+    link.textContent = cleanText(frame.getAttribute('title') || '') || '原文视频';
+    paragraph.appendChild(link);
+    frame.replaceWith(paragraph);
+  }
+  for (const heading of document.querySelectorAll('h1[aria-label],h2[aria-label],h3[aria-label],h4[aria-label],h5[aria-label],h6[aria-label]')) {
+    if (!heading.querySelector('[aria-hidden="true"]')) continue;
+    const accessibleText = cleanText(heading.getAttribute('aria-label') || '');
+    if (accessibleText) heading.textContent = accessibleText;
+  }
   document.querySelectorAll(EXCLUDED_CONTENT_SELECTOR).forEach((node) => node.remove());
 }
 

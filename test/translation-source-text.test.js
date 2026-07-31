@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { JSDOM } from 'jsdom';
 import {
   acquireSourceDocument,
   assessTranslationUnit,
@@ -10,7 +11,9 @@ import {
   assertPdfResponse,
   assertSafeHttpUrl,
   buildDocumentManifest,
+  captureEmbeddedChartFrames,
   hasPdfSignature,
+  inspectEmbeddedChartFrames,
   isPrivateIp,
   readResponseBufferWithLimit,
   removeRepeatedSourceMetadata,
@@ -19,6 +22,7 @@ import {
   sourceDocumentFromMarkdown,
   translateDocument,
   renderTranslatedDocument,
+  validateEmbeddedChartScreenshot,
   validateTranslationArtifact,
 } from '../src/workflows/translation-source-text.js';
 
@@ -191,9 +195,11 @@ test('多 article 动态页面按标题锚定完整正文，不误选推荐卡�
     </head><body><main>
       <article><h3>Unrelated AutoEval card</h3><p>Short recommendation.</p></article>
       <section class="post-content">
-        <h1>Agent Arena: Causal Evaluation of Agents in the Real World</h1>
+        <h1 aria-label="Agent Arena: Causal Evaluation of Agents in the Real World">
+          <span aria-hidden="true">Agent Arena: Causal Evaluation of Agents in the Real World</span>
+        </h1>
         <p>${body}</p>
-        <h2>Causal evaluation</h2>
+        <h2 aria-label="Causal evaluation"><span aria-hidden="true">Causal evaluation</span></h2>
         <p>${body}</p>
         <p>${body}</p>
       </section>
@@ -206,7 +212,161 @@ test('多 article 动态页面按标题锚定完整正文，不误选推荐卡�
 
   assert.ok(document.blocks.length >= 5);
   assert.match(document.blocks.map((block) => block.text || '').join('\n'), /Complete methodology paragraph/);
+  assert.deepEqual(
+    document.blocks.filter((block) => block.type === 'heading').map((block) => block.text),
+    ['Agent Arena: Causal Evaluation of Agents in the Real World', 'Causal evaluation'],
+  );
   assert.doesNotMatch(document.blocks.map((block) => block.text || '').join('\n'), /Unrelated AutoEval card|Another recommendation/);
+});
+
+test('嵌入图表只从标题锚定正文识别，提取图题并排除 YouTube 和正文外 iframe', () => {
+  const body = 'Complete report body with enough evidence and methodological context. '.repeat(20);
+  const srcdoc = `<h2 class="table-title">Task Distribution</h2>
+    <p class="table-subtitle">Primary intent across 160,480 tasks</p>
+    <div class="chart"></div>
+    <p class="table-footer">Inner arcs show sub-intents.</p>`;
+  const html = `<!doctype html><html><head>
+    <meta property="og:title" content="Agent Arena">
+    </head><body>
+      <iframe data-zen-source-frame="1" sandbox title="Outside chart" srcdoc="<h2>Outside</h2>"></iframe>
+      <main><section class="post-content">
+        <h1>Agent Arena</h1><p>${body}</p>
+        <iframe data-zen-source-frame="2" sandbox="allow-scripts" title="Task Distribution"
+          srcdoc="${srcdoc.replaceAll('"', '&quot;')}"></iframe>
+        <iframe data-zen-source-frame="3" title="Video" src="https://www.youtube.com/embed/example"></iframe>
+        <h2>Methodology</h2><p>${body}</p><p>${body}</p>
+      </section></main>
+    </body></html>`;
+
+  const result = inspectEmbeddedChartFrames(html);
+  assert.equal(result.detected, 1);
+  assert.equal(result.excludedExternalFrames, 1);
+  assert.equal(result.candidates[0].marker, '2');
+  assert.match(result.candidates[0].caption, /Task Distribution/);
+  assert.match(result.candidates[0].caption, /Primary intent across 160,480 tasks/);
+  assert.match(result.candidates[0].caption, /Inner arcs show sub-intents/);
+  assert.doesNotMatch(result.candidates[0].caption, /Outside/);
+});
+
+test('嵌入图表截图转成稳定本地资产并在原位置进入结构化翻译', async () => {
+  const workDir = tempDir();
+  const body = 'Complete report body with enough evidence and methodological context. '.repeat(20);
+  const srcdoc = `<h2 class="table-title">Agent Arena Leaderboard</h2>
+    <p class="table-subtitle">Net improvement by orchestrator model</p>
+    <div class="chart"></div>
+    <p class="table-footer">Error bars are 95% confidence intervals.</p>`;
+  const html = `<!doctype html><html><head>
+    <meta property="og:title" content="Agent Arena">
+    </head><body><main><section class="post-content">
+      <h1>Agent Arena</h1>
+      <p>Before chart. ${body}</p>
+      <iframe data-zen-source-frame="7" sandbox="allow-scripts" title="Agent Arena Leaderboard"
+        srcdoc="${srcdoc.replaceAll('"', '&quot;')}"></iframe>
+      <iframe data-zen-source-frame="8" title="Video" src="https://www.youtube.com/embed/example"></iframe>
+      <h2>After chart</h2><p>${body}</p><p>${body}</p>
+    </section></main></body></html>`;
+  const dom = new JSDOM(html, { url: 'https://arena.example/report' });
+  const png = Buffer.concat([
+    Buffer.from('89504e470d0a1a0a', 'hex'),
+    Buffer.alloc(5000),
+  ]);
+  const page = {
+    locator(selector) {
+      const node = dom.window.document.querySelector(selector);
+      return {
+        async count() { return node ? 1 : 0; },
+        async scrollIntoViewIfNeeded() {},
+        async boundingBox() { return { width: 845, height: 691 }; },
+        async screenshot() { return png; },
+        async evaluate(callback, payload) { return callback(node, payload); },
+      };
+    },
+    async waitForTimeout() {},
+  };
+
+  const captured = await captureEmbeddedChartFrames({
+    page,
+    html,
+    workDir,
+  });
+  assert.deepEqual(captured.embeddedCharts, {
+    detected: 1,
+    captured: 1,
+    excludedExternalFrames: 1,
+  });
+  assert.ok(fs.existsSync(captured.assetMap['asset:embedded-chart-001.png']));
+  assert.equal(dom.window.document.querySelectorAll('[data-zen-embedded-chart]').length, 1);
+  assert.equal(dom.window.document.querySelectorAll('iframe[src*="youtube.com"]').length, 1);
+
+  const document = await sourceDocumentFromHtml({
+    html: dom.serialize(),
+    sourceUrl: 'https://arena.example/report',
+    documentUrl: 'https://arena.example/report',
+    workDir,
+    assetMap: captured.assetMap,
+  });
+  const figureIndex = document.blocks.findIndex((block) => block.type === 'figure');
+  const afterHeadingIndex = document.blocks.findIndex((block) => block.type === 'heading' && block.text === 'After chart');
+  assert.ok(figureIndex > document.blocks.findIndex((block) => block.type === 'paragraph'));
+  assert.ok(figureIndex < afterHeadingIndex);
+  assert.match(document.blocks[figureIndex].caption, /Agent Arena Leaderboard/);
+  assert.match(document.blocks[figureIndex].caption, /Net improvement by orchestrator model/);
+  assert.match(document.blocks[figureIndex].caption, /95% confidence intervals/);
+  assert.match(document.blocks[figureIndex].images[0].localPath, /embedded-chart-001\.png$/);
+  assert.ok(document.blocks.some((block) => (
+    block.fragments || []
+  ).some((fragment) => fragment.value === '[Video](https://www.youtube.com/embed/example)')));
+  assert.equal(buildDocumentManifest(document).figures, 1);
+});
+
+test('嵌入图表截图门禁拒绝异常尺寸、空白、伪 PNG 和超限文件', () => {
+  const validPng = Buffer.concat([
+    Buffer.from('89504e470d0a1a0a', 'hex'),
+    Buffer.alloc(5000),
+  ]);
+  assert.throws(() => validateEmbeddedChartScreenshot({
+    title: 'Tiny chart',
+    buffer: validPng,
+    width: 100,
+    height: 600,
+  }), /尺寸异常/);
+  assert.throws(() => validateEmbeddedChartScreenshot({
+    title: 'Blank chart',
+    buffer: Buffer.from('89504e470d0a1a0a', 'hex'),
+    width: 800,
+    height: 600,
+  }), /疑似空白/);
+  assert.throws(() => validateEmbeddedChartScreenshot({
+    title: 'Fake chart',
+    buffer: Buffer.alloc(5000),
+    width: 800,
+    height: 600,
+  }), /不是有效 PNG/);
+  assert.throws(() => validateEmbeddedChartScreenshot({
+    title: 'Large chart',
+    buffer: validPng,
+    width: 800,
+    height: 600,
+    limits: { maxSingleAssetBytes: 1000 },
+  }), /超过单文件上限/);
+});
+
+test('含嵌入图表的静态 HTML 在浏览器关闭时明确失败，不静默丢图', async () => {
+  const body = 'Complete report body with enough evidence and methodological context. '.repeat(20);
+  const html = `<article><h1>Embedded report</h1><p>${body}</p>
+    <iframe sandbox="allow-scripts" title="Interactive chart"
+      srcdoc="<h2 class=&quot;table-title&quot;>Interactive chart</h2>"></iframe>
+    <h2>Methodology</h2><p>${body}</p><p>${body}</p></article>`;
+  await assert.rejects(() => acquireSourceDocument({
+    sourceUrl: 'https://example.com/report',
+    workDir: tempDir(),
+    fetchFn: async () => new Response(html, {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    }),
+    config: { browserEnabled: false },
+    dnsLookup: PUBLIC_DNS,
+  }), /浏览器抓取已关闭.*嵌入图表/);
 });
 
 test('WebP 原图在本地化时转为微信支持的 PNG', async () => {
