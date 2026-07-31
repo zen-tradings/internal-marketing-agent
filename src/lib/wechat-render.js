@@ -47,7 +47,14 @@ export function validatePreparedWechatHtml(html, { absoluteDirPath } = {}) {
     }
     if (/^(?:https?:|data:|asset:|\/\/)/i.test(src)) continue;
     const resolved = pathForHtmlAsset(src, absoluteDirPath);
-    if (!resolved || !fsExists(resolved)) errors.push(`第 ${index + 1} 张本地图片不存在:${src}`);
+    if (!resolved || !fsExists(resolved)) {
+      errors.push(`第 ${index + 1} 张本地图片不存在:${src}`);
+      continue;
+    }
+    const unsupportedFormat = unsupportedWechatImageFormat(resolved);
+    if (unsupportedFormat) {
+      errors.push(`第 ${index + 1} 张本地图片为微信不支持的 ${unsupportedFormat} 格式:${src}`);
+    }
   }
   for (const [index, table] of [...document.querySelectorAll('table')].entries()) {
     const rows = [...table.querySelectorAll('tr')];
@@ -91,6 +98,29 @@ function pathForHtmlAsset(src, absoluteDirPath) {
 function fsExists(filename) {
   try { return fs.existsSync(filename) && fs.statSync(filename).size > 0; }
   catch { return false; }
+}
+
+function unsupportedWechatImageFormat(filename) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(filename, 'r');
+    const header = Buffer.alloc(512);
+    const length = fs.readSync(descriptor, header, 0, header.length, 0);
+    const bytes = header.subarray(0, length);
+    if (bytes.length >= 12
+      && bytes.subarray(0, 4).toString('ascii') === 'RIFF'
+      && bytes.subarray(8, 12).toString('ascii') === 'WEBP') {
+      return 'WebP';
+    }
+    if (/<svg(?:\s|>)/i.test(bytes.toString('utf8'))) return 'SVG';
+  } catch {
+    return undefined;
+  } finally {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch {}
+    }
+  }
+  return undefined;
 }
 
 function effectiveEmFontSize(node) {

@@ -183,6 +183,65 @@ test('HTML 保留标题、段落、图片图注、表格、代码和列表结构
   assert.equal(buildDocumentManifest(document).contentMode, 'structured-document');
 });
 
+test('多 article 动态页面按标题锚定完整正文，不误选推荐卡片', async () => {
+  const body = 'Complete methodology paragraph with enough detail for faithful translation. '.repeat(20);
+  const html = `<!doctype html><html><head>
+    <title>Agent Arena: Causal Evaluation of Agents in the Real World - Arena.ai</title>
+    <meta property="og:title" content="Agent Arena: Causal Evaluation of Agents in the Real World">
+    </head><body><main>
+      <article><h3>Unrelated AutoEval card</h3><p>Short recommendation.</p></article>
+      <section class="post-content">
+        <h1>Agent Arena: Causal Evaluation of Agents in the Real World</h1>
+        <p>${body}</p>
+        <h2>Causal evaluation</h2>
+        <p>${body}</p>
+        <p>${body}</p>
+      </section>
+      <article><h3>Another recommendation</h3><p>Another short card.</p></article>
+    </main></body></html>`;
+  const document = await sourceDocumentFromHtml({
+    html,
+    sourceUrl: 'https://arena.example/blog/agent-arena-methodology',
+  });
+
+  assert.ok(document.blocks.length >= 5);
+  assert.match(document.blocks.map((block) => block.text || '').join('\n'), /Complete methodology paragraph/);
+  assert.doesNotMatch(document.blocks.map((block) => block.text || '').join('\n'), /Unrelated AutoEval card|Another recommendation/);
+});
+
+test('WebP 原图在本地化时转为微信支持的 PNG', async () => {
+  const workDir = tempDir();
+  const webp = Buffer.concat([
+    Buffer.from('RIFF', 'ascii'),
+    Buffer.alloc(4),
+    Buffer.from('WEBPVP8 ', 'ascii'),
+    Buffer.alloc(32),
+  ]);
+  const document = await sourceDocumentFromHtml({
+    html: `<article><h1>WebP report</h1>
+      <p>${'Body text for a complete source document. '.repeat(10)}</p>
+      <figure><img src="/chart.webp" alt="Chart"><figcaption>Chart</figcaption></figure>
+      </article>`,
+    sourceUrl: 'https://example.com/report',
+    workDir,
+    dnsLookup: PUBLIC_DNS,
+    fetchFn: async () => new Response(webp, {
+      status: 200,
+      headers: { 'content-type': 'image/webp' },
+    }),
+    config: {
+      imageRasterizer: async ({ contentType, target }) => {
+        assert.equal(contentType, 'image/webp');
+        fs.writeFileSync(target, Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'));
+      },
+    },
+  });
+
+  const imagePath = document.blocks.find((block) => block.type === 'figure').images[0].localPath;
+  assert.match(imagePath, /figure-001\.png$/);
+  assert.equal(fs.readFileSync(imagePath).subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+});
+
 test('章节范围先裁剪结构再下载该范围内的图片', async () => {
   const calls = [];
   const html = `<article>

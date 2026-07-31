@@ -439,14 +439,20 @@ export async function sourceDocumentFromHtml({
 
   discardExcludedContent(sourceDocument);
   let readable;
-  const structured = sourceDocument.querySelector('article.ltx_document,.ltx_document,article');
-  if (!structured) {
+  const structured = sourceDocument.querySelector('article.ltx_document,.ltx_document');
+  const titleRoot = structured ? undefined : titleAnchoredContentRoot(sourceDocument, title);
+  const articles = [...sourceDocument.querySelectorAll('article')];
+  const singleArticle = articles.length === 1 ? articles[0] : undefined;
+  if (!structured && !titleRoot && !singleArticle) {
     try {
       readable = new Readability(sourceDocument.cloneNode(true), { charThreshold: 80, keepClasses: true }).parse();
     } catch {}
   }
-  const fallback = structured || sourceDocument.querySelector('article,main,[role="main"]') || sourceDocument.body;
-  const bodyHtml = structured?.outerHTML || readable?.content || fallback?.innerHTML || '';
+  const fallback = sourceDocument.querySelector('main,[role="main"]')
+    || richestArticle(articles)
+    || sourceDocument.body;
+  const selectedRoot = structured || titleRoot || singleArticle;
+  const bodyHtml = selectedRoot?.outerHTML || readable?.content || fallback?.innerHTML || '';
   const bodyDom = new JSDOM(`<main>${bodyHtml}</main>`, { url: documentUrl });
   discardExcludedContent(bodyDom.window.document);
   const root = bodyDom.window.document.querySelector('main');
@@ -2375,9 +2381,21 @@ async function localizeFigureAssets(blocks, {
     if (!kind) throw new Error(`原文图片格式不受支持:${image.src}`);
     const basename = `figure-${String(index + 1).padStart(3, '0')}`;
     let target;
-    if (kind.extension === '.svg') {
+    if (['.svg', '.webp'].includes(kind.extension)) {
       target = path.join(assetDir, `${basename}.png`);
-      await rasterizeSvg(buffer, target, config);
+      const rasterize = config.imageRasterizer || rasterizeImageToPng;
+      await rasterize({
+        buffer,
+        contentType: kind.contentType,
+        target,
+        config,
+      });
+      if (!fs.existsSync(target) || fs.statSync(target).size <= 0) {
+        throw new Error(`原文图片转 PNG 失败:${image.src}`);
+      }
+      if (fs.statSync(target).size > limits.maxSingleAssetBytes) {
+        throw new Error(`原文图片转 PNG 后超过上限:${fs.statSync(target).size}/${limits.maxSingleAssetBytes}`);
+      }
     } else {
       target = path.join(assetDir, `${basename}${kind.extension}`);
       fs.writeFileSync(target, buffer, { mode: 0o600 });
@@ -2546,18 +2564,24 @@ function detectImageKind(buffer, contentType) {
   return undefined;
 }
 
-async function rasterizeSvg(buffer, target, config) {
+async function rasterizeImageToPng({ buffer, contentType, target, config }) {
   let playwright;
   try { playwright = await import('playwright-core'); }
-  catch { throw new Error('SVG 图片转 PNG 需要 playwright-core'); }
-  const executablePath = config.browserExecutablePath
-    || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  if (!fs.existsSync(executablePath)) throw new Error(`找不到 SVG 转换浏览器:${executablePath}`);
+  catch { throw new Error('原文图片转 PNG 需要 playwright-core'); }
+  const executablePath = browserExecutable(config);
+  if (!executablePath) throw new Error('找不到原文图片转换浏览器');
   const browser = await playwright.chromium.launch({ executablePath, headless: true, args: ['--disable-network'] });
   try {
     const page = await browser.newPage({ viewport: { width: 1400, height: 1000 }, deviceScaleFactor: 2 });
-    const dataUrl = `data:image/svg+xml;base64,${buffer.toString('base64')}`;
+    const dataUrl = `data:${contentType};base64,${buffer.toString('base64')}`;
     await page.setContent(`<style>html,body{margin:0;background:white}img{display:block;max-width:1400px;height:auto}</style><img id="asset" src="${dataUrl}">`);
+    await page.locator('#asset').evaluate((image) => {
+      if (image.complete && image.naturalWidth > 0) return;
+      return new Promise((resolve, reject) => {
+        image.addEventListener('load', resolve, { once: true });
+        image.addEventListener('error', () => reject(new Error('图片解码失败')), { once: true });
+      });
+    });
     await page.locator('#asset').screenshot({ path: target, omitBackground: false });
   } finally {
     await browser.close();
@@ -2566,6 +2590,41 @@ async function rasterizeSvg(buffer, target, config) {
 
 function discardExcludedContent(document) {
   document.querySelectorAll(EXCLUDED_CONTENT_SELECTOR).forEach((node) => node.remove());
+}
+
+function titleAnchoredContentRoot(document, title) {
+  const normalizedTitle = normalizedHeading(title);
+  const headings = [...document.querySelectorAll('h1')];
+  const heading = headings.find((candidate) => {
+    const value = normalizedHeading(candidate.textContent);
+    return value && normalizedTitle
+      && (normalizedTitle.includes(value) || value.includes(normalizedTitle));
+  }) || (headings.length === 1 ? headings[0] : undefined);
+  if (!heading) return undefined;
+
+  for (let candidate = heading.parentElement;
+    candidate && !['BODY', 'HTML'].includes(candidate.tagName);
+    candidate = candidate.parentElement) {
+    const textLength = cleanText(candidate.textContent).length;
+    const paragraphs = candidate.querySelectorAll('p').length;
+    const headingsCount = candidate.querySelectorAll('h1,h2,h3,h4,h5,h6').length;
+    if (textLength >= 800 && paragraphs >= 3 && (headingsCount >= 2 || paragraphs >= 6)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function richestArticle(articles = []) {
+  return [...articles].sort((left, right) => {
+    const score = (node) => cleanText(node.textContent).length
+      + node.querySelectorAll('h1,h2,h3,h4,h5,h6,p,figure,table,pre').length * 80;
+    return score(right) - score(left);
+  })[0];
+}
+
+function normalizedHeading(value) {
+  return cleanText(value).toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
 function assertSourceDocumentComplete(document) {

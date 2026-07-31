@@ -85,3 +85,20 @@ test('微信最终 HTML:校验乱码、空表格、坏图和本地图片存在�
     /疑似乱码.*本地图片不存在.*表格结构为空或损坏/,
   );
 });
+
+test('微信最终 HTML:在调用微信 API 前拦截本地 WebP 和 SVG', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-wechat-image-format-'));
+  fs.writeFileSync(
+    path.join(dir, 'disguised.png'),
+    Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBPVP8 ')]),
+  );
+  fs.writeFileSync(path.join(dir, 'vector.dat'), Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>'));
+
+  assert.throws(
+    () => validatePreparedWechatHtml(
+      '<img src="disguised.png"><img src="vector.dat">',
+      { absoluteDirPath: dir },
+    ),
+    /微信不支持的 WebP.*微信不支持的 SVG/,
+  );
+});
