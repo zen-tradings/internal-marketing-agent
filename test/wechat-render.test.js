@@ -7,6 +7,7 @@ import path from 'node:path';
 import {
   alignTerminalReferences,
   appendFinalFooter,
+  appendFinalTailImages,
   normalizeBodyTypography,
   removeDuplicateReferenceSections,
   styleKeyHighlights,
@@ -24,6 +25,43 @@ test('微信最终 HTML:尾图移动到脚注和来源之后且只出现一次',
   assert.equal(root.lastElementChild.getAttribute('data-zen-final-footer-wrapper'), 'true');
   assert.equal(root.lastElementChild.nextSibling, null);
   assert.equal(root.lastElementChild.textContent, '');
+});
+
+test('微信最终 HTML:调研图与社群封底固定为最后两张且顺序不可交换', () => {
+  const survey = 'asset:zen-survey-qr.jpg';
+  const footer = 'asset:zen-footer-qr.png';
+  const html = `<section><p><img src="${footer}"></p><p>正文</p><p><img src="${survey}"></p><section class="footnotes">脚注</section></section>`;
+  const output = appendFinalTailImages(html, { surveyPath: survey, footerPath: footer });
+  const document = new JSDOM(`<body>${output}</body>`).window.document;
+  const root = document.body.firstElementChild;
+  const tail = [...root.children].slice(-2);
+
+  assert.equal(document.querySelectorAll('[data-zen-final-survey="true"]').length, 1);
+  assert.equal(document.querySelectorAll('[data-zen-final-footer="true"]').length, 1);
+  assert.equal(tail[0].getAttribute('data-zen-final-tail-wrapper'), 'survey');
+  assert.equal(tail[1].getAttribute('data-zen-final-tail-wrapper'), 'footer');
+  assert.equal(tail[1], root.lastChild);
+  assert.doesNotThrow(() => validatePreparedWechatHtml(output, {
+    finalSurveyPath: survey,
+    finalFooterPath: footer,
+  }));
+
+  root.insertBefore(tail[1], tail[0]);
+  assert.throws(() => validatePreparedWechatHtml(document.body.innerHTML, {
+    finalSurveyPath: survey,
+    finalFooterPath: footer,
+  }), /固定社群封底不是最终节点|固定调研图必须紧邻社群封底并位于其前/);
+});
+
+test('微信最终 HTML:固定尾图必须成对配置', () => {
+  assert.throws(
+    () => appendFinalTailImages('<p>正文</p>', { surveyPath: '/survey.jpg' }),
+    /必须同时配置/,
+  );
+  assert.throws(
+    () => validatePreparedWechatHtml('<p>正文</p>', { finalFooterPath: '/footer.png' }),
+    /必须同时配置/,
+  );
 });
 
 test('微信最终 HTML:文末引用链接及列表强制左对齐', () => {

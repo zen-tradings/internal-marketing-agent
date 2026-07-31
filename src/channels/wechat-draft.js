@@ -5,7 +5,7 @@ import { getInputContent as defaultGetInputContent } from '../lib/getInputConten
 import { generateCover as defaultGenerateCover, ensureFrontmatterCover as defaultEnsureFrontmatterCover } from '../lib/cover.js';
 import { checkArticle as defaultCheckArticle } from '../lib/gate.js';
 import { injectFixedImages as defaultInjectFixedImages } from '../lib/assets.js';
-import { renderAndPublishWithFinalFooter, stripFooterMarkdown } from '../lib/wechat-render.js';
+import { renderAndPublishWithFinalFooter, stripFinalTailMarkdown } from '../lib/wechat-render.js';
 import { normalizeWideTables as defaultNormalizeWideTables } from '../lib/mobile-tables.js';
 import { FIXED_DRAFT_TEMPLATE_IDS } from '../lib/draft-template.js';
 
@@ -46,7 +46,7 @@ function markdownForGate(markdown, assets = {}) {
     /^---\n[\s\S]*?\n---/,
     (block) => block.replace(/^\s*cover\s*:\s*.*(?:\n|$)/gm, '')
   );
-  const generatedAssetPaths = [assets.headerImage, assets.footerImage].filter(Boolean);
+  const generatedAssetPaths = [assets.headerImage, assets.surveyImage, assets.footerImage].filter(Boolean);
   for (const assetPath of generatedAssetPaths) {
     candidate = candidate.split('\n').filter((line) => !line.includes(`](${assetPath})`)).join('\n');
   }
@@ -133,15 +133,18 @@ export function makeChannel({
         catch (warnErr) { console.error('门禁提醒告警失败(不影响流程):', warnErr); }
       }
 
-      // 历史重试稿可能已经把尾图写进 Markdown。先移除，最终由渲染后 HTML 阶段
-      // 追加到脚注/引用之后，确保它是真正的最后一个正文节点。
-      const withoutLegacyFooter = stripFooterMarkdown(markdown, assetsConfig.footerImage);
-      if (withoutLegacyFooter !== markdown) {
-        await writeArticle(articlePath, withoutLegacyFooter);
-        markdown = withoutLegacyFooter;
+      // 历史重试稿可能已经把固定尾图写进 Markdown。先全部移除，最终由渲染后 HTML
+      // 阶段按“调研图、社群封底”追加到脚注/引用之后，确保它们是最后两个正文节点。
+      const withoutLegacyTail = stripFinalTailMarkdown(markdown, [
+        assetsConfig.surveyImage,
+        assetsConfig.footerImage,
+      ]);
+      if (withoutLegacyTail !== markdown) {
+        await writeArticle(articlePath, withoutLegacyTail);
+        markdown = withoutLegacyTail;
       }
 
-      // Markdown 阶段只注入头图；尾图在完成主题和脚注渲染后追加。
+      // Markdown 阶段只注入头图；两张固定尾图在完成主题和脚注渲染后追加。
       const injectResult = injectFixedImages(markdown, {
         headerPath: assetsConfig.headerImage,
         footerPath: undefined,
@@ -197,6 +200,7 @@ export function makeChannel({
         const mediaId = await renderAndPublish(undefined, {
           ...RENDER_OPTS,
           file: articlePath,
+          finalSurveyPath: assetsConfig.surveyImage,
           finalFooterPath: assetsConfig.footerImage,
         }, getInputContent);
         return { mediaId, title };

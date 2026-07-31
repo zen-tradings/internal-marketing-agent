@@ -34,18 +34,26 @@ test('RENDER_OPTS 固定为普通微信公众号版式', () => {
   assert.equal(channel.templateLocked, true);
 });
 
-test('publish 调 renderAndPublish 并返回 mediaId/title', async () => {
+test('publish 调 renderAndPublish 并传入固定尾图后返回 mediaId/title', async () => {
   let calledWith;
   const channel = makeChannel({
     ...stubCover,
     renderAndPublish: async (content, opts) => { calledWith = { content, opts }; return 'MEDIA-9'; },
     readArticle: async () => ({ markdown: '---\ntitle: 英伟达\n---\n正文', title: '英伟达' }),
   });
-  const out = await channel.publish({ articlePath: '/x/article.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
+  const out = await channel.publish({
+    articlePath: '/x/article.md',
+    config: {
+      wechat: { appId: 'wx', appSecret: 's' },
+      assets: { surveyImage: '/assets/survey.jpg', footerImage: '/assets/footer.png' },
+    },
+  });
   assert.equal(out.mediaId, 'MEDIA-9');
   assert.equal(out.title, '英伟达');
   assert.equal(calledWith.opts.theme, 'zen-trading');
   assert.equal(calledWith.opts.file, '/x/article.md');
+  assert.equal(calledWith.opts.finalSurveyPath, '/assets/survey.jpg');
+  assert.equal(calledWith.opts.finalFooterPath, '/assets/footer.png');
 });
 
 test('renderAndPublish 抛错 → stage=publish', async () => {
@@ -302,6 +310,7 @@ test('重试时系统写入的 cover 与固定图本地路径不触发门禁,正
     '---',
     '![Zen Trading](/Users/zen/header.gif)',
     '正文内容。',
+    '![Zen Trading 内容调研问卷](/Users/zen/survey.jpg)',
     '![Zen Trading 社群](/Users/zen/footer.png)',
   ].join('\n');
   const channel = makeChannel({
@@ -312,30 +321,38 @@ test('重试时系统写入的 cover 与固定图本地路径不触发门禁,正
   });
   const out = await channel.publish({
     articlePath: '/x/a.md',
-    config: { wechat: { appId: 'wx', appSecret: 's' }, assets: { headerImage: '/Users/zen/header.gif', footerImage: '/Users/zen/footer.png' } },
+    config: { wechat: { appId: 'wx', appSecret: 's' }, assets: { headerImage: '/Users/zen/header.gif', surveyImage: '/Users/zen/survey.jpg', footerImage: '/Users/zen/footer.png' } },
   });
   assert.equal(out.mediaId, 'MEDIA-RETRY');
 });
 
-// ---- 固定头尾图注入(assets)接线 ----
+// ---- 固定头图与 HTML 尾图接线 ----
 
-test('注入头尾图后写回 article.md,渲染前 markdown 已含固定图,generateCover 收到注入后的 markdown', async () => {
+test('Markdown 只注入头图,渲染参数按顺序携带调研图与社群封底', async () => {
   let writtenMarkdown;
   let generateCoverArgs;
+  let renderOptions;
   const channel = makeChannel({
     generateCover: async (args) => { generateCoverArgs = args; return '/out/cover.png'; },
     writeArticle: async (p, content) => { writtenMarkdown = content; },
-    renderAndPublish: async () => 'MEDIA-9',
+    renderAndPublish: async (content, options) => { renderOptions = options; return 'MEDIA-9'; },
     readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
-    injectFixedImages: (md) => ({ markdown: `${md}\n![Zen Trading 社群](/abs/footer.png)\n`, skipped: [] }),
+    injectFixedImages: (md, options) => {
+      assert.equal(options.headerPath, '/abs/header.gif');
+      assert.equal(options.footerPath, undefined);
+      return { markdown: `${md}\n![Zen Trading](/abs/header.gif)\n`, skipped: [] };
+    },
   });
   const out = await channel.publish({
     articlePath: '/out/article.md',
-    config: { wechat: { appId: 'wx', appSecret: 's' }, assets: { headerImage: '/abs/header.gif', footerImage: '/abs/footer.png' } },
+    config: { wechat: { appId: 'wx', appSecret: 's' }, assets: { headerImage: '/abs/header.gif', surveyImage: '/abs/survey.jpg', footerImage: '/abs/footer.png' } },
   });
   assert.equal(out.mediaId, 'MEDIA-9');
-  assert.match(generateCoverArgs.markdown, /\/abs\/footer\.png/);
-  assert.match(writtenMarkdown, /\/abs\/footer\.png/); // 最终写回文件含 cover + 固定图
+  assert.match(generateCoverArgs.markdown, /\/abs\/header\.gif/);
+  assert.match(writtenMarkdown, /\/abs\/header\.gif/);
+  assert.doesNotMatch(writtenMarkdown, /\/abs\/(?:survey\.jpg|footer\.png)/);
+  assert.equal(renderOptions.finalSurveyPath, '/abs/survey.jpg');
+  assert.equal(renderOptions.finalFooterPath, '/abs/footer.png');
 });
 
 test('固定图缺失(skipped 非空) → notifier.warn 告警,流程继续', async () => {

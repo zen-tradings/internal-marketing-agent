@@ -128,6 +128,7 @@ export function loadConfig(env = process.env) {
     },
     assets: {
       headerImage: env.WECHAT_HEADER_IMAGE || path.join(REPO_ROOT, 'assets', 'zen-header-banner.gif'),
+      surveyImage: env.WECHAT_SURVEY_IMAGE || path.join(REPO_ROOT, 'assets', 'zen-survey-qr.jpg'),
       footerImage: env.WECHAT_FOOTER_IMAGE || path.join(REPO_ROOT, 'assets', 'zen-footer-qr.png'),
     },
     cover: {

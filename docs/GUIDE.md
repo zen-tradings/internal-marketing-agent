@@ -62,7 +62,7 @@
 
 ## 二、配置的三层
 
-1. **`.env`（运行时开关，改完要重启进程）**：密钥、模型、任务目录、队列上限、抓取/外部 API 超时、Slack 允许名单、数据保留期、`HUB_DRY_RUN=1`、头尾图和定时表达式。完整列表和默认值以 `.env.example` 为准。服务不配置或校验公网出口 IP。
+1. **`.env`（运行时开关，改完要重启进程）**：密钥、模型、任务目录、队列上限、抓取/外部 API 超时、Slack 允许名单、数据保留期、`HUB_DRY_RUN=1`、固定头图、两张固定尾图和定时表达式。完整列表和默认值以 `.env.example` 为准。服务不配置或校验公网出口 IP。
 2. **`src/workflows/*.js`(声明式工作流)**:每个文件声明 id、触发器、渠道、优先信源和备用方法论。V2 中 Slack Prompt 决定内容，行业/公司/财报方法论只补充用户未规定的结构。公共信源在 `workflows/shared.js`；结构化直译继续使用自己的固定链路。
 3. **`src/config/index.js`(env → config 对象的翻译层)**:新加 env 键时在这里给默认值。
 
@@ -89,11 +89,11 @@
 | 优先信源加减域名 | `workflows/shared.js` 的清单,或 .env EXA_PRIORITY_DOMAINS | 写主域即可,子域自动匹配 |
 | 门禁规则(拦截/提醒) | `src/lib/gate.js` | 注意:投资建议敏感词已按要求移除,勿加回 |
 | 微信宽表可读性与自动拆分 | `src/lib/mobile-tables.js` | 紧凑五列可放行；不可读表先拆分，转换失败才由 gate 拦截 |
-| 头尾图换图 | 替换 `assets/` 下文件,或 .env 覆盖路径 | 幂等注入在 `src/lib/assets.js` |
+| 固定头图/尾图换图 | 替换 `assets/` 下文件，或用 `WECHAT_HEADER_IMAGE` / `WECHAT_SURVEY_IMAGE` / `WECHAT_FOOTER_IMAGE` 覆盖 | Markdown 只注入头图；最终 HTML 强制按“调研图、社群封底”顺序保留最后两张 |
 | 封面版式/字段 | `tools/cover-generator/template.html` | 自定义生成器时覆盖 `COVER_GENERATOR_DIR`；数据提取 prompt 在 `src/lib/cover.js` |
 | 分析模型与预算 | `.env` 的 `OPENROUTER_MODEL` / `OPENROUTER_PLANNER_MODEL` / `OPENROUTER_REVIEW_MODEL` / `ANALYSIS_*` | 正文、规划、审计分离；生产默认 V2 |
 | 草稿固定模板总门禁 | `src/lib/draft-template.js` | 所有真实渠道必须登记模板 ID 并锁定；任务不得覆盖，改版必须升版本和更新测试 |
-| 微信渲染主题 | `zen-wechat/zen-trading@3`、`assets/zen-trading.css` 与 `RENDER_OPTS` | 主题文件随仓库部署；引用块归一为正文字号，最终 HTML 在发布前执行字体与重复来源检查 |
+| 微信渲染主题 | `zen-wechat/zen-trading@4`、`assets/zen-trading.css` 与 `RENDER_OPTS` | 主题文件随仓库部署；引用块归一为正文字号，最终 HTML 在发布前执行字体、重复来源与固定尾图顺序检查 |
 | Customer.io 邮件草稿 | `src/workflows/email.js` + `src/channels/customerio-draft.js` | 固定 `zen-customerio/zen-research@1`，只创建草稿；受众由 internal/pilot/full 三阶段配置控制 |
 | 新发布渠道 | 新建 `src/channels/<name>.js` 实现 publish() + 注册模板和渠道 | 见 README「扩展」一节；未登记模板时 fail closed |
 

@@ -14,6 +14,12 @@ test('固定封底使用最新四二维码原图', () => {
   assert.equal(digest, '6c52ad1bb87775e10700fd23333ddb11b7d618d584e0f6c4e44feb3b14b99cab');
 });
 
+test('固定倒数第二张图使用内容调研问卷原图', () => {
+  const survey = new URL('../assets/zen-survey-qr.jpg', import.meta.url);
+  const digest = crypto.createHash('sha256').update(fs.readFileSync(survey)).digest('hex');
+  assert.equal(digest, 'd75f2e711ab6958a1303084edea5c2682d17cb00ac48b413309d7c5ebc595a25');
+});
+
 test('有 frontmatter 时头图插在第二个 --- 之后空一行处,尾图追加到文末', () => {
   const md = '---\ntitle: T\n---\n正文第一行。';
   const { markdown, skipped } = injectFixedImages(md, { headerPath: HEADER, footerPath: FOOTER, existsFn: alwaysExists });

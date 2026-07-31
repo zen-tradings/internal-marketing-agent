@@ -41,6 +41,7 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.match(c.cover.generatorDir, /tools\/cover-generator$/);
   assert.equal('claudeBin' in c, false);
   assert.equal(c.wechat.appId, 'wx');
+  assert.match(c.assets.surveyImage, /assets\/zen-survey-qr\.jpg$/);
   assert.match(c.assets.footerImage, /assets\/zen-footer-qr\.png$/);
 });
 
