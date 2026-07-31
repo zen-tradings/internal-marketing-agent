@@ -992,6 +992,20 @@ test('复合英文数字词、序数和中文数字表达按数值等价通过',
   assert.deepEqual(chinesePercent.hardErrors, []);
 });
 
+test('英文复数数量级可忠实译为中文概数，但不同数量级仍被拒绝', () => {
+  const unit = {
+    id: 'b000034:caption',
+    kind: 'figure_caption',
+    text: 'A long tail runs into the hundreds.',
+  };
+  const equivalent = assessTranslationUnit(unit, '长尾延伸至数百次。', { afterRepair: true });
+  assert.deepEqual(equivalent.hardErrors, []);
+  assert.deepEqual(equivalent.warnings, []);
+
+  const changed = assessTranslationUnit(unit, '长尾延伸至数千次。', { afterRepair: true });
+  assert.match(changed.hardErrors.join(' '), /译文新增不等值数字/);
+});
+
 test('低置信度数字差异在定向修复后只告警并写入 checkpoint', async () => {
   const source = {
     version: 5,

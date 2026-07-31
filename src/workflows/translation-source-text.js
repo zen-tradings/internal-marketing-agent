@@ -2199,8 +2199,9 @@ function englishNumberPhraseNumbers(value) {
     'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
     'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen',
     'seventeen', 'eighteen', 'nineteen', 'twenty', 'thirty', 'forty', 'fifty',
-    'sixty', 'seventy', 'eighty', 'ninety', 'hundred', 'thousand', 'million',
-    'billion', 'trillion', 'and', 'first', 'second', 'third', 'fourth', 'fifth',
+    'sixty', 'seventy', 'eighty', 'ninety', 'hundred', 'hundreds', 'thousand',
+    'thousands', 'million', 'millions', 'billion', 'billions', 'trillion',
+    'trillions', 'and', 'first', 'second', 'third', 'fourth', 'fifth',
     'sixth', 'seventh', 'eighth', 'ninth', 'tenth', 'eleventh', 'twelfth',
     'thirteenth', 'fourteenth', 'fifteenth', 'sixteenth', 'seventeenth',
     'eighteenth', 'nineteenth', 'twentieth', 'thirtieth', 'fortieth', 'fiftieth',
@@ -2237,10 +2238,15 @@ function parseEnglishNumberPhrase(value) {
   };
   const scales = {
     hundred: 100n,
+    hundreds: 100n,
     thousand: 1_000n,
+    thousands: 1_000n,
     million: 1_000_000n,
+    millions: 1_000_000n,
     billion: 1_000_000_000n,
+    billions: 1_000_000_000n,
     trillion: 1_000_000_000_000n,
+    trillions: 1_000_000_000_000n,
   };
   const words = String(value).toLowerCase().split(/[\s-]+/).filter((item) => item !== 'and');
   if (!words.length || !words.some((item) => Object.hasOwn(small, item) || Object.hasOwn(scales, item))) {
