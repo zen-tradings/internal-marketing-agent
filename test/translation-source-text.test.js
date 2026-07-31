@@ -1006,6 +1006,28 @@ test('英文复数数量级可忠实译为中文概数，但不同数量级仍�
   assert.match(changed.hardErrors.join(' '), /译文新增不等值数字/);
 });
 
+test('英文 both 可忠实译为中文“两者”，但不得扩成三者', () => {
+  const unit = {
+    id: 'b000128',
+    kind: 'paragraph',
+    text: 'This covers both training and inference because we don’t think there is a meaningful difference.',
+  };
+  const equivalent = assessTranslationUnit(
+    unit,
+    '这涵盖了训练和推理，因为我们认为两者之间没有实质性区别。',
+    { afterRepair: true },
+  );
+  assert.deepEqual(equivalent.hardErrors, []);
+  assert.deepEqual(equivalent.warnings, []);
+
+  const changed = assessTranslationUnit(
+    unit,
+    '这涵盖了训练、推理和部署，因为我们认为三者之间没有实质性区别。',
+    { afterRepair: true },
+  );
+  assert.match(changed.hardErrors.join(' '), /译文新增不等值数字/);
+});
+
 test('低置信度数字差异在定向修复后只告警并写入 checkpoint', async () => {
   const source = {
     version: 5,
