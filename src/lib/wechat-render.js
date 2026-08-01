@@ -6,9 +6,9 @@ import { prepareRenderContext, publishToWechatDraft } from '@wenyan-md/core/wrap
 export async function renderAndPublishWithFinalFooter(inputContent, options, getInputContent) {
   const { gzhContent, absoluteDirPath } = await prepareRenderContext(inputContent, options, getInputContent);
   if (!gzhContent?.title) throw new Error('未能找到文章标题');
-  gzhContent.content = normalizeBodyTypography(
+  gzhContent.content = normalizeCodeBreaks(normalizeBodyTypography(
     styleKeyHighlights(alignTerminalReferences(removeDuplicateReferenceSections(gzhContent.content))),
-  );
+  ));
   if (options.finalSurveyPath || options.finalFooterPath) {
     gzhContent.content = appendFinalTailImages(gzhContent.content, {
       surveyPath: options.finalSurveyPath,
@@ -23,6 +23,15 @@ export async function renderAndPublishWithFinalFooter(inputContent, options, get
   const data = await publishToWechatDraft(gzhContent, { appId: options.appId, relativePath: absoluteDirPath });
   if (!data?.media_id) throw new Error(`发布到微信公众号失败:${JSON.stringify(data)}`);
   return data.media_id;
+}
+
+export function normalizeCodeBreaks(html) {
+  const dom = new JSDOM(`<body>${String(html || '')}</body>`);
+  const document = dom.window.document;
+  for (const lineBreak of document.querySelectorAll('pre > code br')) {
+    lineBreak.replaceWith(document.createTextNode('\n'));
+  }
+  return document.body.innerHTML;
 }
 
 export function validatePreparedWechatHtml(html, {

@@ -166,6 +166,7 @@ export function openStore(dbPath) {
               OR error LIKE '网络请求失败%'
               OR error LIKE '%ECONNRESET%'
               OR error LIKE '结构化翻译校验失败:%'
+              OR error LIKE '直译完整性门禁失败:%'
             ))
           )
       `).run(id).changes;
@@ -177,11 +178,14 @@ export function openStore(dbPath) {
         WHERE id = ?
           AND workflow_id IN ('wechat', 'sector', 'company', 'earnings')
           AND status = 'failed'
-          AND stage = 'gate'
           AND media_id IS NULL
           AND (
-            error LIKE '%正文包含代码围栏%'
-            OR error LIKE '%四空格缩进块%'
+            (stage = 'gate' AND (
+              error LIKE '%正文包含代码围栏%'
+              OR error LIKE '%四空格缩进块%'
+            ))
+            OR (stage = 'publish'
+              AND error LIKE '发布失败:微信最终 HTML 完整性校验失败:%代码块含非语法高亮子节点%')
           )
       `).run(id).changes;
     },

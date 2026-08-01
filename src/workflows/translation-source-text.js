@@ -776,6 +776,7 @@ export async function translateDocument({
   const completed = new Map();
   const validationWarnings = new Map();
   const validationExceptions = new Map();
+  let checkpointInvalidatedUnits = 0;
   if (resumeFromCheckpoint) {
     try {
       const saved = JSON.parse(fs.readFileSync(checkpointPath, 'utf8'));
@@ -790,6 +791,42 @@ export async function translateDocument({
       }
     } catch {}
   }
+  if (completed.size) {
+    const unitMap = new Map(units.map((unit) => [unit.id, unit]));
+    for (const [id, text] of [...completed]) {
+      const unit = unitMap.get(id);
+      const assessment = unit
+        ? assessTranslationUnit(unit, text, { afterRepair: true })
+        : { hardErrors: ['断点含未知文本块'], warnings: [] };
+      const blockingErrors = assessment.hardErrors.filter((reason) => !isReviewableEquivalenceError(reason));
+      const exception = validationExceptions.get(id);
+      const exceptionMatches = Boolean(
+        exception
+        && exception.source === unit?.text
+        && exception.selected === text
+        && Array.isArray(exception.candidates)
+        && blockingErrors.length === 0
+        && assessment.hardErrors.every(isReviewableEquivalenceError),
+      );
+      if (blockingErrors.length
+        || ((assessment.hardErrors.length || assessment.warnings.length) && !exceptionMatches)) {
+        completed.delete(id);
+        validationWarnings.delete(id);
+        validationExceptions.delete(id);
+        checkpointInvalidatedUnits += 1;
+        continue;
+      }
+      if (!assessment.hardErrors.length && !assessment.warnings.length) {
+        validationWarnings.delete(id);
+        validationExceptions.delete(id);
+      } else if (!validationWarnings.has(id)) {
+        validationWarnings.set(id, [
+          ...assessment.hardErrors.map((reason) => `${id}: 两轮聚焦修复后宽松放行:${reason}`),
+          ...assessment.warnings.map((reason) => `${id}: ${reason}`),
+        ]);
+      }
+    }
+  }
   const writeCheckpoint = () => writeJsonAtomic(checkpointPath, {
     version: CHECKPOINT_VERSION,
     key: checkpointKey,
@@ -798,6 +835,7 @@ export async function translateDocument({
     validationExceptions: [...validationExceptions.values()],
     updatedAt: new Date().toISOString(),
   });
+  if (checkpointInvalidatedUnits) writeCheckpoint();
 
   const batches = batchUnits(
     units.filter((unit) => !completed.has(unit.id)),
@@ -807,7 +845,9 @@ export async function translateDocument({
   await report(onProgress, {
     stage: 'translation',
     message: completed.size
-      ? `从结构化断点继续翻译 ${completed.size}/${units.length}`
+      ? `从结构化断点继续翻译 ${completed.size}/${units.length}${checkpointInvalidatedUnits
+        ? `（按新规则重验，${checkpointInvalidatedUnits} 个旧单元需重做）`
+        : ''}`
       : `开始翻译标题、正文及图表标题，共 ${units.length} 个文本单元`,
     completed: completed.size,
     total: units.length,

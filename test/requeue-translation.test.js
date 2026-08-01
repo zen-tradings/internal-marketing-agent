@@ -75,3 +75,19 @@ test('受限续跑命令拒绝无 checkpoint、其它工作流和已有 media_id
     /已有 media_id/,
   );
 });
+
+test('受限续跑命令允许恢复最终完整性门禁失败且仍要求 checkpoint', () => {
+  const { dbPath, workDir } = fixture();
+  const runId = '1785506911116-on5z3';
+  const store = openStore(dbPath);
+  store.createRun({ id: runId, workflowId: 'translate', source: 'slack', input: '直译', notify: {} });
+  store.setStatus(runId, 'failed', {
+    stage: 'generate',
+    error: '直译完整性门禁失败:URL、占位符、Ticker 或型号标识不一致:b000004',
+    finishedAt: Date.now(),
+  });
+  writeCheckpoint(workDir, runId);
+  const result = requeueTranslationRun({ runId, dbPath, workDir });
+  assert.equal(result.restoredUnits, 1);
+  assert.equal(store.getRun(runId).status, 'queued');
+});

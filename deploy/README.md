@@ -146,10 +146,12 @@ to `done`, the existing checkpoint advances, and exactly one non-empty
 checkpoint and restarts translation from the beginning.
 
 For a V2 analysis that failed under an older release only because the WeChat
-gate rejected fenced code or a four-space indented block, use the separate
-restricted command. It accepts only `wechat`, `sector`, `company`, or
-`earnings` rows in `failed/gate`, requires valid Slack notification metadata,
-and refuses any row with a `media_id` or a different error.
+gate rejected fenced code or a four-space indented block, or because the
+historical code renderer emitted safe line-break nodes outside its old final
+HTML allowlist, use the separate restricted command. It accepts only `wechat`,
+`sector`, `company`, or `earnings` rows with those exact errors, requires valid
+Slack notification metadata, and refuses any row with a `media_id` or a
+different error.
 
 ```bash
 run_id=replace-with-database-run-id

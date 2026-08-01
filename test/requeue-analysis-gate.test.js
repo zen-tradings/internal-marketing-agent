@@ -39,7 +39,7 @@ test('受限分析重排只恢复四个 V2 工作流的旧代码门禁失败', (
   assert.equal(store.getRun('1785538705645-6xoba').status, 'queued');
   assert.throws(
     () => requeueAnalysisGateRun({ runId: '1785538705645-6xoba', dbPath }),
-    /只允许恢复旧代码块门禁失败/,
+    /只允许恢复旧代码门禁或安全渲染兼容失败/,
   );
   store.close();
 });
@@ -58,7 +58,7 @@ test('受限分析重排拒绝其它工作流、失败类型、已发布任务�
   );
   assert.throws(
     () => requeueAnalysisGateRun({ runId: 'wechat-generate-fail', dbPath }),
-    /只允许恢复旧代码块门禁失败/,
+    /只允许恢复旧代码门禁或安全渲染兼容失败/,
   );
   assert.throws(
     () => requeueAnalysisGateRun({ runId: 'wechat-already-published', dbPath }),
@@ -68,5 +68,18 @@ test('受限分析重排拒绝其它工作流、失败类型、已发布任务�
     () => requeueAnalysisGateRun({ runId: 'wechat-bad-notify', dbPath }),
     /缺少有效 Slack/,
   );
+  store.close();
+});
+
+test('受限分析重排允许无 media_id 的历史代码安全渲染兼容失败', () => {
+  const { dbPath } = fixture();
+  const store = openStore(dbPath);
+  createFailedRun(store, {
+    id: '1785538705645-render',
+    stage: 'publish',
+    error: '发布失败:微信最终 HTML 完整性校验失败:第 1 个代码块含非语法高亮子节点',
+  });
+  const result = requeueAnalysisGateRun({ runId: '1785538705645-render', dbPath });
+  assert.equal(result.status, 'queued');
   store.close();
 });

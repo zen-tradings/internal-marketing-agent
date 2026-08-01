@@ -1240,6 +1240,69 @@ test('金融语境 pre-fee 不得误译为税前，历史断点译文也会确�
   assert.doesNotMatch(article, /税前回报/);
 });
 
+test('旧 checkpoint 按新 token 规则重验，只重做异常单元并保留其它进度', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/macro',
+    title: 'Macro benchmark',
+    author: '',
+    sha256: 'checkpoint-token-migration',
+    blocks: [{
+      id: 'b000001',
+      order: 0,
+      type: 'paragraph',
+      text: String.raw`The \bench score is 10%.`,
+    }],
+  };
+  const workDir = tempDir();
+  const validResponse = ({ prompt }) => {
+    const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+    return JSON.stringify({
+      translations: payload.units.map((unit) => ({
+        id: unit.id,
+        text: unit.kind === 'title' ? '宏基准' : String.raw`\bench 分数是 10%。`,
+      })),
+    });
+  };
+  await translateDocument({
+    source,
+    workDir,
+    model: 'test-model',
+    writer: {},
+    completeArticle: validResponse,
+  });
+
+  const checkpointPath = path.join(workDir, 'translation-checkpoint.json');
+  const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf8'));
+  checkpoint.translations.find((item) => item.id === 'b000001').text = 'ProgramBench 分数是 10%。';
+  checkpoint.warnings = [];
+  checkpoint.validationExceptions = [];
+  fs.writeFileSync(checkpointPath, JSON.stringify(checkpoint));
+
+  let calls = 0;
+  const progress = [];
+  const translated = await translateDocument({
+    source,
+    workDir,
+    model: 'test-model',
+    writer: {},
+    resumeFromCheckpoint: true,
+    onProgress: async (event) => progress.push(event.message),
+    completeArticle: async (request) => {
+      calls += 1;
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(request.prompt)[1]);
+      assert.deepEqual(payload.units.map((unit) => unit.id), ['b000001']);
+      return validResponse(request);
+    },
+  });
+  assert.equal(calls, 1);
+  assert.match(progress[0], /1 个旧单元需重做/);
+  assert.match(translated.blocks[0].translatedText, /\\bench/);
+});
+
 test('长文正常翻译批次最多 24 个单元，尽早写入分块 checkpoint', async () => {
   const source = {
     version: 5,

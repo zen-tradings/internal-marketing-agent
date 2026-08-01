@@ -9,6 +9,7 @@ import {
   appendFinalFooter,
   appendFinalTailImages,
   normalizeBodyTypography,
+  normalizeCodeBreaks,
   removeDuplicateReferenceSections,
   styleKeyHighlights,
   validatePreparedWechatHtml,
@@ -153,4 +154,11 @@ test('微信最终 HTML:合法浅色代码块通过，危险或损坏代码结�
     () => validatePreparedWechatHtml('<pre><code><a href="https://example.com">bad</a></code></pre>'),
     /含非语法高亮子节点/,
   );
+});
+
+test('微信最终 HTML:Wenyan 代码换行节点转成 pre 内纯文本换行', () => {
+  const normalized = normalizeCodeBreaks('<pre><code>ASCII<br><span class="hljs-keyword">line</span><br>end</code></pre>');
+  assert.doesNotMatch(normalized, /<br/i);
+  assert.match(normalized, /ASCII\n<span class="hljs-keyword">line<\/span>\nend/);
+  assert.doesNotThrow(() => validatePreparedWechatHtml(normalized));
 });

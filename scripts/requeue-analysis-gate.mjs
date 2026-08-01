@@ -8,6 +8,7 @@ dotenv.config();
 
 const ANALYSIS_WORKFLOWS = new Set(['wechat', 'sector', 'company', 'earnings']);
 const LEGACY_CODE_GATE_RE = /正文包含代码围栏|四空格缩进块/;
+const LEGACY_CODE_RENDER_RE = /^发布失败:微信最终 HTML 完整性校验失败:.*代码块含非语法高亮子节点/;
 
 export function requeueAnalysisGateRun({
   runId,
@@ -25,8 +26,10 @@ export function requeueAnalysisGateRun({
       throw new Error('只允许恢复 wechat/sector/company/earnings 分析工作流');
     }
     if (run.media_id) throw new Error('任务已有 media_id，拒绝重复创建草稿');
-    if (run.status !== 'failed' || run.stage !== 'gate' || !LEGACY_CODE_GATE_RE.test(run.error || '')) {
-      throw new Error(`只允许恢复旧代码块门禁失败:${run.status || 'unknown'}/${run.stage || 'unknown'}`);
+    const recoverableGate = run.stage === 'gate' && LEGACY_CODE_GATE_RE.test(run.error || '');
+    const recoverableRender = run.stage === 'publish' && LEGACY_CODE_RENDER_RE.test(run.error || '');
+    if (run.status !== 'failed' || (!recoverableGate && !recoverableRender)) {
+      throw new Error(`只允许恢复旧代码门禁或安全渲染兼容失败:${run.status || 'unknown'}/${run.stage || 'unknown'}`);
     }
     let notify;
     try { notify = JSON.parse(run.notify_json || '{}'); }
@@ -48,7 +51,7 @@ const isMain = process.argv[1]
 if (isMain) {
   try {
     const result = requeueAnalysisGateRun({ runId: process.argv[2] });
-    console.log(`分析代码门禁失败任务已重新入队:${result.runId}（${result.workflowId}）`);
+    console.log(`分析代码输出失败任务已重新入队:${result.runId}（${result.workflowId}）`);
   } catch (error) {
     console.error(`续跑失败:${error.message}`);
     process.exitCode = 1;

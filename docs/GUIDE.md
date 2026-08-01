@@ -85,7 +85,7 @@
 | 直译翻译/完整性/checkpoint | `src/workflows/translation-source-text.js` | 逐文本节点翻译、不可变 token、最多两轮定向修复、宽松复核例外、逐单元 checkpoint 及结构/资产硬门禁 |
 | 直译执行与研究轨迹 | `src/workflows/translate-engine.js` | 把 manifest、严格等价状态、待复核块、全部候选与最终选择写入 trace |
 | 失败直译受限续跑 | `scripts/requeue-translation.mjs` + `src/core/store.js` | 只接受数据库 run-id；要求 checkpoint，拒绝其它工作流、已有 `media_id` 和非白名单失败 |
-| 旧代码门禁分析受限重排 | `scripts/requeue-analysis-gate.mjs` + `src/core/store.js` | 仅四个 V2 分析流的旧 `failed/gate`，拒绝已发布、无 Slack 通知和其它错误 |
+| 旧代码输出分析受限重排 | `scripts/requeue-analysis-gate.mjs` + `src/core/store.js` | 仅四个 V2 分析流的旧代码 gate/安全渲染兼容错误，拒绝已发布、无 Slack 通知和其它错误 |
 | 文档抓取配置 | `.env` 的 `TRANSLATION_*` / `NOTION_API_TOKEN` / `GOOGLE_DOCS_CLIENT_ID` / `GOOGLE_DOCS_CLIENT_SECRET` / `GOOGLE_DOCS_REFRESH_TOKEN` / `GITHUB_TOKEN` / `DATALAB_*` | 控制来源、私有文档、PDF 页数、浏览器、解析质量、超时和重定向；access token 仅为兼容回退 |
 | 单任务取消、发布阶段保护与垃圾目录清理 | `src/core/queue.js`、`src/index.js`、`src/lib/task-cancellation.js` | generate 可取消；publish 后拒绝强杀；取消后状态为 cancelled |
 | 优先信源加减域名 | `workflows/shared.js` 的清单,或 .env EXA_PRIORITY_DOMAINS | 写主域即可,子域自动匹配 |
