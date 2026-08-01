@@ -54,6 +54,8 @@ export async function generateStrictTranslation({
       },
       completeness: result.completeness,
       validationWarnings: result.warnings,
+      validationExceptions: result.completeness.validationExceptions,
+      contentPolicy: result.contentPolicy,
     };
   }
   return result;

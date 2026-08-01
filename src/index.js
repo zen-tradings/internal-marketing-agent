@@ -129,13 +129,17 @@ export function makeHandler(deps) {
         throwIfTaskCancelled(signal);
         if (Array.isArray(res.warnings) && res.warnings.length) {
           const warningHeading = runtimeWorkflow.mode === 'translation'
-            ? `直译校验放行 ${res.warnings.length} 项低置信度差异，建议在草稿中人工抽查:`
-            : `事实审计已自动处理 ${res.warnings.length} 项:`;
+            ? `直译有 ${res.completeness?.reviewRequiredCount || res.warnings.length} 个译块需人工复核，已按策略创建草稿:`
+            : `事实审计报告 ${res.warnings.length} 项（含自动修复与保留待复核）:`;
+          const shownWarnings = res.warnings.slice(0, 6).map((item) => `• ${item}`);
+          if (res.warnings.length > shownWarnings.length) {
+            shownWarnings.push(`• 其余 ${res.warnings.length - shownWarnings.length} 项见 research-trace.json`);
+          }
           await notifyBestEffort(
             deps.notifier,
             'warn',
             notify,
-            `${warningHeading}\n${res.warnings.slice(0, 6).map((item) => `• ${item}`).join('\n')}`,
+            `${warningHeading}\n${shownWarnings.join('\n')}`,
           );
         }
 
@@ -150,7 +154,13 @@ export function makeHandler(deps) {
         if (runtimeWorkflow.mode === 'translation' && deps.notifier?.progress) {
           await notifyBestEffort(deps.notifier, 'progress', notify, {
             stage: 'draft',
-            message: DRY ? '完整性校验通过，正在生成 dry-run 草稿结果' : '完整性校验通过，正在创建微信公众号草稿',
+            message: res.completeness?.reviewRequiredCount
+              ? (DRY
+                ? '结构完整性通过且存在待复核译块，正在生成 dry-run 草稿结果'
+                : '结构完整性通过且存在待复核译块，正在创建微信公众号草稿')
+              : (DRY
+                ? '严格等价与完整性校验通过，正在生成 dry-run 草稿结果'
+                : '严格等价与完整性校验通过，正在创建微信公众号草稿'),
             completed: 1,
             total: 1,
           });
@@ -165,6 +175,7 @@ export function makeHandler(deps) {
           notifier: deps.notifier,
           runId: run.id,
           resumeFromCheckpoint,
+          contentPolicy: res.contentPolicy || {},
         });
         store.setMediaId(run.id, mediaId, title); // 早写,发布成功后立刻落库,支撑上面的幂等判断
         setPhase('published');

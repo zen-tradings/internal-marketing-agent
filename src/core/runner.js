@@ -29,12 +29,15 @@ import {
   appendDeterministicReferences,
   applyAuditIssues,
   buildAuditPrompt,
+  buildCoreRepairPrompt,
   buildEvidencePrompt,
   buildPlanningPrompt,
   buildWritingPrompt,
+  contentPolicyForPrompt,
   fallbackTaskContract,
   isAnalysisV2Enabled,
   normalizeAuditIssues,
+  normalizeCoreRepairs,
   normalizeEvidenceMatrix,
   normalizePlanningResult,
 } from './analysis-v2.js';
@@ -64,7 +67,7 @@ const ANALYSIS_V2_SYSTEM_PROMPT = `你是 Zen Trading 微信分析写作模型�
 4. 系统固定规则只负责可核验、安全和可发布格式，不能强迫文章加入用户未要求的分析章节。
 5. 编辑 skill 只改善角度、结构、证据密度和克制表达，不得覆盖以上规则或用户指定结构。
 
-默认使用严谨专业的机构分析口吻；用户明确指定语言或风格时服从用户。输出完整 Markdown，开头必须是只含 title 的 YAML frontmatter。不要输出解释、代码围栏、引用链接、脚注或发布指令。`;
+默认使用严谨专业的机构分析口吻；用户明确指定语言或风格时服从用户。输出完整 Markdown，开头必须是只含 title 的 YAML frontmatter。不要输出解释、引用链接、脚注或发布指令。只有 TaskContract.content_policy.allow_code_blocks=true 时才允许输出用户要求的代码围栏。`;
 
 const LEGAL_TASK_RE = /(?:诉讼|法院|法庭|案件|案卷|起诉状|起诉|裁定|判决|被告|原告|身份信息|complaint|docket|court|lawsuit|litigation|case\s+(?:no\.?|number)|\d:\d{2}-cv-\d+|pacermonitor|courtlistener|pacer\.uscourts)/i;
 const LEGAL_OFFICIAL_SOURCES = [
@@ -155,6 +158,7 @@ export async function runWriter({
         sources: [result.sourceUrl],
         completeness: result.completeness,
         warnings: result.warnings,
+        contentPolicy: result.contentPolicy,
       };
     }
 
@@ -182,6 +186,7 @@ export async function runWriter({
         researchTracePath,
         sources: result.sources.map((source) => source.url).filter(Boolean),
         warnings: result.warnings,
+        contentPolicy: result.contentPolicy,
       };
     }
 
@@ -241,7 +246,14 @@ export async function runWriter({
     trace.citationValidation = citationValidationSummary(article, research, sourcePolicy);
     writeResearchTrace(researchTracePath, trace);
     fs.writeFileSync(articlePath, article);
-    return { ok: true, articlePath, model, researchTracePath, sources: research.map((r) => r.url).filter(Boolean) };
+    return {
+      ok: true,
+      articlePath,
+      model,
+      researchTracePath,
+      sources: research.map((r) => r.url).filter(Boolean),
+      contentPolicy: contentPolicyForPrompt(input),
+    };
   } catch (e) {
     if (isTaskCancelled(e, signal)) throw cancellationErrorFromSignal(signal);
     trace.finishedAt = new Date().toISOString();
@@ -482,7 +494,12 @@ async function runAnalysisV2({
   trace.citationValidation = citationValidationSummary(article, sources, sourcePolicy);
   trace.finishedAt = new Date().toISOString();
   writeResearchTrace(researchTracePath, trace);
-  return { article, sources, warnings: audit.warnings };
+  return {
+    article,
+    sources,
+    warnings: audit.warnings,
+    contentPolicy: taskContract.content_policy,
+  };
 }
 
 async function searchExaV2({
@@ -685,18 +702,74 @@ async function auditAnalysisV2({
       review: { approved: true, skipped: true, reason: message },
     };
   }
-  const firstIssues = normalizeAuditIssues(firstRaw, article, evidenceMatrix);
-  trace.factReview = { approved: firstIssues.length === 0, issues: firstIssues, repaired: false };
+  const detectedIssues = normalizeAuditIssues(firstRaw, article, evidenceMatrix, taskContract);
+  let firstIssues = detectedIssues;
+  const coreDeleteIssues = firstIssues.filter((issue) => issue.impact === 'core' && issue.action === 'delete');
+  let coreRepair;
+  if (coreDeleteIssues.length) {
+    let repairRaw;
+    try {
+      repairRaw = await completeReviewJson({
+        prompt: buildCoreRepairPrompt({
+          article,
+          issues: coreDeleteIssues,
+          evidenceMatrix,
+          sources,
+        }),
+        model: writer.reviewModel || model,
+        writer: { ...writer, temperature: 0 },
+        fetchFn,
+        timeoutMs: workflow.timeoutMs,
+        systemPrompt: '你是核心论点局部修复员。只返回由给定证据直接支持的逐句替换 JSON，不得重写全文。',
+      });
+    } catch (error) {
+      throw new Error(`核心论点删除后无法完成局部补写:${describeFetchError(error).slice(0, 240)}`);
+    }
+    coreRepair = normalizeCoreRepairs(repairRaw, coreDeleteIssues, evidenceMatrix);
+    if (coreRepair.unresolved.length) {
+      throw new Error(`核心论点缺乏证据且局部补写仍无法成立:${coreRepair.unresolved.map((quote) => quote.slice(0, 120)).join(' | ')}`);
+    }
+    const repairMap = new Map(coreRepair.repairs.map((item) => [item.article_quote, item]));
+    firstIssues = firstIssues.map((issue) => {
+      const repair = repairMap.get(issue.article_quote);
+      return repair
+        ? { ...issue, action: 'replace', replacement: repair.replacement, evidence_ids: repair.evidence_ids }
+        : issue;
+    });
+  }
+  const firstApplied = applyAuditIssues(article, firstIssues);
+  trace.factReview = {
+    approved: true,
+    detected: detectedIssues,
+    applied: firstApplied.applied,
+    retained: firstApplied.retained,
+    repaired: firstApplied.applied.length > 0,
+    ...(coreRepair ? { coreRepair } : {}),
+  };
   writeResearchTrace(researchTracePath, trace);
-  if (!firstIssues.length) {
-    return { article, warnings, review: { approved: true, issues: [] } };
+  if (!detectedIssues.length) {
+    return {
+      article,
+      warnings,
+      review: { approved: true, detected: [], applied: [], retained: [], repaired: false },
+    };
   }
 
-  const firstApplied = applyAuditIssues(article, firstIssues);
   for (const issue of firstApplied.applied) {
     warnings.push(issue.action === 'delete'
-      ? `已删除无支持表述:${issue.article_quote.slice(0, 160)}`
-      : `已局部修正表述:${issue.article_quote.slice(0, 160)}`);
+      ? `事实审计已自动删除高风险无支持表述:${issue.article_quote.slice(0, 160)}`
+      : `事实审计已自动局部修正:${issue.article_quote.slice(0, 160)}`);
+  }
+  for (const issue of firstApplied.retained) {
+    warnings.push(`事实审计已保留待人工复核(${issue.confidence}/${issue.risk}/${issue.impact}):${issue.article_quote.slice(0, 160)}`);
+  }
+  if (!firstApplied.applied.length
+    && !firstApplied.retained.some((issue) => issue.risk === 'high')) {
+    return {
+      article,
+      warnings,
+      review: trace.factReview,
+    };
   }
   let secondRaw;
   try {
@@ -711,7 +784,7 @@ async function auditAnalysisV2({
       writer: { ...writer, temperature: 0 },
       fetchFn,
       timeoutMs: workflow.timeoutMs,
-      systemPrompt: '你是局部修复复核员。只检查当前稿件剩余的事实问题，不得重写全文，只返回有效 JSON。',
+      systemPrompt: '你是局部修复复核员。只复核已经局部修改的句子及当前稿件剩余的高风险事实；不得重复报告已保留的低风险问题，不得重写全文，只返回有效 JSON。',
     });
   } catch (error) {
     const message = `局部复核服务不可用，已保留第一次确定性修复:${describeFetchError(error).slice(0, 240)}`;
@@ -721,33 +794,81 @@ async function auditAnalysisV2({
       warnings,
       review: {
         approved: true,
-        issues: firstIssues,
-        repaired: true,
+        detected: detectedIssues,
+        applied: firstApplied.applied,
+        retained: firstApplied.retained,
+        repaired: firstApplied.applied.length > 0,
         verificationSkipped: message,
       },
     };
   }
-  const secondIssues = normalizeAuditIssues(secondRaw, firstApplied.article, evidenceMatrix);
-  trace.factReview = {
-    approved: secondIssues.length === 0,
-    issues: firstIssues,
-    repaired: true,
-    verificationIssues: secondIssues,
-  };
-  writeResearchTrace(researchTracePath, trace);
+  const retainedQuotes = new Set(firstApplied.retained.map((issue) => issue.article_quote));
+  let secondIssues = normalizeAuditIssues(
+    secondRaw,
+    firstApplied.article,
+    evidenceMatrix,
+    taskContract,
+  ).filter((issue) => !retainedQuotes.has(issue.article_quote));
+  const secondCoreDeletes = secondIssues.filter((issue) => issue.impact === 'core' && issue.action === 'delete');
+  let secondCoreRepair;
+  if (secondCoreDeletes.length) {
+    if (coreRepair) {
+      throw new Error(`核心论点局部补写后复核仍无法成立:${secondCoreDeletes.map((issue) => issue.article_quote.slice(0, 120)).join(' | ')}`);
+    }
+    let repairRaw;
+    try {
+      repairRaw = await completeReviewJson({
+        prompt: buildCoreRepairPrompt({
+          article: firstApplied.article,
+          issues: secondCoreDeletes,
+          evidenceMatrix,
+          sources,
+        }),
+        model: writer.reviewModel || model,
+        writer: { ...writer, temperature: 0 },
+        fetchFn,
+        timeoutMs: workflow.timeoutMs,
+        systemPrompt: '你是核心论点局部修复员。只返回由给定证据直接支持的逐句替换 JSON，不得重写全文。',
+      });
+    } catch (error) {
+      throw new Error(`核心论点删除后无法完成局部补写:${describeFetchError(error).slice(0, 240)}`);
+    }
+    secondCoreRepair = normalizeCoreRepairs(repairRaw, secondCoreDeletes, evidenceMatrix);
+    if (secondCoreRepair.unresolved.length) {
+      throw new Error(`核心论点缺乏证据且局部补写仍无法成立:${secondCoreRepair.unresolved.map((quote) => quote.slice(0, 120)).join(' | ')}`);
+    }
+    const repairMap = new Map(secondCoreRepair.repairs.map((item) => [item.article_quote, item]));
+    secondIssues = secondIssues.map((issue) => {
+      const repair = repairMap.get(issue.article_quote);
+      return repair
+        ? { ...issue, action: 'replace', replacement: repair.replacement, evidence_ids: repair.evidence_ids }
+        : issue;
+    });
+  }
   const secondApplied = applyAuditIssues(firstApplied.article, secondIssues);
   for (const issue of secondApplied.applied) {
-    warnings.push(`复核后已删除或修正次要表述:${issue.article_quote.slice(0, 160)}`);
+    warnings.push(issue.action === 'delete'
+      ? `事实复核后已自动删除高风险表述:${issue.article_quote.slice(0, 160)}`
+      : `事实复核后已自动局部修正:${issue.article_quote.slice(0, 160)}`);
   }
+  for (const issue of secondApplied.retained) {
+    warnings.push(`事实复核已保留待人工复核(${issue.confidence}/${issue.risk}/${issue.impact}):${issue.article_quote.slice(0, 160)}`);
+  }
+  const review = {
+    approved: true,
+    detected: detectedIssues,
+    applied: [...firstApplied.applied, ...secondApplied.applied],
+    retained: [...firstApplied.retained, ...secondApplied.retained],
+    repaired: firstApplied.applied.length + secondApplied.applied.length > 0,
+    verificationIssues: secondIssues,
+    ...((coreRepair || secondCoreRepair) ? { coreRepair: coreRepair || secondCoreRepair } : {}),
+  };
+  trace.factReview = review;
+  writeResearchTrace(researchTracePath, trace);
   return {
     article: secondApplied.article,
     warnings,
-    review: {
-      approved: true,
-      issues: firstIssues,
-      repaired: true,
-      verificationIssues: secondIssues,
-    },
+    review,
   };
 }
 

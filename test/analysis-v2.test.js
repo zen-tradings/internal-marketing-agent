@@ -7,11 +7,14 @@ import {
   appendDeterministicReferences,
   applyAuditIssues,
   buildAuditPrompt,
+  buildCoreRepairPrompt,
   buildEvidencePrompt,
   buildWritingPrompt,
+  contentPolicyForPrompt,
   extractExplicitEntityVersions,
   fallbackTaskContract,
   normalizeAuditIssues,
+  normalizeCoreRepairs,
   normalizeEvidenceMatrix,
   normalizePlanningResult,
 } from '../src/core/analysis-v2.js';
@@ -315,7 +318,11 @@ test('局部审计只替换逐字命中的句子，不允许审查器整篇重�
     issues: [
       {
         article_quote: 'Opus 4.5 比所有模型都强。',
-        severity: 'non_core',
+        issue_type: 'unsupported',
+        impact: 'core',
+        risk: 'high',
+        origin: 'model_added',
+        confidence: 'high',
         evidence_ids: [],
         action: 'replace',
         replacement: '审查器想加入的新事实。',
@@ -334,6 +341,89 @@ test('局部审计只替换逐字命中的句子，不允许审查器整篇重�
   assert.match(repaired, /最后一段保留/);
   assert.doesNotMatch(repaired, /Opus 4\.5/);
   assert.doesNotMatch(repaired, /审查器想加入的新事实/);
+});
+
+test('分级审计保留低风险次要表述、用户明确前提和用户材料前提', () => {
+  const article = '---\ntitle: 测试\n---\n\n这套工具上手很自然。\n\npyfolio 是评估底座，不是环境底座。\n\n据项目 README，该组件负责回测。';
+  const contract = {
+    raw_prompt: 'Core thesis: pyfolio 是评估底座，不是环境底座。',
+  };
+  const issues = normalizeAuditIssues({
+    issues: [
+      {
+        article_quote: '这套工具上手很自然。',
+        issue_type: 'unsupported',
+        impact: 'incidental',
+        risk: 'low',
+        origin: 'model_added',
+        confidence: 'high',
+        action: 'delete',
+      },
+      {
+        article_quote: 'pyfolio 是评估底座，不是环境底座。',
+        issue_type: 'unsupported',
+        impact: 'core',
+        risk: 'high',
+        origin: 'user_requirement',
+        confidence: 'high',
+        contract_quote: 'pyfolio 是评估底座，不是环境底座',
+        action: 'delete',
+      },
+      {
+        article_quote: '据项目 README，该组件负责回测。',
+        issue_type: 'unsupported',
+        impact: 'supporting',
+        risk: 'high',
+        origin: 'user_source',
+        confidence: 'high',
+        action: 'delete',
+      },
+    ],
+  }, article, { relevant_source_ids: [] }, contract);
+  assert.deepEqual(issues.map((issue) => issue.action), ['retain', 'retain', 'retain']);
+  const result = applyAuditIssues(article, issues);
+  assert.equal(result.applied.length, 0);
+  assert.equal(result.retained.length, 3);
+  assert.match(result.article, /上手很自然/);
+  assert.match(result.article, /评估底座/);
+  assert.match(result.article, /项目 README/);
+});
+
+test('核心高风险删句必须由现有证据完成一次局部补写', () => {
+  const issues = [{
+    article_quote: '该系统已经在生产环境全面部署。',
+    issue_type: 'stage_conflation',
+    impact: 'core',
+    evidence_ids: [],
+  }];
+  const matrix = { relevant_source_ids: ['S1'] };
+  const prompt = buildCoreRepairPrompt({
+    article: '该系统已经在生产环境全面部署。',
+    issues,
+    evidenceMatrix: matrix,
+    sources: [{ id: 'S1', title: 'README', url: 'https://example.com', text: '项目处于试点阶段。' }],
+  });
+  assert.match(prompt, /项目处于试点阶段/);
+  const normalized = normalizeCoreRepairs({
+    repairs: [{
+      article_quote: '该系统已经在生产环境全面部署。',
+      replacement: '据项目 README，该系统目前处于试点阶段。',
+      evidence_ids: ['S1'],
+    }],
+  }, issues, matrix);
+  assert.equal(normalized.unresolved.length, 0);
+  assert.equal(normalized.repairs[0].evidence_ids[0], 'S1');
+  const unresolved = normalizeCoreRepairs({ repairs: [] }, issues, matrix);
+  assert.deepEqual(unresolved.unresolved, ['该系统已经在生产环境全面部署。']);
+});
+
+test('代码授权只从原始 Prompt 确定，规划模型不能自行开启', () => {
+  assert.equal(contentPolicyForPrompt('include a Python code example and ASCII diagram').allow_code_blocks, true);
+  assert.equal(contentPolicyForPrompt('写一篇普通公司分析').allow_code_blocks, false);
+  const normalized = normalizePlanningResult({
+    task_contract: { content_policy: { allow_code_blocks: true } },
+  }, '写一篇普通公司分析', { id: 'wechat' });
+  assert.equal(normalized.taskContract.content_policy.allow_code_blocks, false);
 });
 
 test('系统从证据矩阵确定性生成唯一引用章节，不依赖模型手工维护链接', () => {

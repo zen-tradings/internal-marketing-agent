@@ -7,11 +7,12 @@ import { checkArticle as defaultCheckArticle } from '../lib/gate.js';
 import { injectFixedImages as defaultInjectFixedImages } from '../lib/assets.js';
 import { renderAndPublishWithFinalFooter, stripFinalTailMarkdown } from '../lib/wechat-render.js';
 import { normalizeWideTables as defaultNormalizeWideTables } from '../lib/mobile-tables.js';
+import { normalizeIndentedCodeBlocks as defaultNormalizeIndentedCodeBlocks } from '../lib/code-blocks.js';
 import { FIXED_DRAFT_TEMPLATE_IDS } from '../lib/draft-template.js';
 
 // 与 wenyan-mcp dist/publish.js 完全一致的渲染参数(parity 硬要求)
-// 正文固定走普通公众号版式。代码围栏本来就会被门禁拒绝，不能再让渲染器启用
-// macStyle，否则一旦上游出现异常缩进就会得到黄色 Mac 卡片。
+// 正文固定走普通公众号版式。用户明确要求或直译原文自带的代码使用浅色高亮；
+// macStyle 始终关闭，避免黄色 Mac 卡片改变固定模板。
 export const WECHAT_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['wechat-draft'];
 export const WECHAT_THEME_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -64,12 +65,22 @@ export function makeChannel({
   checkArticle = defaultCheckArticle,
   injectFixedImages = defaultInjectFixedImages,
   normalizeWideTables = defaultNormalizeWideTables,
+  normalizeIndentedCodeBlocks = defaultNormalizeIndentedCodeBlocks,
 } = {}) {
   return {
     id: 'wechat-draft',
     templateId: WECHAT_TEMPLATE_ID,
     templateLocked: true,
-    async publish({ articlePath, config, workflow, notify, notifier, runId, resumeFromCheckpoint = false }) {
+    async publish({
+      articlePath,
+      config,
+      workflow,
+      notify,
+      notifier,
+      runId,
+      resumeFromCheckpoint = false,
+      contentPolicy = {},
+    }) {
       let title, markdown;
       try { ({ title, markdown } = await readArticle(articlePath)); }
       catch (e) { const err = new Error(`读取文章失败:${e.message}`); err.stage = 'render'; throw err; }
@@ -80,6 +91,24 @@ export function makeChannel({
         const err = new Error('微信凭据缺失(WECHAT_APP_ID/WECHAT_APP_SECRET)');
         err.stage = 'publish';
         throw err;
+      }
+
+      // 将独立的 Markdown 四空格代码确定性规范为 text 围栏。是否由用户授权
+      // 只决定 Slack 是否提醒，不影响安全渲染；已有围栏、HTML pre 和嵌套列表保持原样。
+      const codeResult = normalizeIndentedCodeBlocks(markdown);
+      if (codeResult.changed) {
+        try {
+          await writeArticle(articlePath, codeResult.markdown);
+          markdown = codeResult.markdown;
+        } catch (e) {
+          const err = new Error(`代码块规范化写入失败:${e.message}`); err.stage = 'render'; throw err;
+        }
+        try {
+          if (notifier && notify) await notifier.warn(
+            notify,
+            `已将 ${codeResult.transformedBlocks} 个四空格缩进代码块规范为公众号浅色代码块。`,
+          );
+        } catch (warnErr) { console.error('代码块规范化提醒失败(不影响流程):', warnErr); }
       }
 
       // 先把手机端不可读的宽表确定性拆成多个窄表。紧凑五列表可保留；普通宽表
@@ -106,6 +135,7 @@ export function makeChannel({
       const assetsConfig = config.assets || {};
       const gate = checkArticle(markdownForGate(markdown, assetsConfig), {
         workflowMode: workflow?.mode || '',
+        contentPolicy,
         secretValues: [
           config.writer?.openrouterApiKey,
           config.writer?.exaApiKey,

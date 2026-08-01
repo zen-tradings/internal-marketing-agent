@@ -653,7 +653,7 @@ test('长段落高亮不足不触发重译，也不阻断忠实译文', async ()
   assert.match(renderTranslatedDocument(translated), /\*\*核心观点\*\*/);
 });
 
-test('样式可降级，但数字不一致仍由内容级硬门禁拒绝', async () => {
+test('明确数字不一致经两轮修复后进入宽松复核，不丢结构', async () => {
   const source = {
     version: 5,
     contentMode: 'structured-document',
@@ -670,9 +670,10 @@ test('样式可降级，但数字不一致仍由内容级硬门禁拒绝', async
       text: 'The reported portfolio return was 100 percent.',
     }],
   };
-  await assert.rejects(() => translateDocument({
+  const workDir = tempDir();
+  const translated = await translateDocument({
     source,
-    workDir: tempDir(),
+    workDir,
     model: 'test-model',
     writer: {},
     completeArticle: async ({ prompt }) => {
@@ -684,7 +685,18 @@ test('样式可降级，但数字不一致仍由内容级硬门禁拒绝', async
         })),
       });
     },
-  }), /结构化翻译校验失败:b000001/);
+  });
+  assert.equal(translated.validationExceptions.length, 1);
+  assert.equal(translated.validationExceptions[0].id, 'b000001');
+  assert.match(translated.validationWarnings.join(' '), /两轮聚焦修复后宽松放行/);
+  const completeness = validateTranslationArtifact({
+    source,
+    translated,
+    article: renderTranslatedDocument(translated),
+  });
+  assert.equal(completeness.errors.length, 0);
+  assert.equal(completeness.strictEquivalence, false);
+  assert.deepEqual(completeness.reviewRequiredUnits, ['b000001']);
 });
 
 test('K/M/B/T、中文数量单位、千分位和百分比只要数值等价即可通过', async () => {
@@ -727,7 +739,7 @@ test('K/M/B/T、中文数量单位、千分位和百分比只要数值等价即�
   assert.match(renderTranslatedDocument(translated), /5 万.*1\.24 亿.*8,400.*100%/);
 });
 
-test('数量级写法可以变化，但不等价的数值仍被拒绝并给出具体原因', async () => {
+test('数量级不等价在两轮修复后保留具体复核原因', async () => {
   const source = {
     version: 5,
     contentMode: 'structured-document',
@@ -744,7 +756,7 @@ test('数量级写法可以变化，但不等价的数值仍被拒绝并给出�
       text: 'The model supports about 50k possible tokens.',
     }],
   };
-  await assert.rejects(() => translateDocument({
+  const translated = await translateDocument({
     source,
     workDir: tempDir(),
     model: 'test-model',
@@ -758,7 +770,69 @@ test('数量级写法可以变化，但不等价的数值仍被拒绝并给出�
         })),
       });
     },
-  }), /b000001\(数字或链接不等价/);
+  });
+  assert.equal(translated.validationExceptions.length, 1);
+  assert.match(translated.validationExceptions[0].reasons.join(' '), /数字或链接不等价/);
+});
+
+test('ProgramBench 回归:百分比不产生 100 误报，未展开宏和引用异常进入复核', async () => {
+  const caption = 'Figure 8:\nConfusion matrix of reference vs. model language.\nEach cell shows the percentage (and count) of runs per reference language.';
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://arxiv.org/html/2605.03546v1',
+    title: 'ProgramBench',
+    author: '',
+    sha256: 'programbench-regression',
+    blocks: [
+      {
+        id: 'b000066',
+        order: 0,
+        type: 'paragraph',
+        text: 'While most \\bench repositories lack a dedicated end-to-end test suite, we measure coverage across 100 repositories (§⟦ZEN_INLINE_001⟧).',
+      },
+      {
+        id: 'b000074',
+        order: 1,
+        type: 'figure',
+        caption,
+        captionFragments: [{ token: '⟦ZEN_INLINE_001⟧', value: '[28](https://example.com/28)' }],
+        images: [],
+      },
+      {
+        id: 'b000075',
+        order: 2,
+        type: 'figure',
+        caption,
+        captionFragments: [{ token: '⟦ZEN_INLINE_001⟧', value: '[28](https://example.com/28)' }],
+        images: [],
+      },
+    ],
+  };
+  const translated = await translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title'
+            ? 'ProgramBench'
+            : unit.id === 'b000066'
+              ? '虽然大多数 ⟦ZEN_INLINE_001⟧ 基准代码库缺乏端到端测试，但我们在 100 个代码库中测量覆盖率（§⟦ZEN_INLINE_001⟧）。'
+              : '图 8：参考语言与模型语言的混淆矩阵。每个单元格显示每种参考语言下运行的百分比（和计数）。',
+        })),
+      });
+    },
+  });
+  assert.deepEqual(translated.validationExceptions.map((item) => item.id), ['b000066']);
+  assert.doesNotMatch(translated.validationWarnings.join(' '), /b000074:caption|b000075:caption|NUM:100/);
+  assert.match(translated.validationExceptions[0].reasons.join(' '), /URL、占位符、Ticker 或型号标识不一致/);
 });
 
 test('自动修复返回空数组时重试一次并要求完整 ID 集合', async () => {
@@ -1068,14 +1142,15 @@ test('低置信度数字差异在定向修复后只告警并写入 checkpoint', 
       });
     },
   });
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
   assert.equal(translated.validationWarnings.length, 1);
   assert.match(translated.validationWarnings[0], /低置信度数字格式差异/);
   const checkpoint = JSON.parse(fs.readFileSync(path.join(workDir, 'translation-checkpoint.json'), 'utf8'));
   assert.equal(checkpoint.warnings.length, 1);
+  assert.equal(checkpoint.validationExceptions.length, 1);
 });
 
-test('同批硬失败只丢弃问题单元，已通过单元立即保留到 checkpoint', async () => {
+test('同批缺失译文仍硬失败，已通过单元立即保留到 checkpoint', async () => {
   const source = {
     version: 5,
     contentMode: 'structured-document',
@@ -1099,13 +1174,11 @@ test('同批硬失败只丢弃问题单元，已通过单元立即保留到 chec
     completeArticle: async ({ prompt }) => {
       const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
       return JSON.stringify({
-        translations: payload.units.map((unit) => ({
+        translations: payload.units.filter((unit) => unit.id !== 'b000002').map((unit) => ({
           id: unit.id,
           text: unit.kind === 'title'
             ? '批次'
-            : unit.id === 'b000001'
-              ? '第一个值是 100。'
-              : '第二个值是 199。',
+            : '第一个值是 100。',
         })),
       });
     },

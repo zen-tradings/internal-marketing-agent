@@ -33,7 +33,8 @@
    EvidenceMatrix；静态域名只用于发现，必须匹配发布主体、页面类型和目标实体才能
    判为一手来源。证据矩阵完成后，latepost-ai-writer 才选择受控稿型、证据可支持的
    角度、核心矛盾和结尾约束；Slack Prompt、来源安全、用户指定结构和工作流方法始终
-   优先。GLM 5.2 只接收相关证据写作；事实审计只返回精确原句和局部动作，
+   优先。GLM 5.2 只接收相关证据写作；事实审计按影响、风险、来源和置信度返回精确原句与
+   局部动作，低风险/中低置信度/用户前提保留待复核，只有高置信度问题可自动修改，
    不能重写全文。缺资料和无支持句不再提问；只有用户材料与一手来源对核心前提
    形成双边、不可调和冲突时转 needs_input，同一线程回答后不重复询问。
    引用链接由系统从证据矩阵精选并确定性追加，不再由模型维护。
@@ -47,7 +48,7 @@
 
 ④ 发布     src/index.js → src/channels/wechat-draft.js  (publish)
    draft-template.js 先核对真实渠道已登记并锁定固定模板，未登记或不匹配时拒绝调用发布接口
-   → 门禁 gate.js(errors 拦截:缺 title/密钥/本地路径;warnings 放行提醒)
+   → 四空格代码规范为 text 围栏；gate.js(errors 拦截:缺 title/密钥/本地路径，未授权代码仅 warning)
    → Markdown 阶段由 assets.js 注入固定头图 assets/zen-header-banner.gif
    → 生成封面 cover.js(便宜模型提取封面数据 → 仓库内置 cover-generator 用无头 Chromium 渲染；
      字段提取失败回退安全默认值，生成器失败或超时则阻止发布)
@@ -81,13 +82,14 @@
 | 直译范围识别 | `src/workflows/translation-scope.js` | 页码和章节范围；用户页码为 1-based，Datalab 请求转换为 0-based |
 | 直译内容提取/结构 | `src/workflows/translation-source-text.js` | arXiv HTML 优先、普通 HTML/Notion；保留标题、段落、图表、公式、代码和引用 |
 | PDF 结构化解析 | `src/workflows/datalab-parser.js` | 直译/扫描件走托管 Datalab；有文字层的分析型 PDF 可在 `user-sources.js` 用 Poppler 降级读取 |
-| 直译翻译/完整性/checkpoint | `src/workflows/translation-source-text.js` | 逐文本节点翻译、等价数字分级校验、定向修复、逐单元 checkpoint、异常高亮安全清理及图表公式完整性门禁 |
-| 直译执行与研究轨迹 | `src/workflows/translate-engine.js` | 调用结构化直译并把 manifest、完整性和低置信度告警写入 trace |
+| 直译翻译/完整性/checkpoint | `src/workflows/translation-source-text.js` | 逐文本节点翻译、不可变 token、最多两轮定向修复、宽松复核例外、逐单元 checkpoint 及结构/资产硬门禁 |
+| 直译执行与研究轨迹 | `src/workflows/translate-engine.js` | 把 manifest、严格等价状态、待复核块、全部候选与最终选择写入 trace |
 | 失败直译受限续跑 | `scripts/requeue-translation.mjs` + `src/core/store.js` | 只接受数据库 run-id；要求 checkpoint，拒绝其它工作流、已有 `media_id` 和非白名单失败 |
+| 旧代码门禁分析受限重排 | `scripts/requeue-analysis-gate.mjs` + `src/core/store.js` | 仅四个 V2 分析流的旧 `failed/gate`，拒绝已发布、无 Slack 通知和其它错误 |
 | 文档抓取配置 | `.env` 的 `TRANSLATION_*` / `NOTION_API_TOKEN` / `GOOGLE_DOCS_CLIENT_ID` / `GOOGLE_DOCS_CLIENT_SECRET` / `GOOGLE_DOCS_REFRESH_TOKEN` / `GITHUB_TOKEN` / `DATALAB_*` | 控制来源、私有文档、PDF 页数、浏览器、解析质量、超时和重定向；access token 仅为兼容回退 |
 | 单任务取消、发布阶段保护与垃圾目录清理 | `src/core/queue.js`、`src/index.js`、`src/lib/task-cancellation.js` | generate 可取消；publish 后拒绝强杀；取消后状态为 cancelled |
 | 优先信源加减域名 | `workflows/shared.js` 的清单,或 .env EXA_PRIORITY_DOMAINS | 写主域即可,子域自动匹配 |
-| 门禁规则(拦截/提醒) | `src/lib/gate.js` | 注意:投资建议敏感词已按要求移除,勿加回 |
+| 门禁规则(拦截/提醒) | `src/lib/gate.js` + `src/lib/code-blocks.js` | 未授权代码只提醒；密钥/本地路径仍硬拦截；投资建议敏感词已移除，勿加回 |
 | 微信宽表可读性与自动拆分 | `src/lib/mobile-tables.js` | 紧凑五列可放行；不可读表先拆分，转换失败才由 gate 拦截 |
 | 固定头图/尾图换图 | 替换 `assets/` 下文件，或用 `WECHAT_HEADER_IMAGE` / `WECHAT_SURVEY_IMAGE` / `WECHAT_FOOTER_IMAGE` 覆盖 | Markdown 只注入头图；最终 HTML 强制按“调研图、社群封底”顺序保留最后两张 |
 | 封面版式/字段 | `tools/cover-generator/template.html` | 自定义生成器时覆盖 `COVER_GENERATOR_DIR`；数据提取 prompt 在 `src/lib/cover.js` |
@@ -121,7 +123,7 @@ scripts/install-launchd.sh
 
 改任何 `src/` 代码后的验收顺序：`npm run check`（测试不使用真实业务凭据；依赖审计会访问 npm registry）→ 按需执行真实连接检查 → 备份 SQLite → 明确重启对应服务。不要从 Git 拉取后未经检查直接重启。
 
-结构化校验失败的直译不要手工改数据库。确认目标版本已部署后，按 [`../deploy/README.md`](../deploy/README.md) 的受限续跑步骤使用数据库 run-id 恢复；命令验证 checkpoint 和 `media_id` 后，重启唯一实例让持久化队列接管。
+结构化校验失败的直译不要手工改数据库。确认目标版本已部署后，按 [`../deploy/README.md`](../deploy/README.md) 的受限续跑步骤使用数据库 run-id 恢复；命令验证 checkpoint 和 `media_id` 后，重启唯一实例让持久化队列接管。旧版代码围栏/四空格门禁误拦截的四类 V2 分析，只能用 `npm run requeue:analysis-gate -- <run-id>` 恢复；该命令同样只入队、不直接运行。
 
 ## 五、阅读顺序建议(第一次读代码)
 

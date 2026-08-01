@@ -10,6 +10,7 @@ const RECENT_RE = /(?:最新|近期|刚发布|新发布|当前|截至目前|\bla
 const LINK_ONLY_RE = /(?:仅|只)(?:依据|根据|使用|参考).{0,12}(?:这个|该|此)?链接|(?:based\s+only\s+on|only\s+use)\s+(?:this|the)?\s*(?:link|url|source)/i;
 const MODEL_COMPARISON_RE = /(?:比较|对比|能力差异|孰强孰弱|\bcompar(?:e|ing|ison)\b).{0,120}(?:模型|model|opus|kimi|gpt|claude|gemini|qwen|llama|glm|deepseek|grok)/i;
 const EXPLICIT_STRUCTURE_RE = /(?:两方|双方|正反|两个观点|两种观点|分成.{0,8}(?:部分|章节)|按照.{0,20}(?:结构|框架)|\btwo\s+(?:(?:argument|arguments)\s+)?sides?\b|\btwo\s+arguments?\b|\bstructure\b|\bsections?\b)/i;
+const CODE_REQUEST_RE = /(?:代码(?:块|示例|片段|摘录)?|伪代码|ASCII\s*(?:图|diagram|sketch)?|\bcode\b\s*(?:block|blocks|example|examples|excerpt|excerpts|snippet|snippets)?|\bsource\s+code\b|\bunder\s+\d+\s+lines\b)/i;
 const ENTITY_VERSION_RE = /\b(?:Claude\s+(?:Opus|Sonnet|Haiku)|Opus|Sonnet|Haiku|Kimi|GPT|Gemini|Qwen|Llama|GLM|DeepSeek|Grok)\s*[- ]?\s*[A-Za-z]?\d+(?:\.\d+)?[A-Za-z]?\b/gi;
 
 export class AnalysisNeedsInputError extends Error {
@@ -51,6 +52,13 @@ export function extractExplicitEntityVersions(text) {
   }).filter(Boolean);
 }
 
+export function contentPolicyForPrompt(input) {
+  return {
+    allow_code_blocks: CODE_REQUEST_RE.test(String(input || '')),
+    source: CODE_REQUEST_RE.test(String(input || '')) ? 'explicit-user-request' : 'default',
+  };
+}
+
 export function fallbackTaskContract(input, workflow = {}, taskContext = {}) {
   const rawPrompt = String(input || '').trim();
   const entities = extractExplicitEntityVersions(rawPrompt);
@@ -88,6 +96,7 @@ export function fallbackTaskContract(input, workflow = {}, taskContext = {}) {
       : [],
     freshness_requirement: RECENT_RE.test(rawPrompt) ? 'recent' : 'current-as-needed',
     only_user_links: LINK_ONLY_RE.test(rawPrompt),
+    content_policy: contentPolicyForPrompt(rawPrompt),
     clarification_needed: false,
     clarification_question: '',
   };
@@ -114,6 +123,7 @@ export function buildPlanningPrompt(input, workflow = {}, taskContext = {}, {
     "search_aliases": ["目标实体的英文名、法定名称、常用缩写、ticker 或监管申报主体名称"],
     "freshness_requirement": "recent|current-as-needed|用户指定范围",
     "only_user_links": false,
+    "content_policy": {"allow_code_blocks":false},
     "clarification_needed": false,
     "clarification_question": ""
   },
@@ -190,6 +200,8 @@ export function normalizePlanningResult(raw, input, workflow = {}, taskContext =
       .slice(0, 10),
     freshness_requirement: cleanString(candidate.freshness_requirement) || fallback.freshness_requirement,
     only_user_links: onlyUserLinks,
+    // 代码块能力只能由原始 Prompt 确定，不能接受规划模型自行开启。
+    content_policy: fallback.content_policy,
     clarification_needed: false,
     clarification_question: '',
   };
@@ -454,10 +466,13 @@ ${editorialGuidance ? `${editorialGuidance}\n\n` : ''}【写作要求】
 - 原始 Prompt 是内容、观点、比较对象、篇幅和结构的最高优先级。
 - 只使用上面证据可以支持的事实，不得自行添加其他型号、部署平台、榜单、财务数据或竞品结论。
 - 用户的观点和因果判断应作为待分析假设或作者判断表达，不得伪装成已证实事实。
+- 用户明确要求采用、但允许证据尚未直接支持的核心前提不得静默删除：有用户链接时注明“据该项目 README/文档”，只有 Prompt 时写成“本文按这一工程假设展开”。正文不得出现 Slack 或“用户说”。
 - 默认输出${contract.output_language || '简体中文'}。
 - 输出完整 Markdown，开头必须是 YAML frontmatter 且只需包含 title。
 - 不要生成引用链接、脚注或来源章节，系统会确定性追加引用。
-- 不要生成开头横幅、结尾二维码、署名、发布指令或代码围栏。
+- 不要生成开头横幅、结尾二维码、署名或发布指令。${contract.content_policy?.allow_code_blocks
+    ? '用户已明确要求代码或 ASCII 图，必须保留必要的 fenced code block。'
+    : '用户未要求代码，不要主动生成代码围栏。'}
 - 固定模板只处理排版，不能改变用户要求。
 `;
 }
@@ -488,9 +503,13 @@ export function buildAuditPrompt({ article, contract, evidenceMatrix, sources })
     {
       "article_quote":"文章中逐字存在的完整句子",
       "issue_type":"unsupported|contradiction|entity_drift|overclaim|stage_conflation|financial_scope|attribution|format",
-      "severity":"core|non_core",
+      "impact":"core|supporting|incidental",
+      "risk":"high|low",
+      "origin":"user_requirement|user_source|evidence|inference|model_added",
+      "confidence":"high|medium|low",
+      "contract_quote":"若 origin=user_requirement，填写 Slack 原始 Prompt 中逐字存在的依据；否则为空",
       "evidence_ids":["S1"],
-      "action":"delete|qualify|replace",
+      "action":"retain|delete|qualify|replace",
       "replacement":"仅替换该句的文本；删除时可为空"
     }
   ]
@@ -500,8 +519,14 @@ export function buildAuditPrompt({ article, contract, evidenceMatrix, sources })
 - article_quote 必须逐字出现在文章中。
 - 只依据允许证据，不得补充新事实。
 - 用户的推论如果已经明确标为判断，不应因来源没有直接证明该推论而删除。
-- 核心实体、版本或主要前提无法修复时删除该句；只有证据矩阵已确认的双边核心冲突才会在写作前询问用户，审计阶段不得再次提问。
-- 次要无支持句优先 delete；有直接证据时才允许 qualify/replace。
+- impact 说明句子对文章结论的重要性；risk=high 仅用于数字、日期、实体/版本、能力比较、商业/财务阶段、法律监管或因果结论，一般背景、示例和非定量措辞为 low。
+- origin=user_requirement 时 contract_quote 必须逐字存在于任务合同 raw_prompt；没有双边反证时 action=retain，不得删除用户核心前提。
+- origin=user_source 表示该前提来自用户提供的链接或附件；没有双边反证时 action=retain，并在正文按材料名、README 或文档归因。
+- origin=inference 且文章已明确标注为判断或假设时 action=retain。
+- 低风险且非核心的 unsupported 使用 action=retain；不要仅因来源没有逐字支持普通背景措辞而删句。
+- 模型自行新增的高风险或核心无支持事实，有直接证据时才可 qualify/replace，否则 delete。
+- 只有 confidence=high 才允许建议修改；medium/low 一律 action=retain 并交人工复核。
+- 只有证据矩阵已确认的双边核心冲突才会在写作前询问用户，审计阶段不得再次提问。
 - 不检查文末引用格式，引用由系统生成。
 ${editorialAuditRules}
 
@@ -518,25 +543,56 @@ ${JSON.stringify(compactSources)}
 ${article}`;
 }
 
-export function normalizeAuditIssues(raw, article, evidenceMatrix) {
+export function normalizeAuditIssues(raw, article, evidenceMatrix, contract = {}) {
   const validEvidence = new Set(evidenceMatrix.relevant_source_ids || []);
   return arrayOfObjects(raw?.issues).map((issue) => {
     const quote = cleanString(issue.article_quote);
     if (!quote || !String(article).includes(quote)) return null;
     const evidenceIds = validSourceIds(issue.evidence_ids, validEvidence);
-    const severity = issue.severity === 'core' ? 'core' : 'non_core';
-    let action = ['delete', 'qualify', 'replace'].includes(issue.action)
+    const impact = ['core', 'supporting', 'incidental'].includes(issue.impact)
+      ? issue.impact
+      : (issue.severity === 'core' ? 'core' : 'supporting');
+    const issueType = cleanString(issue.issue_type) || 'unsupported';
+    const risk = issue.risk === 'low' ? 'low' : 'high';
+    let origin = ['user_requirement', 'user_source', 'evidence', 'inference', 'model_added']
+      .includes(issue.origin) ? issue.origin : 'model_added';
+    const confidence = ['high', 'medium', 'low'].includes(issue.confidence)
+      ? issue.confidence : 'medium';
+    const contractQuote = cleanString(issue.contract_quote);
+    if (origin === 'user_requirement'
+      && (!contractQuote || !String(contract.raw_prompt || '').includes(contractQuote))) {
+      origin = 'model_added';
+    }
+    let action = ['retain', 'delete', 'qualify', 'replace'].includes(issue.action)
       ? issue.action
-      : 'delete';
+      : 'retain';
     let replacement = cleanString(issue.replacement);
-    if (['qualify', 'replace'].includes(action) && (!replacement || !evidenceIds.length)) {
+    const protectedUserPremise = ['user_requirement', 'user_source'].includes(origin)
+      && !['contradiction', 'entity_drift'].includes(issueType);
+    const protectedInference = origin === 'inference' && issueType === 'unsupported';
+    const lowRiskSupporting = risk === 'low'
+      && impact !== 'core'
+      && issueType === 'unsupported';
+    if (confidence !== 'high' || protectedUserPremise || protectedInference || lowRiskSupporting) {
+      action = 'retain';
+      replacement = '';
+    } else if (origin === 'model_added'
+      && (risk === 'high' || impact === 'core')
+      && action === 'retain') {
+      action = 'delete';
+      replacement = '';
+    } else if (['qualify', 'replace'].includes(action) && (!replacement || !evidenceIds.length)) {
       action = 'delete';
       replacement = '';
     }
     return {
       article_quote: quote,
-      issue_type: cleanString(issue.issue_type) || 'unsupported',
-      severity,
+      issue_type: issueType,
+      impact,
+      risk,
+      origin,
+      confidence,
+      contract_quote: contractQuote,
       evidence_ids: evidenceIds,
       action,
       replacement,
@@ -545,11 +601,79 @@ export function normalizeAuditIssues(raw, article, evidenceMatrix) {
   }).filter(Boolean);
 }
 
+export function buildCoreRepairPrompt({ article, issues, evidenceMatrix, sources }) {
+  const relevant = new Set(evidenceMatrix.relevant_source_ids || []);
+  const compactSources = sources
+    .filter((source) => relevant.has(source.id) && !source.editorialWarning)
+    .map((source) => ({
+      id: source.id,
+      title: source.title,
+      url: source.url,
+      excerpt: sourceExcerpt(source, 2600),
+    }));
+  return `文章的事实审计将删除以下核心句。只允许用现有证据为每个句子生成一个局部、可直接替换的补写；不得改标题、段落结构、其它句子或文章观点，不得引入新事实。
+
+只返回 JSON:
+{
+  "repairs":[
+    {
+      "article_quote":"待替换的逐字原句",
+      "replacement":"由现有证据直接支持的局部替换句",
+      "evidence_ids":["S1"]
+    }
+  ]
+}
+
+每个待修句都必须返回；无法由现有证据支持时不要猜测，省略该项，系统会停止生成。
+
+待修核心句:
+${JSON.stringify(issues.map((issue) => ({
+    article_quote: issue.article_quote,
+    issue_type: issue.issue_type,
+    evidence_ids: issue.evidence_ids,
+  })))}
+
+允许证据:
+${JSON.stringify(compactSources)}
+
+待审文章:
+${article}`;
+}
+
+export function normalizeCoreRepairs(raw, issues, evidenceMatrix) {
+  const targets = new Map(issues.map((issue) => [issue.article_quote, issue]));
+  const validEvidence = new Set(evidenceMatrix.relevant_source_ids || []);
+  const repairs = arrayOfObjects(raw?.repairs).map((item) => {
+    const articleQuote = cleanString(item.article_quote);
+    const replacement = cleanString(item.replacement);
+    const evidenceIds = validSourceIds(item.evidence_ids, validEvidence);
+    if (!targets.has(articleQuote)
+      || !replacement
+      || replacement === articleQuote
+      || evidenceIds.length === 0) return null;
+    return {
+      article_quote: articleQuote,
+      replacement,
+      evidence_ids: evidenceIds,
+    };
+  }).filter(Boolean);
+  const repaired = new Set(repairs.map((item) => item.article_quote));
+  return {
+    repairs,
+    unresolved: [...targets.keys()].filter((quote) => !repaired.has(quote)),
+  };
+}
+
 export function applyAuditIssues(article, issues) {
   let output = String(article || '');
   const applied = [];
+  const retained = [];
   for (const issue of issues) {
     if (!output.includes(issue.article_quote)) continue;
+    if (issue.action === 'retain') {
+      retained.push(issue);
+      continue;
+    }
     const replacement = ['replace', 'qualify'].includes(issue.action)
       ? issue.replacement
       : '';
@@ -561,7 +685,7 @@ export function applyAuditIssues(article, issues) {
     .replace(/\n{3,}/g, '\n\n')
     .replace(/([。！？])\s+([。！？])/g, '$1$2')
     .trim();
-  return { article: output, applied };
+  return { article: output, applied, retained };
 }
 
 export function appendDeterministicReferences(article, sources, referenceIds, maxReferences = 5) {

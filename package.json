@@ -11,6 +11,7 @@
     "check:openrouter": "node scripts/check-openrouter.mjs",
     "check:translation": "node scripts/check-translation.mjs",
     "requeue:translation": "node scripts/requeue-translation.mjs",
+    "requeue:analysis-gate": "node scripts/requeue-analysis-gate.mjs",
     "check:documents": "node scripts/check-documents.mjs",
     "auth:google-docs": "node scripts/google-docs-oauth.mjs",
     "check:customerio": "node scripts/check-customerio.mjs",

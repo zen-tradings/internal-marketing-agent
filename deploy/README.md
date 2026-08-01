@@ -145,6 +145,23 @@ to `done`, the existing checkpoint advances, and exactly one non-empty
 `media_id` is stored. A changed source hash intentionally invalidates the old
 checkpoint and restarts translation from the beginning.
 
+For a V2 analysis that failed under an older release only because the WeChat
+gate rejected fenced code or a four-space indented block, use the separate
+restricted command. It accepts only `wechat`, `sector`, `company`, or
+`earnings` rows in `failed/gate`, requires valid Slack notification metadata,
+and refuses any row with a `media_id` or a different error.
+
+```bash
+run_id=replace-with-database-run-id
+sudo -u zenbot env \
+  DB_PATH=/var/lib/zen-content-hub/runs.db \
+  npm --prefix /opt/zen-content-hub run requeue:analysis-gate -- "$run_id"
+sudo systemctl restart zen-content-hub
+```
+
+Both recovery commands only change the database row to `queued`; the one
+systemd instance performs the actual work after restart.
+
 Analysis V2 is the production default. `ANALYSIS_PIPELINE_VERSION=v1` remains
 only as a single-instance emergency fallback; do not run V1 and V2 as separate
 processes. Inspect `research-trace.json` during production acceptance. It records

@@ -38,6 +38,21 @@ export function validatePreparedWechatHtml(html, {
   if (/source-page-\d+\.(?:png|jpe?g|gif|webp)/i.test(value)) errors.push('最终 HTML 含禁止的 PDF 整页截图');
 
   const document = new JSDOM(`<body>${value}</body>`).window.document;
+  const dangerous = document.querySelectorAll('script,style,iframe,object,embed');
+  if (dangerous.length) errors.push(`最终 HTML 含 ${dangerous.length} 个禁止的可执行或嵌入节点`);
+  for (const [index, pre] of [...document.querySelectorAll('pre')].entries()) {
+    const code = pre.children.length === 1 && pre.firstElementChild?.tagName === 'CODE'
+      ? pre.firstElementChild
+      : undefined;
+    if (!code) {
+      errors.push(`第 ${index + 1} 个代码块缺少唯一的 code 子节点`);
+      continue;
+    }
+    if (!code.textContent.trim()) errors.push(`第 ${index + 1} 个代码块为空`);
+    if ([...code.querySelectorAll('*')].some((node) => node.tagName !== 'SPAN')) {
+      errors.push(`第 ${index + 1} 个代码块含非语法高亮子节点`);
+    }
+  }
   const sourceInfoLabels = [...document.querySelectorAll('strong')]
     .filter((node) => node.textContent.trim() === '原文信息');
   if (sourceInfoLabels.length > 1) errors.push(`最终 HTML 含 ${sourceInfoLabels.length} 个“原文信息”板块`);

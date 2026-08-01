@@ -272,6 +272,38 @@ test('直译工作流跳过中文破折号提醒并继续发布', async () => {
   assert.equal(warned.length, 0);
 });
 
+test('用户授权代码时先把四空格块规范为围栏并把策略传给 gate', async () => {
+  const writes = [];
+  const warnings = [];
+  let gateInput;
+  let gateOptions;
+  const markdown = '---\ntitle: T\n---\n\n示例：\n\n    def run():\n        return 1';
+  const channel = makeChannel({
+    generateCover: async () => '/out/cover.png',
+    readArticle: async () => ({ markdown, title: 'T' }),
+    writeArticle: async (filename, content) => writes.push(content),
+    checkArticle: (value, options) => {
+      gateInput = value;
+      gateOptions = options;
+      return { errors: [], warnings: [] };
+    },
+    injectFixedImages: (value) => ({ markdown: value, skipped: [] }),
+    renderAndPublish: async () => 'MEDIA-CODE',
+  });
+  const out = await channel.publish({
+    articlePath: '/out/article.md',
+    config: { wechat: { appId: 'wx', appSecret: 's' } },
+    contentPolicy: { allow_code_blocks: true, source: 'explicit-user-request' },
+    notify: { channel: 'C', ts: '1' },
+    notifier: { warn: async (notify, message) => warnings.push(message) },
+  });
+  assert.equal(out.mediaId, 'MEDIA-CODE');
+  assert.match(gateInput, /```text\ndef run\(\):\n    return 1\n```/);
+  assert.equal(gateOptions.contentPolicy.allow_code_blocks, true);
+  assert.ok(writes.some((content) => content.includes('```text')));
+  assert.ok(warnings.some((message) => /四空格缩进代码块/.test(message)));
+});
+
 test('不可读宽表在门禁前自动拆分并写回,随后继续发布', async () => {
   const warned = [];
   const writes = [];

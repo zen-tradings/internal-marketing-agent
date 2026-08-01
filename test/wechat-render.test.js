@@ -140,3 +140,17 @@ test('微信最终 HTML:在调用微信 API 前拦截本地 WebP 和 SVG', () =>
     /微信不支持的 WebP.*微信不支持的 SVG/,
   );
 });
+
+test('微信最终 HTML:合法浅色代码块通过，危险或损坏代码结构拦截', () => {
+  assert.doesNotThrow(() => validatePreparedWechatHtml(
+    '<pre style="background:#F6F7F9"><code class="hljs"><span>print</span>(1)</code></pre>',
+  ));
+  assert.throws(
+    () => validatePreparedWechatHtml('<pre>missing code</pre><script>alert(1)</script>'),
+    /禁止的可执行或嵌入节点.*缺少唯一的 code 子节点/,
+  );
+  assert.throws(
+    () => validatePreparedWechatHtml('<pre><code><a href="https://example.com">bad</a></code></pre>'),
+    /含非语法高亮子节点/,
+  );
+});

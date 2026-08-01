@@ -170,6 +170,21 @@ export function openStore(dbPath) {
           )
       `).run(id).changes;
     },
+    requeueRecoverableAnalysisGate(id) {
+      return db.prepare(`
+        UPDATE runs
+        SET status = 'queued', stage = NULL, error = NULL, started_at = NULL, finished_at = NULL
+        WHERE id = ?
+          AND workflow_id IN ('wechat', 'sector', 'company', 'earnings')
+          AND status = 'failed'
+          AND stage = 'gate'
+          AND media_id IS NULL
+          AND (
+            error LIKE '%正文包含代码围栏%'
+            OR error LIKE '%四空格缩进块%'
+          )
+      `).run(id).changes;
+    },
     recoverRunningWorkflow(workflowId) {
       return db.prepare(`
         UPDATE runs

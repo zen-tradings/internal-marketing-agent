@@ -1,4 +1,5 @@
 import { findUnreadableTables } from './mobile-tables.js';
+import { inspectCodeBlocks } from './code-blocks.js';
 
 // 发布前门禁:纯函数,确定性规则。errors 出口拦截(不予发布),warnings 放行但需 Slack 提醒人工关注。
 // 门禁在注入固定图之前跑,检查的是模型产出的原文,本地路径/密钥这类内容在模型输出里本就不该出现。
@@ -10,7 +11,11 @@ const SECRET_PATTERNS = [
   { re: /(?:authorization|api[_ -]?key|app[_ -]?secret)\s*[:=]\s*(?:bearer\s+)?[A-Za-z0-9._~+/-]{12,}/i, label: '通用 API 凭据' },
 ];
 
-export function checkArticle(markdown, { secretValues = [], workflowMode = '' } = {}) {
+export function checkArticle(markdown, {
+  secretValues = [],
+  workflowMode = '',
+  contentPolicy = {},
+} = {}) {
   const md = String(markdown || '');
   const errors = [];
   const warnings = [];
@@ -45,15 +50,9 @@ export function checkArticle(markdown, { secretValues = [], workflowMode = '' } 
     errors.push('出口拦截:正文包含本地路径,模型产出不应泄漏运行环境路径');
   }
 
-  if (/```/.test(md)) {
-    errors.push('出口拦截:正文包含代码围栏,公众号固定版式不允许代码卡片');
-  }
-
-  // 非直译工作流仍可能显式生成 HTML <pre><code>，只在这些块之外检查
-  // 会被 Markdown 误识别为代码卡片的四空格缩进。
-  const markdownOutsideExplicitPre = md.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, '');
-  if (markdownOutsideExplicitPre.split(/\r?\n/).some((line) => /^ {4,}\S/.test(line))) {
-    errors.push('出口拦截:正文包含四空格缩进块,会被渲染为黄色代码框');
+  const code = inspectCodeBlocks(md);
+  if ((code.fenced || code.htmlPre || code.indented) && contentPolicy.allow_code_blocks !== true) {
+    warnings.push('排版提醒:正文包含用户未明确要求的代码块,已使用公众号浅色代码样式放行');
   }
 
   if (/source-page-\d+\.png/i.test(md)) {
@@ -70,7 +69,7 @@ export function checkArticle(markdown, { secretValues = [], workflowMode = '' } 
   }
 
   // 直译以忠实还原原文为最高优先级，不用原创写作的破折号风格规范干预译文。
-  // 这里只豁免这一条风格提醒；密钥、本地路径、代码块、坏表格等门禁保持不变。
+  // 这里只豁免这一条风格提醒；密钥、本地路径、坏表格等安全与完整性门禁保持不变。
   if (workflowMode !== 'translation' && md.includes('——')) {
     warnings.push('风格:出现中文破折号——,规范要求用逗号或冒号代替');
   }

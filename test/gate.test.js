@@ -121,13 +121,22 @@ test('信息具体可读:破折号 warning 提示规范要求', () => {
   assert.match(w, /逗号或冒号/);
 });
 
-test('公众号版式门禁:代码围栏和四空格缩进拦截,不可读宽表降为提醒', () => {
+test('公众号版式门禁:未授权代码和不可读宽表降为提醒', () => {
   const md = '---\ntitle: T\n---\n```text\nx\n```\n    indented\n|报告期|营业收入（亿元）|同比增速|毛利率|净利润/归母净利润（亿元）|\n|---|---|---|---|---|';
   const { errors, warnings } = checkArticle(md);
-  assert.ok(errors.some((error) => /代码围栏/.test(error)));
-  assert.ok(errors.some((error) => /四空格缩进/.test(error)));
+  assert.equal(errors.some((error) => /代码围栏|四空格缩进/.test(error)), false);
+  assert.ok(warnings.some((warning) => /未明确要求的代码块/.test(warning)));
   assert.equal(errors.some((error) => /移动端宽表/.test(error)), false);
   assert.ok(warnings.some((warning) => /宽表/.test(warning)));
+});
+
+test('公众号版式门禁:用户明确要求的代码块不产生代码提醒', () => {
+  const md = '---\ntitle: T\n---\n\n```python\nprint("ok")\n```';
+  const { errors, warnings } = checkArticle(md, {
+    contentPolicy: { allow_code_blocks: true },
+  });
+  assert.equal(errors.length, 0);
+  assert.equal(warnings.some((warning) => /代码块/.test(warning)), false);
 });
 
 test('公众号版式门禁:显式 HTML pre 中的原文代码缩进不误判为 Markdown 代码卡片', () => {
