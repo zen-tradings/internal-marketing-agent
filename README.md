@@ -16,7 +16,7 @@ Slack 私聊自然语言 / 频道 @Bot / PDF/文本附件 / cron
   → Slack best-effort 回报；通知失败不改变草稿结果
 ```
 
-Node.js 负责流程控制；正文模型由 `.env` 的 `OPENROUTER_MODEL` 指定，生产默认 `z-ai/glm-5.2`。`OPENROUTER_PLANNER_MODEL` 与 `OPENROUTER_REVIEW_MODEL` 可独立覆盖任务规划和逐句事实审计，未设置时继承正文模型。正文默认关闭 reasoning，并由 `OPENROUTER_MAX_TOKENS` 明确控制输出预算。Exa 只负责检索与正文抓取。
+Node.js 负责流程控制；正文模型由 `.env` 的 `OPENROUTER_MODEL` 指定，生产默认 `z-ai/glm-5.2`。`OPENROUTER_PLANNER_MODEL` 与 `OPENROUTER_REVIEW_MODEL` 可独立覆盖任务规划和逐句事实审计，未设置时继承正文模型。正文默认关闭 reasoning，并由 `OPENROUTER_MAX_TOKENS` 明确控制输出预算。Exa 只负责检索与正文抓取；`alphaxiv.org` 是内置优先检索域名之一，项目不连接 AlphaXiv MCP。
 
 ## 目录
 

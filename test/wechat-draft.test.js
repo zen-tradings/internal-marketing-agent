@@ -368,7 +368,7 @@ test('固定图缺失(skipped 非空) → notifier.warn 告警,流程继续', as
   const out = await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } }, notify, notifier });
   assert.equal(out.mediaId, 'MEDIA-9');
   assert.equal(warned.length, 1);
-  assert.match(warned[0].msg, /固定头尾图缺失/);
+  assert.match(warned[0].msg, /固定头图缺失/);
   assert.match(warned[0].msg, /missing-header\.gif/);
 });
 

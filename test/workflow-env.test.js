@@ -18,6 +18,9 @@ test('workflow env 属性延迟读取:import 后修改 env 仍生效(getter 语�
     assert.equal(wf.workDir, '/srv/zen/wechat');
     assert.equal(wf.model, undefined);
     assert.equal(wf.channel, 'wechat-draft');
+    const prompt = wf.promptTemplate('测试双尾图契约');
+    assert.match(prompt, /内容调研问卷图 \+ 社群封底图/);
+    assert.match(prompt, /依次追加内容调研问卷图和社群封底图,二者是最终两个节点/);
 
     // 模拟 dotenv.config() 注入 env
     process.env.WORK_DIR = '/tmp/test-zen';
@@ -54,6 +57,7 @@ test('workflow.research:行业优先源排除 Exa 不支持域名,官方源与�
     assert.ok(Array.isArray(defaults) && defaults.length > 0);
     assert.ok(defaults.includes('trendforce.com'));
     assert.ok(defaults.includes('semianalysis.com'));
+    assert.ok(defaults.includes('alphaxiv.org'));
     assert.ok(!defaults.includes('x.com'));
     assert.ok(!defaults.includes('twitter.com'));
 

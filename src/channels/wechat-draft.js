@@ -100,7 +100,7 @@ export function makeChannel({
         } catch (warnErr) { console.error('宽表转换提醒失败(不影响流程):', warnErr); }
       }
 
-      // 门禁:对模型产出原文(注入头尾图之前)做出口检查。失败后的重试会保留系统写入的
+      // 门禁:对模型产出原文(注入固定图之前)做出口检查。失败后的重试会保留系统写入的
       // cover/固定图,因此先剥离这些已知资产。errors 拦截发布并直接结束流程,
       // 只有在无 errors 时才继续检查 warnings(放行但需人工关注),避免同一次发布重复告警。
       const assetsConfig = config.assets || {};
@@ -150,7 +150,7 @@ export function makeChannel({
         footerPath: undefined,
       });
       if (injectResult.skipped.length) {
-        try { if (notifier && notify) await notifier.warn(notify, `固定头尾图缺失,已跳过注入:${injectResult.skipped.join(', ')}`); }
+        try { if (notifier && notify) await notifier.warn(notify, `固定头图缺失,已跳过注入:${injectResult.skipped.join(', ')}`); }
         catch (warnErr) { console.error('固定图告警失败(不影响流程):', warnErr); }
       }
       if (injectResult.markdown !== markdown) {

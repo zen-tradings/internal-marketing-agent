@@ -488,6 +488,7 @@ test('严格任务:独立检索官方域名,注入当前时间,正文引用已�
   assert.match(prompt, /America\/Los_Angeles/);
   assert.match(prompt, /周末要明确对应最近一个交易日/);
   assert.match(prompt, /【一级优先·官方\/一手信源】SEC filing/);
+  assert.match(prompt, /依次追加内容调研问卷图和社群封底图，二者是最终两个节点/);
   const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
   assert.equal(trace.selectedSources.filter((source) => source.kind === 'official').length, 2);
 });

@@ -1251,7 +1251,7 @@ function buildUserPrompt({ workflow, input, research, writer, sourcePolicy, asOf
     : '';
   const referenceContract = sourcePolicy.referenceStyle === 'terminal-list'
     ? `- 正文不放引用脚标、脚注或来源链接。文章最后只保留一个“## 引用链接”章节，精选 1-5 个最相关、最具支持力的可点击链接；以相关性为准，不凑数，不要生成“引用来源”或罗列全部检索结果
-- “引用链接”必须是正文最后一个文字章节；系统会在它后面追加固定尾图
+- “引用链接”必须是正文最后一个文字章节；系统会在它后面依次追加内容调研问卷图和社群封底图，二者是最终两个节点
 ${sourcePolicy.requireUserSource ? '- 法律文件分析优先保留用户指定的案卷或文件链接\n' : ''}`
     : '- 使用可点击的 Markdown 链接并紧邻其支持的事实，不要在文末重复来源列表';
   const officialCitationContract = sourcePolicy.kind === 'legal-document-analysis'

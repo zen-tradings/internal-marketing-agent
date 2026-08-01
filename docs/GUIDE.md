@@ -51,8 +51,8 @@
    → Markdown 阶段由 assets.js 注入固定头图 assets/zen-header-banner.gif
    → 生成封面 cover.js(便宜模型提取封面数据 → 仓库内置 cover-generator 用无头 Chromium 渲染；
      字段提取失败回退安全默认值，生成器失败或超时则阻止发布)
-   → @wenyan-md/core 渲染，wechat-render.js 在最终 HTML 末尾追加
-     assets/zen-footer-qr.png，再上传微信草稿箱(RENDER_OPTS 是与 wenyan-mcp
+   → @wenyan-md/core 渲染，wechat-render.js 在最终 HTML 末尾依次追加
+     assets/zen-survey-qr.jpg、assets/zen-footer-qr.png，再上传微信草稿箱(RENDER_OPTS 是与 wenyan-mcp
      逐字符 parity 的硬约束,永远不要改)→ 拿 media_id 落库(幂等锚点)
 
 ⑤ 回报     src/core/notifier.js

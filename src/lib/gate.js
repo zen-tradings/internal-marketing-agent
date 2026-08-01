@@ -1,7 +1,7 @@
 import { findUnreadableTables } from './mobile-tables.js';
 
 // 发布前门禁:纯函数,确定性规则。errors 出口拦截(不予发布),warnings 放行但需 Slack 提醒人工关注。
-// 门禁在注入头尾图之前跑,检查的是模型产出的原文,本地路径/密钥这类内容在模型输出里本就不该出现。
+// 门禁在注入固定图之前跑,检查的是模型产出的原文,本地路径/密钥这类内容在模型输出里本就不该出现。
 
 const SECRET_PATTERNS = [
   { re: /sk-or-[A-Za-z0-9_-]{10,}/, label: 'OpenRouter API key(sk-or-...)' },
