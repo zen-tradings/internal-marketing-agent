@@ -21,7 +21,7 @@ import {
   normalizePlanningResult,
   selectFinalReferenceIds,
 } from '../src/core/analysis-v2.js';
-import { runWriter } from '../src/core/runner.js';
+import { normalizeAnalysisArticle, runWriter } from '../src/core/runner.js';
 
 function jsonResponse(body, init = {}) {
   return {
@@ -592,6 +592,16 @@ test('系统从证据矩阵确定性生成唯一引用章节，不依赖模型�
   assert.equal((output.match(/^## 引用链接$/gm) || []).length, 1);
   assert.match(output, /https:\/\/official\.example\/release/);
   assert.match(output, /https:\/\/secondary\.example\/a/);
+});
+
+test('V2 把开头 yaml 标题围栏收敛为唯一 frontmatter，不把标题代码块留在正文', () => {
+  const output = normalizeAnalysisArticle(
+    '```yaml\ntitle: 三票反对与通胀张力\n```\n\n正文。',
+    { exact_entities_and_versions: [] },
+  );
+  assert.match(output, /^---\ntitle: "三票反对与通胀张力"\n---/);
+  assert.doesNotMatch(output, /```yaml/);
+  assert.equal((output.match(/^title:/gm) || []).length, 1);
 });
 
 test('V2 完整链路按 Opus 5/Kimi K2 定向搜索、写作、局部审计并确定性追加引用', async () => {

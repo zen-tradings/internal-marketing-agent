@@ -1002,7 +1002,7 @@ function comparableText(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9\u3400-\u9fff]+/g, '');
 }
 
-function normalizeAnalysisArticle(content, contract) {
+export function normalizeAnalysisArticle(content, contract) {
   let article = normalizeArticle(content);
   const titles = [];
   const firstFrontmatter = article.match(/^---\n([\s\S]*?)\n---(?:\n|$)/);
@@ -1012,7 +1012,8 @@ function normalizeAnalysisArticle(content, contract) {
     article = article.slice(firstFrontmatter[0].length).trimStart();
   }
   // GLM 偶尔会在合法 frontmatter 后再次输出一个 frontmatter，或只多输出
-  // `title: ...` + `---` 的残片。发布前统一收敛为一个 title 区块。
+  // `title: ...` + `---` 的残片，或把 YAML title 放进代码围栏。
+  // 发布前统一收敛为一个 title 区块。
   for (;;) {
     const duplicateBlock = article.match(/^---\n([\s\S]*?)\n---(?:\n|$)/);
     if (duplicateBlock) {
@@ -1025,6 +1026,14 @@ function normalizeAnalysisArticle(content, contract) {
     if (titleFragment) {
       titles.push(unquoteYamlTitle(titleFragment[1]));
       article = article.slice(titleFragment[0].length).trimStart();
+      continue;
+    }
+    const yamlTitleBlock = article.match(/^```ya?ml\s*\n([\s\S]*?)\n```(?:\n|$)/i);
+    if (yamlTitleBlock) {
+      const fencedTitle = yamlTitleBlock[1].match(/^title\s*:\s*(.+)$/m)?.[1];
+      if (!fencedTitle) break;
+      titles.push(unquoteYamlTitle(fencedTitle));
+      article = article.slice(yamlTitleBlock[0].length).trimStart();
       continue;
     }
     break;
