@@ -149,7 +149,11 @@ non-empty `mediaId`, both editorial skill IDs, the selected macro archetype,
 article and trace at those exact paths, then verify the queue is still idle and
 review recent service and transient-unit logs. The trace must contain routing
 reason `production-direct-acceptance`, evidence boundaries, selected sources
-and a non-skipped audit.
+and a non-skipped audit. Critical numeric, market-pricing and market-reaction
+claims returned by the audit must have at least one supporting evidence ID in
+the final selected references. Retained high-risk inferences are review
+warnings, not release blockers; normal Slack-triggered tasks surface them in
+the original thread.
 
 For a local rehearsal that must not touch WeChat, use:
 

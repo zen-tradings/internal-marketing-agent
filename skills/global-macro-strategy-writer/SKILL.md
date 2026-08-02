@@ -68,7 +68,7 @@ description: Turn verified macroeconomic, policy, rates, foreign-exchange, equit
 - 快评控制在 800–1,500 字，深度控制在 2,000–4,000 字，周报控制在 2,500–4,500 字；素材不足时缩短，不注水。
 - 自然叙事优先；长文或多情景文章使用表达判断的小标题，不使用“宏观背景”“风险分析”之类任务清单标题。
 - 有可靠数据时才使用 Markdown 表格，并在表题或邻近文字写清口径、时点和来源。
-- 文末保留精选来源；不要在正文制造无来源链接。
+- 文末保留最多五条精选来源；关键数字、市场定价与市场反应所依赖的直接证据优先进入精选来源，不要在正文制造无来源链接。
 
 ### 6. 守住公开表达边界
 
@@ -84,7 +84,7 @@ description: Turn verified macroeconomic, policy, rates, foreign-exchange, equit
 2. 策略轮：检查预期差、传导、时间尺度、反向情景和失效条件是否真实成立。
 3. 语言轮：删除宣传词、喊单语气、空洞过渡、重复背景与模仿性措辞。
 
-最后按 `references/quality-checklist.md` 自检。发布阻断项未通过时，不得把稿件标记为可发布。
+最后按 `references/quality-checklist.md` 自检。事实硬错误或交易指令等阻断项未通过时，不得把稿件标记为可发布；高风险推断可保留，但必须进入 Slack 待人工复核提醒，不能静默通过。
 
 ## 默认交付
 

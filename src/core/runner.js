@@ -39,11 +39,14 @@ import {
   buildWritingPrompt,
   contentPolicyForPrompt,
   fallbackTaskContract,
+  inferNumericCriticalClaims,
   isAnalysisV2Enabled,
+  normalizeAuditCriticalClaims,
   normalizeAuditIssues,
   normalizeCoreRepairs,
   normalizeEvidenceMatrix,
   normalizePlanningResult,
+  selectFinalReferenceIds,
 } from './analysis-v2.js';
 
 const DEFAULT_SYSTEM_PROMPT = `你是 Zen Trading 公众号分析师。你会基于系统提供的调研素材写中文金融分析文章。
@@ -496,10 +499,30 @@ async function runAnalysisV2({
     researchTracePath,
   });
   article = audit.article;
+  const initialReferenceIds = [...evidenceMatrix.selected_reference_ids];
+  const finalReferenceIds = workflow.id === 'macro'
+    ? selectFinalReferenceIds({
+        initialReferenceIds,
+        criticalClaims: audit.review.criticalClaims,
+        auditReview: audit.review,
+        sources,
+        maxReferences: 5,
+      })
+    : initialReferenceIds;
+  if (workflow.id === 'macro') evidenceMatrix.initial_selected_reference_ids = initialReferenceIds;
+  evidenceMatrix.selected_reference_ids = finalReferenceIds;
+  if (workflow.id === 'macro') {
+    trace.referenceSelection = {
+      initialReferenceIds,
+      criticalClaimEvidenceIds: [...new Set((audit.review.criticalClaims || [])
+        .flatMap((claim) => claim.evidence_ids || []))],
+      finalReferenceIds,
+    };
+  }
   article = appendDeterministicReferences(
     article,
     sources,
-    evidenceMatrix.selected_reference_ids,
+    finalReferenceIds,
     5,
   );
   const sourcePolicy = {
@@ -723,6 +746,12 @@ async function auditAnalysisV2({
     };
   }
   const detectedIssues = normalizeAuditIssues(firstRaw, article, evidenceMatrix, taskContract);
+  const firstCriticalClaims = evidenceMatrix.macro_brief
+    ? uniqueCriticalClaims([
+        ...normalizeAuditCriticalClaims(firstRaw, article, evidenceMatrix),
+        ...inferNumericCriticalClaims(article, evidenceMatrix),
+      ])
+    : [];
   let firstIssues = detectedIssues;
   const coreDeleteIssues = firstIssues.filter((issue) => issue.impact === 'core' && issue.action === 'delete');
   let coreRepair;
@@ -763,6 +792,7 @@ async function auditAnalysisV2({
     detected: detectedIssues,
     applied: firstApplied.applied,
     retained: firstApplied.retained,
+    criticalClaims: firstCriticalClaims,
     repaired: firstApplied.applied.length > 0,
     ...(coreRepair ? { coreRepair } : {}),
   };
@@ -771,7 +801,14 @@ async function auditAnalysisV2({
     return {
       article,
       warnings,
-      review: { approved: true, detected: [], applied: [], retained: [], repaired: false },
+      review: {
+        approved: true,
+        detected: [],
+        applied: [],
+        retained: [],
+        criticalClaims: firstCriticalClaims,
+        repaired: false,
+      },
     };
   }
 
@@ -817,6 +854,8 @@ async function auditAnalysisV2({
         detected: detectedIssues,
         applied: firstApplied.applied,
         retained: firstApplied.retained,
+        criticalClaims: firstCriticalClaims
+          .filter((claim) => firstApplied.article.includes(claim.article_quote)),
         repaired: firstApplied.applied.length > 0,
         verificationSkipped: message,
       },
@@ -866,6 +905,12 @@ async function auditAnalysisV2({
     });
   }
   const secondApplied = applyAuditIssues(firstApplied.article, secondIssues);
+  const secondCriticalClaims = evidenceMatrix.macro_brief
+    ? uniqueCriticalClaims([
+        ...normalizeAuditCriticalClaims(secondRaw, secondApplied.article, evidenceMatrix),
+        ...inferNumericCriticalClaims(secondApplied.article, evidenceMatrix),
+      ])
+    : [];
   for (const issue of secondApplied.applied) {
     warnings.push(issue.action === 'delete'
       ? `事实复核后已自动删除高风险表述:${issue.article_quote.slice(0, 160)}`
@@ -879,6 +924,10 @@ async function auditAnalysisV2({
     detected: detectedIssues,
     applied: [...firstApplied.applied, ...secondApplied.applied],
     retained: [...firstApplied.retained, ...secondApplied.retained],
+    criticalClaims: uniqueCriticalClaims([
+      ...firstCriticalClaims.filter((claim) => secondApplied.article.includes(claim.article_quote)),
+      ...secondCriticalClaims,
+    ]),
     repaired: firstApplied.applied.length + secondApplied.applied.length > 0,
     verificationIssues: secondIssues,
     ...((coreRepair || secondCoreRepair) ? { coreRepair: coreRepair || secondCoreRepair } : {}),
@@ -890,6 +939,25 @@ async function auditAnalysisV2({
     warnings,
     review,
   };
+}
+
+function uniqueCriticalClaims(claims) {
+  const seen = new Set();
+  const usedEvidence = new Set();
+  const output = [];
+  for (const claim of claims || []) {
+    if (output.length >= 4 || seen.has(claim.article_quote)) continue;
+    const evidenceIds = (claim.evidence_ids || []).filter((id) => {
+      if (usedEvidence.has(id)) return true;
+      if (usedEvidence.size >= 4) return false;
+      usedEvidence.add(id);
+      return true;
+    });
+    if (!evidenceIds.length) continue;
+    seen.add(claim.article_quote);
+    output.push({ ...claim, evidence_ids: evidenceIds });
+  }
+  return output;
 }
 
 function assignSourceIds(sources) {

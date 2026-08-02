@@ -88,6 +88,7 @@ console.log(JSON.stringify({
   researchTracePath: generated.researchTracePath,
   sourceCount: generated.sources?.length || 0,
   selectedReferenceCount: trace.evidenceMatrix?.selected_reference_ids?.length || 0,
+  criticalClaimCount: trace.factReview?.criticalClaims?.length || 0,
   editorialSkills: trace.editorialSkills?.map((item) => item.id) || [],
   archetype: trace.macroBrief?.archetype,
   auditApproved: trace.factReview?.approved === true,
@@ -113,6 +114,12 @@ function assertAcceptanceTrace(trace) {
   if (!primary) throw new Error('macro 生产验收没有直接一手或原始来源支撑核心事实');
   if (trace.factReview?.approved !== true || trace.factReview?.skipped === true) {
     throw new Error('macro 事实审计未通过或被跳过');
+  }
+  const selected = new Set(trace.evidenceMatrix?.selected_reference_ids || []);
+  for (const claim of trace.factReview?.criticalClaims || []) {
+    if (!(claim.evidence_ids || []).some((id) => selected.has(id))) {
+      throw new Error(`macro 关键主张的证据没有进入精选来源:${String(claim.article_quote || '').slice(0, 80)}`);
+    }
   }
 }
 

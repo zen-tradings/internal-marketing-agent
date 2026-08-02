@@ -30,12 +30,14 @@ function makeNotifier() {
   const failureCalls = [];
   const cancelledCalls = [];
   const needsInputCalls = [];
+  const warnCalls = [];
   return {
-    successCalls, failureCalls, cancelledCalls, needsInputCalls,
+    successCalls, failureCalls, cancelledCalls, needsInputCalls, warnCalls,
     async success(notify, payload) { successCalls.push({ notify, payload }); },
     async failure(notify, payload) { failureCalls.push({ notify, payload }); },
     async cancelled(notify, payload) { cancelledCalls.push({ notify, payload }); },
     async needsInput(notify, payload) { needsInputCalls.push({ notify, payload }); },
+    async warn(notify, message) { warnCalls.push({ notify, message }); },
   };
 }
 
@@ -89,6 +91,24 @@ test('happy path:生成 + 发布成功 → done,success 调用一次,failure 不
   assert.equal(store._row().media_id, 'M');
   assert.equal(notifier.successCalls.length, 1);
   assert.equal(notifier.failureCalls.length, 0);
+});
+
+test('macro 高风险推断保留时发 Slack 提醒但不阻断草稿', async () => {
+  const workflows = { macro: { id: 'macro', mode: 'analysis', channel: 'mock', retries: 0 } };
+  const runWriter = async () => ({
+    ok: true,
+    articlePath: '/tmp/macro.md',
+    warnings: ['事实审计已保留待人工复核(medium/high/core):美元可能维持偏强'],
+  });
+  const { deps, store, notifier, publishCalls } = baseDeps({ workflows, runWriter });
+
+  await makeHandler(deps)({ id: 'macro-1', workflowId: 'macro', input: '分析美元路径' });
+
+  assert.equal(publishCalls.length, 1);
+  assert.equal(store._row().status, 'done');
+  assert.equal(notifier.warnCalls.length, 1);
+  assert.match(notifier.warnCalls[0].message, /高风险推断\/表述已保留，不阻断草稿/);
+  assert.equal(notifier.successCalls.length, 1);
 });
 
 test('真实草稿渠道未锁定登记模板时在 publish 前拦截', async () => {

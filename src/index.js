@@ -131,9 +131,13 @@ export function makeHandler(deps) {
         if (!res.ok) { const err = new Error(res.stderr); err.stage = 'generate'; throw err; }
         throwIfTaskCancelled(signal);
         if (Array.isArray(res.warnings) && res.warnings.length) {
+          const highRiskRetained = res.warnings
+            .filter((item) => /保留待人工复核\([^/]+\/high\//.test(item)).length;
           const warningHeading = runtimeWorkflow.mode === 'translation'
             ? `直译有 ${res.completeness?.reviewRequiredCount || res.warnings.length} 个译块需人工复核，已按策略创建草稿:`
-            : `事实审计报告 ${res.warnings.length} 项（含自动修复与保留待复核）:`;
+            : runtimeWorkflow.id === 'macro' && highRiskRetained
+              ? `宏观事实审计提醒 ${res.warnings.length} 项，其中 ${highRiskRetained} 项高风险推断/表述已保留，不阻断草稿，请人工复核:`
+              : `事实审计报告 ${res.warnings.length} 项（含自动修复与保留待复核）:`;
           const shownWarnings = res.warnings.slice(0, 6).map((item) => `• ${item}`);
           if (res.warnings.length > shownWarnings.length) {
             shownWarnings.push(`• 其余 ${res.warnings.length - shownWarnings.length} 项见 research-trace.json`);

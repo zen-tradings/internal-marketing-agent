@@ -13,10 +13,13 @@ import {
   contentPolicyForPrompt,
   extractExplicitEntityVersions,
   fallbackTaskContract,
+  inferNumericCriticalClaims,
+  normalizeAuditCriticalClaims,
   normalizeAuditIssues,
   normalizeCoreRepairs,
   normalizeEvidenceMatrix,
   normalizePlanningResult,
+  selectFinalReferenceIds,
 } from '../src/core/analysis-v2.js';
 import { runWriter } from '../src/core/runner.js';
 
@@ -230,6 +233,70 @@ test('macro EvidenceMatrix 生成三类稿型与双向情景，并把一手证�
   assert.match(auditPrompt, /关键价格、收益率、估值、利差、汇率或指数水平必须有允许证据直接支持/);
   assert.match(auditPrompt, /买入、卖出、目标价、入场、退出、止损、仓位/);
   assert.match(auditPrompt, /情景中的新增数字或事件没有来源时按 unsupported/);
+  assert.match(auditPrompt, /critical_claims/);
+  assert.match(auditPrompt, /所有项合计最多 4 个不同来源/);
+});
+
+test('macro 优先保留关键市场数字证据，审计后把它们补入最多五条精选来源', () => {
+  const contract = fallbackTaskContract('分析 FOMC 决议、市场定价与美元反应', { id: 'macro' });
+  const sources = Array.from({ length: 28 }, (_, index) => {
+    const id = `S${index + 1}`;
+    return {
+      id,
+      title: `Source ${id}`,
+      url: `https://example.com/${id}`,
+      official: index < 12,
+    };
+  });
+  const assessments = sources.map((source, index) => ({
+    source_id: source.id,
+    source_type: index < 12 ? 'primary' : 'secondary',
+    relevant: true,
+    safe_statements: source.id === 'S20'
+      ? ['会前加息概率为32%']
+      : source.id === 'S27'
+        ? ['另一市场调查显示加息概率为35%']
+        : [`来源 ${source.id} 的背景事实`],
+  }));
+  const macroWorkflow = {
+    id: 'macro',
+    editorialSkills: ['latepost-ai-writer', 'global-macro-strategy-writer'],
+  };
+  const matrix = normalizeEvidenceMatrix({
+    source_assessments: assessments,
+    requirements: [{
+      requirement: '区分已定价预期与增量信息',
+      source_ids: ['S1', 'S20', 'S27'],
+      safe_statements: ['市场在会前定价加息概率约32%至35%'],
+      covered: true,
+    }],
+    relevant_source_ids: sources.map((source) => source.id),
+    selected_reference_ids: ['S1', 'S2', 'S3', 'S4', 'S5'],
+    macro_brief: { archetype: '事件快评' },
+  }, sources, contract, macroWorkflow);
+  assert.equal(matrix.relevant_source_ids.length, 20);
+  assert.ok(matrix.relevant_source_ids.includes('S20'));
+  assert.ok(matrix.relevant_source_ids.includes('S27'));
+
+  const article = '---\ntitle: 测试\n---\n\n市场在会前定价加息概率约32%至35%。';
+  const criticalClaims = normalizeAuditCriticalClaims({
+    critical_claims: [{
+      article_quote: '市场在会前定价加息概率约32%至35%。',
+      claim_type: 'market_pricing',
+      evidence_ids: ['S20', 'S27'],
+    }],
+  }, article, matrix);
+  assert.deepEqual(criticalClaims[0].evidence_ids, ['S20', 'S27']);
+  const fallbackClaims = inferNumericCriticalClaims(article, matrix);
+  assert.deepEqual(fallbackClaims[0].evidence_ids, ['S20', 'S27']);
+  const finalIds = selectFinalReferenceIds({
+    initialReferenceIds: matrix.selected_reference_ids,
+    criticalClaims,
+    auditReview: { retained: [{ risk: 'high', impact: 'core', evidence_ids: ['S27'] }] },
+    sources,
+  });
+  assert.deepEqual(finalIds.slice(0, 3), ['S1', 'S20', 'S27']);
+  assert.ok(finalIds.length <= 5);
 });
 
 test('macro 没有一手证据时保留事实与观察条件，但明确禁止完整确定性因果叙事', () => {

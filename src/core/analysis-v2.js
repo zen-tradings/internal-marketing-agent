@@ -405,18 +405,27 @@ export function normalizeEvidenceMatrix(raw, sources, contract, workflow = {}) {
     description: cleanString(conflict.description),
     question: cleanString(conflict.question),
   })).filter((conflict) => conflict.topic || conflict.description);
-  const relevantIds = validSourceIds(raw?.relevant_source_ids, validIds)
-    .filter((id) => assessmentMap.get(id)?.relevant !== false)
-    .slice(0, 12);
+  const rawRelevantIds = validSourceIds(raw?.relevant_source_ids, validIds)
+    .filter((id) => assessmentMap.get(id)?.relevant !== false);
+  const rawSelectedReferenceIds = validSourceIds(raw?.selected_reference_ids, validIds)
+    .filter((id) => corroboratingIds.has(id));
+  const relevantIds = hasMacroEditorialSkill(workflow)
+    ? prioritizeMacroRelevantSourceIds({
+        relevantIds: rawRelevantIds,
+        selectedReferenceIds: rawSelectedReferenceIds,
+        requirements,
+        assessments,
+        maxSources: 20,
+      })
+    : rawRelevantIds.slice(0, 12);
   const fallbackRelevant = sources
     .filter((source) => assessmentMap.get(source.id)?.source_type !== 'irrelevant')
     .filter((source) => source.userSpecified || source.official || source.priority || source.retrievalLane === 'official')
     .slice(0, 12)
     .map((source) => source.id);
   const relevantSourceIds = relevantIds.length ? relevantIds : fallbackRelevant;
-  const selectedReferenceIds = validSourceIds(raw?.selected_reference_ids, validIds)
+  const selectedReferenceIds = rawSelectedReferenceIds
     .filter((id) => relevantSourceIds.includes(id))
-    .filter((id) => corroboratingIds.has(id))
     .slice(0, 5);
   const fallbackReferenceIds = relevantSourceIds
     .filter((id) => corroboratingIds.has(id))
@@ -542,12 +551,28 @@ export function buildAuditPrompt({ article, contract, evidenceMatrix, sources })
 - Markdown 表格中的数字必须有口径、时点与来源；任一缺失且无法由证据确认时按 unsupported 处理。
 - 宏观方法用于收紧事实与推断边界，不得因观点与审计员不同而删除已经条件化、给出反例和失效条件的“我们的判断”。`
     : '';
-  return `逐句审计文章，只定位有问题的原句，不得重写全文，不得提出替换用户指定来源或型号的“要求”。
+  const criticalClaimTask = evidenceMatrix.macro_brief
+    ? '同时为文中最关键、且有允许证据直接支持的数字、市场定价、市场反应或核心事实建立精简引用映射；最多返回 4 项，每项选择最少且足以支撑整句的来源，所有项合计最多使用 4 个不同来源，不要把作者推断当成已获证实的关键事实。'
+    : '';
+  const criticalClaimShape = evidenceMatrix.macro_brief
+    ? `  "critical_claims":[
+    {
+      "article_quote":"文章中逐字存在的关键句",
+      "claim_type":"number|market_pricing|market_reaction|core_fact",
+      "evidence_ids":["S1"]
+    }
+  ],
+`
+    : '';
+  const criticalClaimRule = evidenceMatrix.macro_brief
+    ? '- critical_claims 只收录允许证据能够直接支持、且值得进入文末精选来源的关键句；最多 4 项，每项使用足以支持整句的最少 evidence_ids，所有项合计最多 4 个不同来源。'
+    : '';
+  return `逐句审计文章，只定位有问题的原句，不得重写全文，不得提出替换用户指定来源或型号的“要求”。${criticalClaimTask}
 
 只返回 JSON:
 {
   "approved":true,
-  "issues":[
+${criticalClaimShape}  "issues":[
     {
       "article_quote":"文章中逐字存在的完整句子",
       "issue_type":"unsupported|contradiction|entity_drift|overclaim|stage_conflation|financial_scope|attribution|format",
@@ -565,6 +590,7 @@ export function buildAuditPrompt({ article, contract, evidenceMatrix, sources })
 
 规则:
 - article_quote 必须逐字出现在文章中。
+${criticalClaimRule}
 - 只依据允许证据，不得补充新事实。
 - 用户的推论如果已经明确标为判断，不应因来源没有直接证明该推论而删除。
 - impact 说明句子对文章结论的重要性；risk=high 仅用于数字、日期、实体/版本、能力比较、商业/财务阶段、法律监管或因果结论，一般背景、示例和非定量措辞为 low。
@@ -648,6 +674,89 @@ export function normalizeAuditIssues(raw, article, evidenceMatrix, contract = {}
       question: cleanString(issue.question),
     };
   }).filter(Boolean);
+}
+
+export function normalizeAuditCriticalClaims(raw, article, evidenceMatrix, maxClaims = 4) {
+  const validEvidence = new Set(evidenceMatrix.relevant_source_ids || []);
+  const usedEvidence = new Set();
+  const claims = [];
+  for (const item of arrayOfObjects(raw?.critical_claims)) {
+    if (claims.length >= maxClaims) break;
+    const quote = cleanString(item.article_quote);
+    if (!quote || !String(article || '').includes(quote)) continue;
+    const evidenceIds = [];
+    for (const id of validSourceIds(item.evidence_ids, validEvidence)) {
+      if (!usedEvidence.has(id) && usedEvidence.size >= maxClaims) continue;
+      usedEvidence.add(id);
+      evidenceIds.push(id);
+    }
+    if (!evidenceIds.length) continue;
+    claims.push({
+      article_quote: quote,
+      claim_type: ['number', 'market_pricing', 'market_reaction', 'core_fact'].includes(item.claim_type)
+        ? item.claim_type
+        : 'core_fact',
+      evidence_ids: evidenceIds,
+    });
+  }
+  return claims;
+}
+
+export function inferNumericCriticalClaims(article, evidenceMatrix, maxClaims = 4) {
+  const relevant = new Set(evidenceMatrix.relevant_source_ids || []);
+  const assessments = (evidenceMatrix.source_assessments || [])
+    .filter((assessment) => relevant.has(assessment.source_id));
+  const sentences = String(article || '')
+    .replace(/^---[\s\S]*?---\s*/m, '')
+    .split(/\n+|(?<=[。！？.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  const claims = [];
+  for (const sentence of sentences) {
+    if (claims.length >= maxClaims) break;
+    const tokens = [...numericTokens(sentence)].filter((token) => !isYearToken(token));
+    if (!tokens.length) continue;
+    const evidenceIds = [];
+    for (const token of tokens) {
+      const supporting = assessments.find((assessment) =>
+        (assessment.safe_statements || []).some((statement) => numericTokens(statement).has(token)));
+      if (supporting && !evidenceIds.includes(supporting.source_id)) evidenceIds.push(supporting.source_id);
+    }
+    if (!evidenceIds.length) continue;
+    claims.push({
+      article_quote: sentence,
+      claim_type: 'number',
+      evidence_ids: evidenceIds,
+      mapping_source: 'deterministic-numeric-fallback',
+    });
+  }
+  return claims;
+}
+
+export function selectFinalReferenceIds({
+  initialReferenceIds,
+  criticalClaims,
+  auditReview,
+  sources,
+  maxReferences = 5,
+}) {
+  const sourceMap = new Map((sources || []).map((source) => [source.id, source]));
+  const valid = (ids) => uniqueStrings(ids)
+    .filter((id) => sourceMap.get(id)?.url && !sourceMap.get(id)?.editorialWarning);
+  const initial = valid(initialReferenceIds);
+  const critical = valid((criticalClaims || []).flatMap((claim) => claim.evidence_ids || []));
+  const audited = valid([
+    ...(auditReview?.retained || []),
+    ...(auditReview?.applied || []),
+  ].filter((issue) => issue.risk === 'high' || issue.impact === 'core')
+    .flatMap((issue) => issue.evidence_ids || []));
+  const primary = initial.find((id) => sourceMap.get(id)?.official === true);
+  return uniqueStrings([
+    ...(primary ? [primary] : []),
+    ...critical,
+    ...audited,
+    ...initial,
+  ]).slice(0, Math.max(1, maxReferences));
 }
 
 export function buildCoreRepairPrompt({ article, issues, evidenceMatrix, sources }) {
@@ -1030,6 +1139,54 @@ function normalizeSourceType(value) {
   return ['user', 'primary', 'specialist', 'secondary', 'irrelevant'].includes(value)
     ? value
     : 'secondary';
+}
+
+function prioritizeMacroRelevantSourceIds({
+  relevantIds,
+  selectedReferenceIds,
+  requirements,
+  assessments,
+  maxSources,
+}) {
+  const relevant = new Set(relevantIds);
+  const selected = new Set(selectedReferenceIds);
+  const assessmentMap = new Map(assessments.map((item) => [item.source_id, item]));
+  const requirementScores = new Map();
+  for (const requirement of requirements) {
+    const requirementText = [requirement.requirement, ...(requirement.safe_statements || [])].join(' ');
+    const important = /定价|概率|价格|点位|收益率|利差|汇率|指数|油价|金价|比特币|market|pricing|probability|price|yield|spread|index/i.test(requirementText);
+    const requirementNumbers = numericTokens(requirementText);
+    for (const id of requirement.source_ids || []) {
+      if (!relevant.has(id)) continue;
+      const assessmentText = (assessmentMap.get(id)?.safe_statements || []).join(' ');
+      const numberMatches = [...numericTokens(assessmentText)]
+        .filter((token) => requirementNumbers.has(token)).length;
+      requirementScores.set(id, (requirementScores.get(id) || 0)
+        + 4
+        + (important ? 8 : 0)
+        + numberMatches * 20);
+    }
+  }
+  return relevantIds
+    .map((id, index) => ({
+      id,
+      index,
+      score: (selected.has(id) ? 1000 : 0)
+        + (requirementScores.get(id) || 0)
+        + (assessmentMap.get(id)?.source_type === 'primary' ? 2 : 0),
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, maxSources)
+    .map((item) => item.id);
+}
+
+function numericTokens(value) {
+  return new Set(String(value || '').match(/\d+(?:\.\d+)?/g) || []);
+}
+
+function isYearToken(token) {
+  const value = Number(token);
+  return /^\d{4}$/.test(token) && value >= 1900 && value <= 2100;
 }
 
 function validSourceIds(values, validIds) {
