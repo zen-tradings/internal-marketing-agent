@@ -163,6 +163,95 @@ test('EvidenceMatrix 在证据判断后选择受控稿型，审计增加阶段�
   assert.match(auditPrompt, /不得因文风偏好、段落长度或标题审美重写文章/);
 });
 
+test('macro EvidenceMatrix 生成三类稿型与双向情景，并把一手证据边界送入写作和审计', () => {
+  const contract = fallbackTaskContract('解释美元实际利率如何跨资产传导', { id: 'macro' });
+  const sources = [{
+    id: 'S1',
+    title: 'Federal Reserve primary data',
+    url: 'https://www.federalreserve.gov/example',
+    text: 'The federal funds target range was unchanged.',
+    official: true,
+  }];
+  const macroWorkflow = {
+    id: 'macro',
+    editorialSkills: ['latepost-ai-writer', 'global-macro-strategy-writer'],
+  };
+  const evidencePrompt = buildEvidencePrompt(contract, sources, macroWorkflow);
+  assert.match(evidencePrompt, /macro_brief/);
+  assert.match(evidencePrompt, /priced_expectation/);
+  assert.match(evidencePrompt, /一个直接一手或原始来源可以支撑核心事实/);
+
+  const matrix = normalizeEvidenceMatrix({
+    source_assessments: [{
+      source_id: 'S1',
+      source_type: 'primary',
+      relevant: true,
+      safe_statements: ['政策利率目标区间保持不变'],
+    }],
+    relevant_source_ids: ['S1'],
+    selected_reference_ids: ['S1'],
+    editorial_brief: {
+      archetype: '技术解释',
+      angle: '实际利率是跨资产共同变量',
+      tension: '同一因子在不同时间尺度上传导不同',
+      ending_constraint: '后续通胀与增长数据仍会改变路径',
+    },
+    macro_brief: {
+      archetype: '机制型深度',
+      thesis: '实际利率通过美元和风险溢价影响多类资产',
+      priced_expectation: '市场预期仍需由可观察数据验证',
+      incremental_information: '政策路径的时点发生变化',
+      transmission: '政策预期到实际利率，再到美元与风险溢价',
+      baseline_scenario: '数据温和降温时传导延续',
+      counter_scenario: '增长骤降将改变风险资产反应',
+      invalidation: '实际利率与美元持续背离',
+    },
+  }, sources, contract, macroWorkflow);
+  assert.equal(matrix.macro_brief.archetype, '机制型深度');
+  assert.match(matrix.macro_brief.evidence_boundary, /核心事实已有直接一手或原始来源支持/);
+
+  const writingPrompt = buildWritingPrompt({
+    contract,
+    evidenceMatrix: matrix,
+    sources,
+    workflow: macroWorkflow,
+    asOf: '2026-08-01',
+  });
+  assert.match(writingPrompt, /LatePost AI Writer 编辑方法/);
+  assert.match(writingPrompt, /Global Macro Strategy Writer 主导方法/);
+  assert.match(writingPrompt, /以 Zen Trading 的“我们”表达/);
+
+  const auditPrompt = buildAuditPrompt({
+    article: '---\ntitle: 测试\n---\n\n我们建议在 100 买入并设置 95 止损。',
+    contract,
+    evidenceMatrix: matrix,
+    sources,
+  });
+  assert.match(auditPrompt, /关键价格、收益率、估值、利差、汇率或指数水平必须有允许证据直接支持/);
+  assert.match(auditPrompt, /买入、卖出、目标价、入场、退出、止损、仓位/);
+  assert.match(auditPrompt, /情景中的新增数字或事件没有来源时按 unsupported/);
+});
+
+test('macro 没有一手证据时保留事实与观察条件，但明确禁止完整确定性因果叙事', () => {
+  const contract = fallbackTaskContract('写一篇比特币流动性展望', { id: 'macro' });
+  const sources = [{ id: 'S1', title: 'Specialist note', url: 'https://example.com/note', text: 'A market view.' }];
+  const matrix = normalizeEvidenceMatrix({
+    source_assessments: [{
+      source_id: 'S1',
+      source_type: 'specialist',
+      relevant: true,
+      safe_statements: ['该报告提出一种流动性解释'],
+    }],
+    relevant_source_ids: ['S1'],
+    selected_reference_ids: ['S1'],
+  }, sources, contract, {
+    id: 'macro',
+    editorialSkills: ['latepost-ai-writer', 'global-macro-strategy-writer'],
+  });
+  assert.match(matrix.macro_brief.evidence_boundary, /没有可确认的一手依据/);
+  assert.match(matrix.macro_brief.evidence_boundary, /待验证点与观察条件/);
+});
+
 test('中文公司任务补齐英文别名查询，并给动态来源加时效窗口', () => {
   const input = '分析长鑫存储的IPO、技术、市场份额和供应链';
   const normalized = normalizePlanningResult({

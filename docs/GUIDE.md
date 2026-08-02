@@ -21,7 +21,7 @@
    管理员显式重新排队后，持久化 queued 任务会在下次启动恢复，避免历史中断任务被自动误发。
 
 ③ 调研+写作  src/core/analysis-v2.js + src/core/runner.js
-   微信原创/行业/公司/财报先把未经截断的 Slack 原始 Prompt 固化为 TaskContract，
+   微信原创/行业/公司/财报/macro 先把未经截断的 Slack 原始 Prompt 固化为 TaskContract，
    抽取英文/法定别名后再生成最多 8 个 SearchPlan 定向查询。Slack PDF/文本附件、
    PDF/Notion/Google Docs/GitHub URL 与 Exa 搜索并行读取，并作为一级用户来源；
    每个任务至少包含一条中文查询和一条英文查询，默认继续以最新官方/一手、
@@ -31,16 +31,20 @@
    公司任务同时补跑
    季度财务、监管披露和价值链三路深搜。检索结果按用户每项要求形成
    EvidenceMatrix；静态域名只用于发现，必须匹配发布主体、页面类型和目标实体才能
-   判为一手来源。证据矩阵完成后，latepost-ai-writer 才选择受控稿型、证据可支持的
+   判为一手来源。证据矩阵完成后，通用任务由 latepost-ai-writer 选择受控稿型、证据可支持的
    角度、核心矛盾和结尾约束；Slack Prompt、来源安全、用户指定结构和工作流方法始终
    优先。GLM 5.2 只接收相关证据写作；事实审计按影响、风险、来源和置信度返回精确原句与
    局部动作，低风险/中低置信度/用户前提保留待复核，只有高置信度问题可自动修改，
    不能重写全文。缺资料和无支持句不再提问；只有用户材料与一手来源对核心前提
    形成双边、不可调和冲突时转 needs_input，同一线程回答后不重复询问。
-   引用链接由系统从证据矩阵精选并确定性追加，不再由模型维护。
+   引用链接由系统从证据矩阵精选并确定性追加，不再由模型维护。macro 同时加载
+   global-macro-strategy-writer，由它主导已定价预期、增量信息、跨资产传导、双向情景、
+   观察信号和失效条件；LatePost 方法只补证据、归因、因果推进和避免虚构。其 trace
+   额外记录双 skill、选定稿型、Slack 路由原因、证据边界与宏观审计结果。
    生产默认运行 V2；V1 路径只通过 ANALYSIS_PIPELINE_VERSION 保留为单实例紧急回退，
    并使用确定性稿型回退，不作为日常运行模式。写作 skill 仅作用于微信原创、行业、
-   公司和财报；翻译、晨报和 Newsletter 不加载它。
+   公司、财报和 macro；翻译、晨报和 Newsletter 不加载它。macro 只有 Slack 触发器，
+   没有 cron，且渠道固定沿用微信草稿，绝不自动发布。
    调 OpenRouter chat completions(正文模型 = .env 的 OPENROUTER_MODEL),
    每个任务使用 `runWorkDir()` 计算的独立
    `workDir/runs/<readable-run-id>-<hash>/`，产出其中的 article.md
@@ -74,11 +78,12 @@
 | 分析 Prompt 合同、证据矩阵、局部审计 | `src/core/analysis-v2.js` | 原始 Prompt 最高优先；纯函数便于回归 |
 | 微信分析编排与外部调用 | `src/core/runner.js` 的 Analysis V2 分支 | 规划、Exa、写作、审计、确定性引用 |
 | 中文原创写作方法、稿型与质量检查 | `skills/latepost-ai-writer/` + `src/lib/editorial-skill.js` | EvidenceMatrix 后路由；trace 记录摘要、稿型与角度；不得覆盖用户结构 |
+| 全资产宏观方法、三类稿型与样本索引 | `skills/global-macro-strategy-writer/` + `src/workflows/macro.js` | 宏观主导、LatePost 约束证据；只创建微信草稿，无 cron |
 | 用户附件与直接文档 | `src/core/user-sources.js` | Slack 私有文件、PDF、Notion、Google Docs、GitHub；并行读取并保留一级来源身份 |
 | 备用文章结构 | `src/workflows/<id>.js` 的 `defaultMethodology` | 只在用户未规定结构时补空白 |
 | 新增一种文章类型 | 新建 `src/workflows/<name>.js` + `src/index.js` WORKFLOWS 注册 | 照抄 earnings.js 的结构 |
 | 公司深度备用框架 | `src/workflows/company.js` | 只有 Prompt 确实要求公司财务/竞争/价值链时使用 |
-| Slack 中英文触发、编辑、补充、停止与路由 | `src/triggers/slack.js` | 编辑替换旧修订；模型能力比较不误入 company |
+| Slack 中英文触发、编辑、补充、停止与路由 | `src/triggers/slack.js` | macro 要求宏观主题 + 分析意图；公司/财报/行业优先，混合请求只选一个流程 |
 | 直译范围识别 | `src/workflows/translation-scope.js` | 页码和章节范围；用户页码为 1-based，Datalab 请求转换为 0-based |
 | 直译内容提取/结构 | `src/workflows/translation-source-text.js` | arXiv HTML 优先、普通 HTML/Notion；保留标题、段落、图表、公式、代码和引用 |
 | PDF 结构化解析 | `src/workflows/datalab-parser.js` | 直译/扫描件走托管 Datalab；有文字层的分析型 PDF 可在 `user-sources.js` 用 Poppler 降级读取 |

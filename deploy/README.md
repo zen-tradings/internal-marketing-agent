@@ -123,6 +123,49 @@ finish; queued tasks remain in SQLite and are restored by the new process. If
 startup or readiness fails, restore the previous directory and protected
 environment-file backup before restarting the unit.
 
+## One-time macro release acceptance
+
+The `macro` workflow has no cron and never sends a Slack test message. After a
+new immutable release is active, first require `/ready` to report `ok=true`,
+`active=0`, and `pending=0`, then confirm systemd owns exactly one service Node
+process. Run the acceptance command directly in a transient unit that reads the
+same protected environment file but does not start Slack or a second hub
+instance:
+
+```bash
+sudo systemd-run --wait --pipe --collect \
+  --unit=zen-content-hub-macro-acceptance \
+  --uid=zenbot \
+  --property=WorkingDirectory=/opt/zen-content-hub \
+  --property=EnvironmentFile=/etc/zen-content-hub/zen-content-hub.env \
+  /usr/bin/node scripts/run-macro-acceptance.mjs
+```
+
+This performs live research, V2 evidence editing, writing, sentence-level
+audit, fixed-template rendering and exactly one WeChat draft creation. It does
+not publish, send or schedule the draft. The final JSON line must contain a
+non-empty `mediaId`, both editorial skill IDs, the selected macro archetype,
+`auditApproved=true`, the article path and `researchTracePath`. Inspect the
+article and trace at those exact paths, then verify the queue is still idle and
+review recent service and transient-unit logs. The trace must contain routing
+reason `production-direct-acceptance`, evidence boundaries, selected sources
+and a non-skipped audit.
+
+For a local rehearsal that must not touch WeChat, use:
+
+```bash
+npm run accept:macro -- --dry-run
+```
+
+Treat readiness failure, multiple service Node processes, a failed transient
+unit, missing `mediaId`, missing trace fields, skipped audit or a non-idle queue
+as release failure. The release operator must immediately stop the new unit,
+move the failed active directory back to its staged/failed name, restore the
+previous immutable rollback directory as `/opt/zen-content-hub`, restart the
+single systemd service, verify `/ready`, and stop the rollout. Preserve the
+failed release directory, acceptance output, journal logs and trace for
+diagnosis; do not retry against production or send a Slack test message.
+
 ## Recovering a failed translation
 
 Use the restricted recovery command only after the target release has passed

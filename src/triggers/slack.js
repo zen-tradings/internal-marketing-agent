@@ -34,7 +34,7 @@ export function parseSlackTask(raw, botUserId, { channelType, channel } = {}) {
 }
 
 // 中文别名 → 工作流 id。别名同样必须命中 workflowIds 才会真正路由。
-const WORKFLOW_ALIASES = { 微信: 'wechat', 公司: 'company', 个股: 'company', 深度: 'company', 邮件: 'email', 财报: 'earnings', 行业: 'sector', 晨报: 'morning', 直译: 'translate', 翻译: 'translate' };
+const WORKFLOW_ALIASES = { 微信: 'wechat', 宏观: 'macro', 公司: 'company', 个股: 'company', 深度: 'company', 邮件: 'email', 财报: 'earnings', 行业: 'sector', 晨报: 'morning', 直译: 'translate', 翻译: 'translate' };
 
 // 中文别名按长度从长到短排序,支持多个别名互为前缀时优先取最长匹配。
 const SORTED_ALIAS_KEYS = Object.keys(WORKFLOW_ALIASES).sort((a, b) => b.length - a.length);
@@ -68,14 +68,22 @@ export function resolveWorkflowTask(task, workflowIds = [], defaultWorkflowId = 
   return { workflowId: defaultWorkflowId, task };
 }
 
+const MACRO_THEME_RE = /(?:宏观|央行|美联储|联储|欧洲央行|日本央行|人民银行|货币政策|财政政策|经济数据|通胀|非农|就业数据|CPI|PCE|GDP|PMI|利率|收益率曲线|实际利率|汇率|美元|人民币|日元|欧元|流动性|信用利差|风险偏好|波动率|跨资产|股票.{0,20}(?:债券|商品|汇率)|股债|黄金|原油|大宗商品|比特币|以太坊|数字资产|加密资产|\bmacro(?:economic)?\b|central\s+bank|Federal\s+Reserve|\bFed\b|monetary\s+policy|fiscal\s+policy|inflation|payrolls?|employment\s+data|interest\s+rates?|yield\s+curve|real\s+yields?|foreign\s+exchange|\bFX\b|liquidity|credit\s+spreads?|risk\s+(?:appetite|sentiment)|volatility|cross[- ]asset|equities.{0,30}(?:bonds?|commodities|currencies)|gold|crude\s+oil|commodit(?:y|ies)|bitcoin|ethereum|digital\s+assets?|crypto(?:currency|currencies)?)/i;
+const MACRO_ANALYSIS_INTENT_RE = /(?:快评|点评|解读|分析|深度|机制|传导|定价|预期|增量|影响|策略|展望|情景|风险|观察|周报|复盘|框架|判断|市场反应|交易逻辑|\banaly(?:sis|ze|se)\b|commentary|quick\s+take|deep\s+dive|mechanism|transmission|pric(?:e|ed|ing)|expectations?|incremental|impact|strategy|outlook|scenario|risk|watch|weekly|review|framework|market\s+reaction)/i;
+
 const NATURAL_RULES = [
   { id: 'email', re: /(?:newsletter|customer\.?io|email\s+(?:draft|campaign|newsletter)|subscriber\s+email|订阅者|邮件草稿|邮件通讯|电子报|发邮件)/i },
   // URL 只是素材，不代表翻译意图。只有用户明确要求翻译时才进入完整直译引擎。
   { id: 'translate', re: /(?:\btranslate\b|\b(?:full|complete|faithful|literal|direct)\s+translation\b|\btranslation\s+of\s+(?:this|the)\s+(?:article|paper|pdf|link|file|attachment)\b|直译|全文翻译|完整翻译|忠实翻译|逐字翻译|翻译成(?:简体)?中文|(?:请|帮我|需要|要)(?:完整)?翻译(?:这篇|这个|这份|全文|链接|文章|文件|附件|文档|PDF))/i },
   { id: 'morning', re: /(?:\b(?:morning|daily|pre-?market|overnight)\s+(?:brief|briefing|report|digest)\b|晨报|早报|盘前简报|隔夜(?:市场|要闻))/i },
   { id: 'earnings', re: /(?:\bearnings\s+(?:review|analysis|recap|update|report)\b|\bquarterly\s+(?:earnings|results?)\b|\bactuals?\s+(?:vs\.?\s+)?(?:consensus|expectations?)\b|\bguidance\s+(?:change|update|revision)\b|财报点评|业绩点评|本季财报|实际.*预期|指引变化)/i },
-  { id: 'sector', re: /(?:\b(?:industry|sector)\s+(?:analysis|research|review|report|overview|deep\s*dive)\b|\bmarket\s+landscape\b|行业综述|产业综述|赛道分析|行业研究|产业研究)/i },
+  { id: 'sector', re: /(?:\b(?:industry|sector)\s+(?:analysis|research|review|report|overview|deep\s*dive)\b|\bmarket\s+landscape\b|行业综述|产业综述|赛道分析|行业研究|产业研究|研究.{0,20}(?:行业|产业)|(?:行业|产业).{0,12}(?:供需|格局|研究|分析))/i },
   { id: 'company', re: /(?:\b(?:company|stock|equity)\s+(?:analysis|research|deep\s*dive)\b|\b(?:in-?depth\s+analysis|company\s+deep\s+dive)\b|\b(?:financial\s+analysis|competitive\s+landscape|competitors?|value\s+chain|supply\s+chain)\b|\b(?:recent|last)\s+(?:four|five|six|[4-6])\s+quarters?\b|公司深度|个股深度|公司分析|公司研究|个股分析|个股研究|深度分析|财务分析|竞争格局|竞争对手|产业链|上下游|最近[四五六0-9]+个季度)/i },
+  {
+    id: 'macro',
+    test: (text) => MACRO_THEME_RE.test(text) && MACRO_ANALYSIS_INTENT_RE.test(text),
+    reason: 'macro-theme+analysis-intent',
+  },
   // 只有一个 URL 且没有任务动词时，按“模糊任务默认公众号分析”处理；绝不猜成直译。
   { id: 'wechat', re: /^\s*https?:\/\/\S+\s*$/i },
 ];
@@ -120,9 +128,9 @@ export async function resolveNaturalWorkflowTask(task, {
   }
 
   for (const rule of NATURAL_RULES) {
-    if (!rule.re.test(task)) continue;
+    if (rule.test ? !rule.test(task) : !rule.re.test(task)) continue;
     const matched = workflowIds.find((id) => id.toLowerCase() === rule.id);
-    if (matched) return { workflowId: matched, task, reason: 'natural-rule' };
+    if (matched) return { workflowId: matched, task, reason: rule.reason || 'natural-rule' };
   }
 
   // 线程里的短补充通常不包含完整意图，默认继承上一任务的工作流。
@@ -166,7 +174,7 @@ export function createSlackIntentClassifier(config, fetchFn = globalThis.fetch) 
           max_tokens: 256,
           reasoning: { effort: 'none', exclude: true },
           messages: [
-            { role: 'system', content: `Classify a Slack writing request. Return JSON only: {"workflowId":"..."}. Allowed: ${workflowIds.join(', ')}. A URL is research material, not translation intent. Never choose translate for a URL alone; choose translate only when the user explicitly asks for faithful/full translation. email=newsletter/Customer.io; earnings=quarterly earnings; sector=industry; morning=daily brief; company=company deep dive including financials, competitors, or value chain; wechat=other public-account analysis and bare URLs.` },
+            { role: 'system', content: `Classify a Slack writing request. Return JSON only: {"workflowId":"..."}. Allowed: ${workflowIds.join(', ')}. A URL is research material, not translation intent. Never choose translate for a URL alone; choose translate only when the user explicitly asks for faithful/full translation. email=newsletter/Customer.io; earnings=quarterly earnings; sector=industry; morning=daily brief; company=single-company deep dive including financials, competitors, or value chain; macro=cross-asset macro analysis that combines a macro/market theme with analytical intent, including policy, economic data, rates, FX, liquidity, equities, commodities, credit, risk appetite, volatility, or digital assets; sector=single-industry research; wechat=other public-account analysis and bare URLs. For mixed requests, choose the one workflow that answers the user's final question.` },
             { role: 'user', content: String(task).slice(0, 4000) },
           ],
         }),
@@ -189,6 +197,7 @@ export function workflowRouteLabel(workflowId) {
     sector: '原创行业分析 → 微信草稿箱',
     morning: '原创晨报 → 微信草稿箱',
     company: '原创公司深度 → 微信草稿箱',
+    macro: '原创全球宏观策略 → 微信草稿箱',
     wechat: '原创分析 → 微信草稿箱',
   })[workflowId] || `${workflowId} → 草稿`;
 }
@@ -390,6 +399,7 @@ export async function registerSlack({
           ts: rootTs,
           user,
           routeLabel: workflowRouteLabel(route.workflowId),
+          routeReason: route.reason,
           threadKey,
           attachments: userAttachments,
           ...(previous?.clarification?.question ? {

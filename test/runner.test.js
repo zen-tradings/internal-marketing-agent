@@ -202,6 +202,61 @@ test('V1 应急链路为四个中文原创工作流注入确定性编辑方法�
   assert.equal(trace.editorialSkill.routingSource, 'deterministic-fallback');
 });
 
+test('macro 应急链路按优先级组合双 skill，并把稿型、路由和证据边界写入 trace', async () => {
+  const workflow = tempWorkflow({
+    id: 'macro',
+    mode: 'analysis',
+    editorialSkills: ['latepost-ai-writer', 'global-macro-strategy-writer'],
+    model: 'workflow/model',
+    factReview: false,
+  });
+  let writingBody;
+  const fetchFn = async (url, opts) => {
+    if (String(url).endsWith('/search')) {
+      return jsonResponse({
+        results: [{
+          title: 'Federal Reserve release',
+          url: 'https://www.federalreserve.gov/example',
+          text: 'The policy rate was unchanged.',
+        }],
+      });
+    }
+    writingBody = JSON.parse(opts.body);
+    return jsonResponse({
+      choices: [{ message: { content: '---\ntitle: 利率不变之后\n---\n\n我们的判断仍取决于后续数据。' } }],
+    });
+  };
+  const result = await runWriter({
+    workflow,
+    input: '美联储会议结果后写一篇宏观快评',
+    config: {
+      analysis: { pipelineVersion: 'v1' },
+      writer: {
+        openrouterApiKey: 'or-key',
+        model: 'config/model',
+        baseUrl: 'https://openrouter.test/api/v1',
+        exaApiKey: 'exa-key',
+        exaBaseUrl: 'https://exa.test',
+      },
+    },
+    fetchFn,
+    taskContext: { routeReason: 'natural-rule' },
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(writingBody.messages[1].content, /LatePost AI Writer 编辑方法/);
+  assert.match(writingBody.messages[1].content, /Global Macro Strategy Writer 主导方法/);
+  assert.match(writingBody.messages[1].content, /本宏观方法主导问题、预期差、传导、情景和观察信号/);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.routing.reason, 'natural-rule');
+  assert.deepEqual(trace.editorialSkills.map((item) => item.id), [
+    'latepost-ai-writer',
+    'global-macro-strategy-writer',
+  ]);
+  assert.equal(trace.macroBrief.archetype, '事件快评');
+  assert.match(trace.macroBrief.evidenceBoundary, /没有可确认的一手依据/);
+});
+
 test('工作流可覆盖 system prompt 与最终产出指令', async () => {
   const workflow = tempWorkflow({
     systemPrompt: 'CUSTOM NEWSLETTER SYSTEM',

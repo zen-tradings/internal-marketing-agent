@@ -23,6 +23,7 @@ import morningWorkflow from './workflows/morning.js';
 import translateWorkflow from './workflows/translate.js';
 import companyWorkflow from './workflows/company.js';
 import emailWorkflow from './workflows/email.js';
+import macroWorkflow from './workflows/macro.js';
 import mockChannel from './channels/mock.js';
 import wechatDraft from './channels/wechat-draft.js';
 import customerioDraft from './channels/customerio-draft.js';
@@ -37,6 +38,7 @@ const WORKFLOWS = {
   translate: translateWorkflow,
   company: companyWorkflow,
   email: emailWorkflow,
+  macro: macroWorkflow,
 };
 const CHANNELS = { mock: mockChannel, 'wechat-draft': wechatDraft, 'customerio-draft': customerioDraft };
 
@@ -114,6 +116,7 @@ export function makeHandler(deps) {
             threadKey: notify.threadKey,
             attachments: notify.attachments,
             resolvedClarification: notify.resolvedClarification,
+            routeReason: notify.routeReason,
           },
           onProgress: (progress) => notifyBestEffort(deps.notifier, 'progress', notify, progress),
           resumeFromCheckpoint,

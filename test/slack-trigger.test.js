@@ -109,7 +109,7 @@ test('模型能力比较即使写 deep dive 也走 prompt 驱动 wechat，不误
 });
 
 test('英文自然语言与中文使用同一套工作流路由', async () => {
-  const ids = ['wechat', 'email', 'translate', 'company', 'earnings', 'sector', 'morning'];
+  const ids = ['wechat', 'email', 'translate', 'company', 'earnings', 'sector', 'morning', 'macro'];
   const cases = [
     ['Please translate the first 11 pages of https://example.com/paper.pdf', 'translate'],
     ['Translate https://example.com/article into Simplified Chinese', 'translate'],
@@ -128,6 +128,50 @@ test('英文自然语言与中文使用同一套工作流路由', async () => {
     { workflowIds: ids },
   );
   assert.equal(machineTranslation.workflowId, 'sector');
+});
+
+test('宏观自然路由要求“跨资产宏观主题 + 分析意图”，覆盖快评、深度、周报与数字资产', async () => {
+  const ids = ['wechat', 'email', 'translate', 'company', 'earnings', 'sector', 'morning', 'macro'];
+  const cases = [
+    ['CPI 公布后，写一篇利率、美元和黄金的市场快评', 'macro'],
+    ['解释美元流动性如何传导到美债、股票和人民币，写机制型深度', 'macro'],
+    ['复盘本周利率、汇率、商品和风险偏好并展望下周', 'macro'],
+    ['Write a crypto liquidity outlook covering Bitcoin, real yields and the dollar', 'macro'],
+    ['Write a cross-asset deep dive on Fed policy transmission through rates, FX and equities', 'macro'],
+  ];
+  for (const [task, expected] of cases) {
+    const route = await resolveNaturalWorkflowTask(task, { workflowIds: ids });
+    assert.equal(route.workflowId, expected, task);
+    assert.equal(route.reason, 'macro-theme+analysis-intent');
+  }
+  assert.equal(
+    (await resolveNaturalWorkflowTask('今天美元是多少', { workflowIds: ids })).workflowId,
+    'wechat',
+    '只有宏观主题、没有分析意图时不能进入 macro',
+  );
+});
+
+test('混合请求按更具体的最终问题只选一个流程，公司、财报和行业不误入 macro', async () => {
+  const ids = ['wechat', 'email', 'translate', 'company', 'earnings', 'sector', 'morning', 'macro'];
+  const cases = [
+    ['分析英伟达最近五个季度财务、竞争格局和供应链，并讨论利率影响', 'company'],
+    ['写一篇英伟达本季财报点评，比较实际与预期，并分析美元影响', 'earnings'],
+    ['研究半导体行业供需和市场格局，并讨论利率周期', 'sector'],
+  ];
+  for (const [task, expected] of cases) {
+    assert.equal((await resolveNaturalWorkflowTask(task, { workflowIds: ids })).workflowId, expected, task);
+  }
+});
+
+test('macro 显式中英文前缀和中文别名均为可选覆盖', async () => {
+  const ids = ['wechat', 'macro'];
+  assert.deepEqual(
+    resolveWorkflowTask('宏观：分析美元流动性', ids, 'wechat'),
+    { workflowId: 'macro', task: '分析美元流动性' },
+  );
+  const route = await resolveNaturalWorkflowTask('macro: analyze dollar liquidity', { workflowIds: ids });
+  assert.equal(route.workflowId, 'macro');
+  assert.equal(route.reason, 'explicit-prefix');
 });
 
 test('自然语言路由:同线程短补充继承上个工作流,模糊长任务默认微信', async () => {
@@ -230,7 +274,7 @@ test('多工作流路由:配合 @mention 触发格式,前缀解析同样生效',
   );
 });
 
-const NEW_WORKFLOW_IDS = ['wechat', 'earnings', 'sector', 'morning', 'translate', 'company'];
+const NEW_WORKFLOW_IDS = ['wechat', 'earnings', 'sector', 'morning', 'translate', 'company', 'macro'];
 
 test('公司深度任务:财务 + 竞争对手 + 上下游自动路由到 company', () => {
   const task = '写一篇关于amat的分析发到草稿箱，财务分析 + 竞争对手 + 上下游';

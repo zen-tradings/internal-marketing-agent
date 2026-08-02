@@ -3,9 +3,13 @@ import path from 'node:path';
 import { renderQuarterlyCharts } from '../lib/quarterly-chart.js';
 import {
   buildEditorialWritingGuidance,
+  buildMacroEditorialWritingGuidance,
   editorialTraceFromBrief,
   hasEditorialSkill,
+  hasMacroEditorialSkill,
+  macroEditorialTraceFromBrief,
   normalizeEditorialBrief,
+  normalizeMacroEditorialBrief,
 } from '../lib/editorial-skill.js';
 import {
   cancellationErrorFromSignal,
@@ -100,6 +104,12 @@ export async function runWriter({
     tracePath: researchTracePath,
     live: fetchFn === globalThis.fetch,
     requests: [],
+    ...(taskContext?.routeReason ? {
+      routing: {
+        workflowId: workflow.id || 'unknown',
+        reason: taskContext.routeReason,
+      },
+    } : {}),
   };
   try { fs.rmSync(articlePath, { force: true }); } catch {}
 
@@ -195,6 +205,11 @@ export async function runWriter({
         input,
         workflowId: workflow.id,
       }));
+    }
+    if (hasMacroEditorialSkill(workflow)) {
+      const macroTrace = macroEditorialTraceFromBrief(normalizeMacroEditorialBrief(undefined, { input }));
+      trace.editorialSkills = [trace.editorialSkill, macroTrace].filter(Boolean);
+      trace.macroBrief = macroTrace;
     }
     const sourcePolicy = sourcePolicyFor({ input, workflow });
     if (!writer.exaApiKey && !sourcePolicy.skipResearch) throw new Error('原创研究工作流缺少 Exa API key');
@@ -405,6 +420,11 @@ async function runAnalysisV2({
   trace.evidenceMatrix = evidenceMatrix;
   if (evidenceMatrix.editorial_brief) {
     trace.editorialSkill = editorialTraceFromBrief(evidenceMatrix.editorial_brief);
+  }
+  if (evidenceMatrix.macro_brief) {
+    const macroTrace = macroEditorialTraceFromBrief(evidenceMatrix.macro_brief);
+    trace.editorialSkills = [trace.editorialSkill, macroTrace].filter(Boolean);
+    trace.macroBrief = macroTrace;
   }
   trace.selectedSources = sources.map((source) => ({ id: source.id, ...sourceForTrace(source) }));
   trace.officialSourceCount = sources.filter((source) => source.official).length;
@@ -1370,6 +1390,9 @@ function buildUserPrompt({ workflow, input, research, writer, sourcePolicy, asOf
         workflowId: workflow.id,
       }))
     : '';
+  const macroGuidance = hasMacroEditorialSkill(workflow)
+    ? buildMacroEditorialWritingGuidance(normalizeMacroEditorialBrief(undefined, { input }))
+    : '';
   const referenceContract = sourcePolicy.referenceStyle === 'terminal-list'
     ? `- 正文不放引用脚标、脚注或来源链接。文章最后只保留一个“## 引用链接”章节，精选 1-5 个最相关、最具支持力的可点击链接；以相关性为准，不凑数，不要生成“引用来源”或罗列全部检索结果
 - “引用链接”必须是正文最后一个文字章节；系统会在它后面依次追加内容调研问卷图和社群封底图，二者是最终两个节点
@@ -1404,7 +1427,7 @@ ${legalContract}
     : formatResearch(research, writer);
   return `【原始工作流写作要求】
 ${workflowPrompt}
-${editorialGuidance ? `\n【编辑方法】\n${editorialGuidance}\n` : ''}
+${editorialGuidance ? `\n【编辑方法】\n${editorialGuidance}\n` : ''}${macroGuidance ? `\n【宏观策略方法】\n${macroGuidance}\n` : ''}
 ${strictContract}
 
 【系统已完成的调研素材】

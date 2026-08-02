@@ -10,7 +10,8 @@ Slack 私聊自然语言 / 频道 @Bot / PDF/文本附件 / cron
   → 直译：范围识别 → 结构化 HTML/PDF → 分块翻译与完整性门禁
   → 微信分析 V2：原始 Prompt → TaskContract → SearchPlan → EvidenceMatrix → 证据后编辑 brief
   → 用户 PDF/Notion/Google Docs/GitHub/链接 + 最新官方一手 + 优先信源 + 开放交叉验证
-  → LatePost AI Writer 方法适配 → GLM 5.2 写作 → 逐句事实审计 → 系统确定性引用
+  → 通用任务用 LatePost 方法；macro 由 Global Macro 主导并组合 LatePost 证据纪律
+  → GLM 5.2 写作 → 逐句事实审计 → 系统确定性引用
   → 中央模板门禁 → 微信固定版式 / Customer.io Newsletter 固定模板
   → 只创建草稿，不发送、不排期
   → Slack best-effort 回报；通知失败不改变草稿结果
@@ -31,7 +32,8 @@ src/
 └── lib/                     门禁、固定图片、封面、渲染输入
 
 skills/
-└── latepost-ai-writer/      版本化中文 AI 商业科技写作方法、稿型与检查表
+├── latepost-ai-writer/      版本化中文 AI 商业科技写作方法、稿型与检查表
+└── global-macro-strategy-writer/  全资产宏观方法、三类稿型与 368 篇样本索引
 
 scripts/
 ├── install-launchd.sh       安装本机常驻服务
@@ -142,6 +144,7 @@ npm run trace:research -- company
 | ID | Slack 前缀 | 用途 |
 |---|---|---|
 | `wechat` | `wechat:`、`微信：`、无前缀 | 通用公众号文章 |
+| `macro` | `macro:`、`宏观：`、自然语言 | 全资产宏观快评、机制型深度或周报；只创建微信草稿，无 cron |
 | `earnings` | `earnings:`、`财报：` | 财报预期与复盘；固定框架仅在 Prompt 未规定结构时补空白 |
 | `sector` | `sector:`、`行业：` | 行业分析；固定框架仅作备用 |
 | `morning` | `morning:`、`晨报：` | 24–48 小时晨报 |
@@ -149,9 +152,15 @@ npm run trace:research -- company
 | `company` | `company:`、`公司：`、`个股：`、`深度：` | 明确要求公司财务、竞争或价值链时使用；不接管模型产品比较 |
 | `email` | `email:`、`邮件：` | 生成带 Vol. 版号的 newsletter，并在 Customer.io 创建待审核草稿 |
 
-这些内部工作流由规则优先、模型兜底的自然语言路由隐藏。微信分析 V2 先把原始 Prompt 固化为 `TaskContract`，抽取中文实体的英文名、法定名称、ticker 或监管别名，再生成最多 `ANALYSIS_SEARCH_MAX_QUERIES` 个定向查询，默认 8 个。每个任务都确定性包含至少一条中文查询和一条英文查询，优先各两条；中文公司任务还会补英文法定名称的官方与行业查询，公司工作流并行补跑季度财务、监管披露和价值链三路深搜。“最新/newly released/current”类动态查询默认使用最近 `ANALYSIS_RECENT_WINDOW_DAYS` 天，默认 60 天，官方产品页和历史材料不受该硬窗口限制。静态官方域名只用于发现候选来源，来源必须同时匹配发布主体、页面类型和目标实体才能进入一手证据；同一证据层级优先英文来源，以及任何语言的独立第三方报道或研究。政府资助、国家所有和公共广播媒体会在检索结果层剔除，但监管机构、交易所和统计部门的原始文件仍可作为一手证据；用户主动贴出的受限媒体链接只保留为上下文，不能充当交叉验证或最终引用。内置名单可用 `EXA_EXCLUDED_MEDIA_DOMAINS` 和 `EXA_INDEPENDENT_MEDIA_DOMAINS` 扩展。Exa 不支持的 `x.com`/`twitter.com` 域名同样会在请求前剔除，避免整路检索因 4xx 失败。搜索结果按用户来源、官方一手、专业优先源、开放来源、语言/独立性和发布日期排序并设分路配额，再按用户要求逐项形成 `EvidenceMatrix`。
+这些内部工作流由规则优先、模型兜底的自然语言路由隐藏。`macro` 只有同时命中宏观/跨资产主题与分析意图才会自动进入，覆盖政策、经济数据、利率、汇率、流动性、股票、商品、信用、风险偏好、波动率与数字资产；单公司、财报和行业请求仍由更具体的既有流程优先处理，混合请求只选最终问题对应的一个完整流程。微信分析 V2 先把原始 Prompt 固化为 `TaskContract`，抽取中文实体的英文名、法定名称、ticker 或监管别名，再生成最多 `ANALYSIS_SEARCH_MAX_QUERIES` 个定向查询，默认 8 个。每个任务都确定性包含至少一条中文查询和一条英文查询，优先各两条；中文公司任务还会补英文法定名称的官方与行业查询，公司工作流并行补跑季度财务、监管披露和价值链三路深搜。“最新/newly released/current”类动态查询默认使用最近 `ANALYSIS_RECENT_WINDOW_DAYS` 天，默认 60 天，官方产品页和历史材料不受该硬窗口限制。静态官方域名只用于发现候选来源，来源必须同时匹配发布主体、页面类型和目标实体才能进入一手证据；同一证据层级优先英文来源，以及任何语言的独立第三方报道或研究。政府资助、国家所有和公共广播媒体会在检索结果层剔除，但监管机构、交易所和统计部门的原始文件仍可作为一手证据；用户主动贴出的受限媒体链接只保留为上下文，不能充当交叉验证或最终引用。内置名单可用 `EXA_EXCLUDED_MEDIA_DOMAINS` 和 `EXA_INDEPENDENT_MEDIA_DOMAINS` 扩展。Exa 不支持的 `x.com`/`twitter.com` 域名同样会在请求前剔除，避免整路检索因 4xx 失败。搜索结果按用户来源、官方一手、专业优先源、开放来源、语言/独立性和发布日期排序并设分路配额，再按用户要求逐项形成 `EvidenceMatrix`。
 
-`wechat`、`sector`、`company`、`earnings` 在 EvidenceMatrix 完成后使用仓库内版本化的 `latepost-ai-writer` 选择受控稿型、证据可支持的角度、核心矛盾和结尾约束，再把对应方法与交稿检查注入正文模型。它不能覆盖 Slack 原始 Prompt、来源门禁、用户指定结构、工作流专属方法或固定输出契约；模型只返回一个 YAML `title` 和正文，不输出标题备选、编辑说明或评分。V1 应急路径使用相同方法的确定性稿型回退。skill 不用于直译、晨报或 Newsletter，也不得使稿件声称代表《晚点》或复刻参考语料。最终选择、skill 内容摘要和路由来源写入 `research-trace.json`。
+`wechat`、`sector`、`company`、`earnings` 在 EvidenceMatrix 完成后继续只使用仓库内版本化的 `latepost-ai-writer`。`macro` 同时加载 `global-macro-strategy-writer` 与 `latepost-ai-writer`：宏观 skill 主导事实/已定价预期/增量信息、跨资产传导、基准与反向情景、观察信号和失效条件，LatePost 只补证据账本、归因、因果推进、事实审计与避免虚构。一个直接一手或原始来源可以支撑核心事实；没有一手依据时必须收窄为已证实事实、待验证点和观察条件。关键观察水平必须可复核，不写买卖、目标价、入场、退出、止损或仓位指令；可靠数据才进入带口径、时点与来源的 Markdown 表格。所有 skill 都不能覆盖 Slack 原始 Prompt、来源门禁、用户指定结构、工作流专属方法或固定输出契约。双 skill 摘要、选定稿型、路由原因、证据边界和审计结果写入 `research-trace.json`；skill 不用于直译、晨报或 Newsletter，也不得使稿件声称代表参考账号或复刻参考语料。
+
+本机可绕过 Slack 演练完整 macro 调研、写作、审计和渲染前链路；`--dry-run` 强制使用 mock 渠道，不调用微信草稿接口：
+
+```bash
+npm run accept:macro -- --dry-run
+```
 
 直译使用一条固定的结构化链路。程序先识别“前 11 页”“第 3–8 页”“第 2.1 节”“从 Introduction 到 Conclusion”以及 `first 11 pages`、`pages 3–8`、`translate the Introduction section only` 等中英文范围；没有范围时才翻译全文。英文指令不会改变目标语言，默认仍把英文原文翻译为简体中文。arXiv 优先读取官方 HTML，普通 HTML 保留标题层级、段落、列表、引用、原图与图注、表格、公式、代码和参考文献；正文中带标题的沙箱 `srcdoc` 图表由现有 Chrome 完成懒加载后按原位置截图为 PNG，图题与说明进入翻译单元，外部视频只保留原文链接而不截图。Notion 配置 `NOTION_API_TOKEN` 后优先读取官方 Markdown。PDF 由 Datalab 托管 API 转成结构化 HTML，Poppler 只用于本地页数和元数据校验。
 

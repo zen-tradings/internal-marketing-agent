@@ -141,6 +141,43 @@ test('新工作流(earnings/sector/morning):id、channel、workDir 子目录、r
   }
 });
 
+test('macro 工作流仅由 Slack 触发、只写微信草稿，并组合双 skill 与宏观一手来源', async () => {
+  const origWorkDir = process.env.WORK_DIR;
+  const origChannel = process.env.WECHAT_CHANNEL;
+  delete process.env.WORK_DIR;
+  delete process.env.WECHAT_CHANNEL;
+  try {
+    const { default: macro } = await import('../src/workflows/macro.js');
+    assert.equal(macro.id, 'macro');
+    assert.equal(macro.mode, 'analysis');
+    assert.deepEqual(macro.editorialSkills, [
+      'latepost-ai-writer',
+      'global-macro-strategy-writer',
+    ]);
+    assert.deepEqual(macro.triggers, ['slack']);
+    assert.equal(macro.channel, 'wechat-draft');
+    assert.equal(macro.workDir, '/srv/zen/wechat/macro');
+    assert.equal(macro.sourcePolicy.minOfficialSources, 1);
+    assert.equal(macro.research.minOfficialSources, 1);
+    assert.ok(macro.research.officialSources.includes('federalreserve.gov'));
+    assert.ok(macro.research.officialSources.includes('pbc.gov.cn'));
+    assert.ok(macro.research.officialSources.includes('cmegroup.com'));
+    const prompt = macro.promptTemplate('分析美元流动性');
+    assert.match(prompt, /Zen Trading 全球宏观策略分析师/);
+    assert.match(prompt, /事实、市场已定价预期、增量信息与我们的判断/);
+    assert.match(prompt, /不写买卖、目标价、入场、退出、止损或仓位指令/);
+    assert.doesNotMatch(prompt, /Customer\.io/);
+
+    process.env.WORK_DIR = '/tmp/test-zen';
+    process.env.WECHAT_CHANNEL = 'mock';
+    assert.equal(macro.workDir, '/tmp/test-zen/macro');
+    assert.equal(macro.channel, 'mock');
+  } finally {
+    if (origWorkDir) process.env.WORK_DIR = origWorkDir; else delete process.env.WORK_DIR;
+    if (origChannel) process.env.WECHAT_CHANNEL = origChannel; else delete process.env.WECHAT_CHANNEL;
+  }
+});
+
 test('translate 工作流:id、workDir 子目录、channel/research 与其它工作流语义一致', async () => {
   const origWorkDir = process.env.WORK_DIR;
   const origChannel = process.env.WECHAT_CHANNEL;

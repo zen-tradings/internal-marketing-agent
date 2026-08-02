@@ -16,6 +16,7 @@
     "auth:google-docs": "node scripts/google-docs-oauth.mjs",
     "check:customerio": "node scripts/check-customerio.mjs",
     "check:egress": "node scripts/check-egress.mjs",
+    "accept:macro": "node scripts/run-macro-acceptance.mjs",
     "preview:newsletter": "node scripts/preview-newsletter.mjs",
     "status": "node scripts/status.mjs",
     "trace:research": "node scripts/research-trace.mjs",
