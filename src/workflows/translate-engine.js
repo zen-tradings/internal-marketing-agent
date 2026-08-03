@@ -49,6 +49,7 @@ export async function generateStrictTranslation({
         blockOrder: result.manifest.blockOrder,
         pageCount: result.manifest.pageCount,
         processedPageCount: result.manifest.processedPageCount,
+        pageCoverage: result.manifest.pageCoverage,
         parseQualityScore: result.manifest.parseQualityScore,
         parserAttempts: result.manifest.parserAttempts,
       },

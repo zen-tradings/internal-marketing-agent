@@ -16,6 +16,7 @@
 - 每个任务只能写入自己的工作流隔离目录 `WORK_DIR/<workflow>/runs/<readable-run-id>-<hash>/`（`wechat` 直接以 `WORK_DIR` 为工作流基目录），不得复用全局 `article.md` 或 checkpoint；路径必须由 `runWorkDir()` 计算，不能手拼。
 - 外部文章、PDF、图片等不可信 URL 必须通过 `safeFetchResource()`：禁止私网地址，逐跳校验重定向，并限制单文件与任务总下载量。
 - Slack 私有附件要求 App 的 Bot Token Scopes 包含 `files:read` 并在改 scope 后重新安装；PDF 必须在进入 Poppler 或 Datalab 前验证真实 `%PDF-` 文件签名，Slack 登录 HTML 不得按扩展名误判为 PDF。
+- PDF 直译不得把 Datalab 的并列 `.page[data-page-id]` 交给网页 Readability 选择器；请求页数、连续页 ID、有效质量分、Datalab 图片引用和 Poppler 文本覆盖必须在翻译前通过硬门禁，不能依据 Datalab 的 `page_count` 单字段宣称完整。
 - 微信分析 V2 的搜索计划必须同时包含中文和英文查询；同一证据层级优先英文来源或任何语言的独立第三方机构。政府资助、国家所有和公共广播媒体不得作为搜索证据或最终引用，但监管机构、交易所和统计部门的原始文件仍可作为一手证据；用户主动提供的受限媒体只作上下文。
 - 直译路径只处理第一个链接，并严格遵守用户指定的页码或章节范围；翻译标题、正文、列表、图注和表题，保留原图、公式、代码、引文编号与参考文献结构，原文表格必须栅格化为图片而不是重新排版，不得追加原文没有的分析。
 - 直译的明确数字与不可变 token 差异最多局部修复两轮；仍不等价时保留最佳完整译文并在 Slack/trace 标记人工复核。缺块、重复、未翻译、乱序、图表/公式/资产损坏仍必须硬失败。

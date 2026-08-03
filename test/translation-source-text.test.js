@@ -6,6 +6,7 @@ import path from 'node:path';
 import { JSDOM } from 'jsdom';
 import {
   acquireSourceDocument,
+  assertPdfExtractionCoverage,
   assessTranslationUnit,
   assertPdfPageLimit,
   assertPdfResponse,
@@ -185,6 +186,66 @@ test('HTML 保留标题、段落、图片图注、表格、代码和列表结构
   assert.equal(document.blocks.find((block) => block.type === 'code').text, 'SECRET_CODE_BLOCK');
   assert.equal(document.contentMode, 'structured-document');
   assert.equal(buildDocumentManifest(document).contentMode, 'structured-document');
+});
+
+test('Datalab 分页 HTML 绕过 Readability，按顺序保留全部页面、图表和表格', async () => {
+  const html = `<!doctype html><html><body>
+    <div class="page" data-page-id="0"><h1>Paper</h1><p>PAGE_ONE ${'body '.repeat(80)}</p></div>
+    <div class="page" data-page-id="1"><h2>Results</h2><p>PAGE_TWO ${'results '.repeat(80)}</p>
+      <figure><img src="chart.png"><figcaption>Chart caption</figcaption></figure></div>
+    <div class="page" data-page-id="2"><h2>Appendix</h2><p>PAGE_THREE ${'appendix '.repeat(80)}</p>
+      <table><tr><th>Metric</th><th>Value</th></tr><tr><td>Coverage</td><td>100</td></tr></table></div>
+  </body></html>`;
+  const document = await sourceDocumentFromHtml({
+    html,
+    sourceUrl: 'https://example.com/paper.pdf',
+    extractor: 'datalab-marker-html',
+    scope: { kind: 'pages', startPage: 1, endPage: 3, requestedText: 'first 3 pages' },
+  });
+  const text = document.blocks.map((block) => block.text || block.caption || '').join('\n');
+  assert.match(text, /PAGE_ONE/);
+  assert.match(text, /PAGE_TWO/);
+  assert.match(text, /PAGE_THREE/);
+  assert.deepEqual(document.processedPageIds, [0, 1, 2]);
+  assert.equal(document.blocks.filter((block) => block.type === 'heading').length, 3);
+  assert.equal(document.blocks.filter((block) => block.type === 'figure').length, 1);
+  assert.equal(document.blocks.filter((block) => block.type === 'table').length, 1);
+  await assert.rejects(() => sourceDocumentFromHtml({
+    html: '<article><h1>Single article</h1><p>Body</p></article>',
+    sourceUrl: 'https://example.com/broken.pdf',
+    extractor: 'datalab-marker-html',
+  }), /缺少分页容器/);
+});
+
+test('PDF 页级完整性门禁拒绝单页正文冒充多页，完整覆盖时记录页码和文本基线', () => {
+  const partial = {
+    sourceType: 'pdf',
+    processedPageCount: 3,
+    processedPageIds: [0, 1, 2],
+    datalabHtmlTextCharacters: 9000,
+    datalabHtmlImageCount: 2,
+    datalabResultImageCount: 2,
+    blocks: [{ id: 'b000001', type: 'paragraph', text: 'short first page only' }],
+  };
+  assert.throws(() => assertPdfExtractionCoverage({
+    document: partial,
+    expectedPageIds: [0, 1, 2],
+    popplerTextCharacters: 10000,
+  }), /结构化正文仅保留 Datalab 文本/);
+
+  const complete = {
+    ...partial,
+    blocks: [{ id: 'b000001', type: 'paragraph', text: 'x'.repeat(8000) }],
+  };
+  const coverage = assertPdfExtractionCoverage({
+    document: complete,
+    expectedPageIds: [0, 1, 2],
+    popplerTextCharacters: 10000,
+  });
+  assert.deepEqual(coverage.pagesFound, [1, 2, 3]);
+  assert.equal(coverage.requestedPages, 3);
+  assert.equal(coverage.processedPages, 3);
+  assert.equal(coverage.datalabImages, 2);
 });
 
 test('多 article 动态页面按标题锚定完整正文，不误选推荐卡片', async () => {

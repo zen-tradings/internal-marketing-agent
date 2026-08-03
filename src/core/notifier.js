@@ -28,7 +28,14 @@ export function createNotifier(postMessage) {
     success(notify, { title, mediaId, channelId, sourceCount, completeness }) {
       const destination = channelId === 'customerio-draft' ? 'Customer.io Newsletter 草稿' : '微信公众号草稿';
       const sources = Number.isFinite(sourceCount) ? `\n来源数量:${sourceCount}` : '';
-      const complete = completeness ? `\n完整性:${completeness.errors?.length ? `未通过(${completeness.errors.join('; ')})` : `通过,覆盖页码 ${completeness.pagesFound?.length || 0} 页`}` : '';
+      const coveredPages = Number(completeness?.pagesProcessed || completeness?.pagesFound?.length || 0);
+      const complete = completeness
+        ? `\n完整性:${completeness.errors?.length
+          ? `未通过(${completeness.errors.join('; ')})`
+          : coveredPages > 0
+            ? `通过,覆盖页码 ${coveredPages} 页`
+            : '通过'}`
+        : '';
       return send(notify, `✅ ${destination}已创建\n标题:${title}${sources}${complete}\nMedia ID:${mediaId}`);
     },
     progress(notify, { message }) { return send(notify, `⏳ ${String(message || '任务处理中')}`); },

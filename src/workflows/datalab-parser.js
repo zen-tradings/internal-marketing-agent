@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { JSDOM } from 'jsdom';
 
 const DEFAULT_BASE_URL = 'https://www.datalab.to/api/v1';
 
@@ -19,6 +20,7 @@ export async function convertPdfWithDatalab({
   }
   const baseUrl = trustedBaseUrl(config.datalabBaseUrl || DEFAULT_BASE_URL);
   const modes = unique([config.datalabMode || 'balanced', 'accurate']);
+  const expectedPageIds = pageIdsFromRange(pageRange);
   let result;
   const attempts = [];
 
@@ -38,19 +40,26 @@ export async function convertPdfWithDatalab({
       sleepFn,
       timeoutMs: positive(config.datalabTimeoutMs, 5 * 60 * 1000),
       pollIntervalMs: positive(config.datalabPollIntervalMs, 2000),
+      expectedPageIds,
     });
     attempts.push({
       mode,
       requestId: result.requestId,
       parseQualityScore: numberOrUndefined(result.parse_quality_score),
       pageCount: numberOrUndefined(result.page_count),
+      completionWaits: result.completionWaits || 0,
       costBreakdown: result.cost_breakdown || undefined,
     });
     const quality = numberOrUndefined(result.parse_quality_score);
-    if (quality === undefined || quality >= 3 || mode === 'accurate') break;
+    if (quality !== undefined && quality >= 3) break;
   }
 
   if (!result?.html?.trim()) throw new Error('Datalab PDF 解析完成但 HTML 结果为空');
+  const quality = numberOrUndefined(result.parse_quality_score);
+  if (quality === undefined || quality < 3) {
+    throw new Error(`Datalab PDF 解析质量不足:${quality ?? '缺失'}/5（已尝试 ${attempts.map((item) => item.mode).join('、')}）`);
+  }
+  const coverage = assertDatalabResultComplete(result, { expectedPageIds });
   const assets = writeExtractedImages(result.images, {
     workDir,
     maxCount: positive(config.maxAssetCount, 80),
@@ -63,6 +72,10 @@ export async function convertPdfWithDatalab({
     metadata: result.metadata || {},
     pageCount: numberOrUndefined(result.page_count),
     parseQualityScore: numberOrUndefined(result.parse_quality_score),
+    pageIds: coverage.pageIds,
+    htmlTextCharacters: coverage.htmlTextCharacters,
+    htmlImageCount: coverage.htmlImageCount,
+    resultImageCount: coverage.resultImageCount,
     attempts,
   };
 }
@@ -78,6 +91,7 @@ async function submitAndPoll({
   sleepFn,
   timeoutMs,
   pollIntervalMs,
+  expectedPageIds,
 }) {
   const form = new FormData();
   form.append('file', new Blob([pdfBuffer], { type: 'application/pdf' }), safeFilename(filename));
@@ -100,8 +114,15 @@ async function submitAndPoll({
   }
   const checkUrl = validateCheckUrl(submitted.request_check_url, baseUrl, submitted.request_id);
   const deadline = Date.now() + timeoutMs;
+  let completionWaits = 0;
+  let lastIncomplete = [];
   for (;;) {
-    if (Date.now() >= deadline) throw new Error(`Datalab PDF 解析超时:${timeoutMs}ms`);
+    if (Date.now() >= deadline) {
+      if (lastIncomplete.length) {
+        throw new Error(`Datalab PDF 完成结果不完整:${lastIncomplete.join('; ')}（等待 ${timeoutMs}ms 后仍未稳定）`);
+      }
+      throw new Error(`Datalab PDF 解析超时:${timeoutMs}ms`);
+    }
     const status = await fetchJson(fetchFn, checkUrl, {
       headers: { 'X-API-Key': apiKey },
     }, Math.min(30000, Math.max(1000, deadline - Date.now())));
@@ -109,10 +130,81 @@ async function submitAndPoll({
       throw new Error(`Datalab PDF 解析失败:${safeError(status?.error || status?.status)}`);
     }
     if (status?.status === 'complete' || (status?.success === true && status?.html)) {
-      return { ...status, requestId: submitted.request_id };
+      const inspected = inspectDatalabResult(status, { expectedPageIds });
+      if (!inspected.issues.length) {
+        return {
+          ...status,
+          requestId: submitted.request_id,
+          completionWaits,
+        };
+      }
+      lastIncomplete = inspected.issues;
+      completionWaits += 1;
     }
     await sleepFn(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())));
   }
+}
+
+export function assertDatalabResultComplete(result, { expectedPageIds } = {}) {
+  const inspected = inspectDatalabResult(result, { expectedPageIds });
+  if (inspected.issues.length) {
+    throw new Error(`Datalab PDF 结果不完整:${inspected.issues.join('; ')}`);
+  }
+  return inspected;
+}
+
+export function inspectDatalabResult(result, { expectedPageIds } = {}) {
+  const issues = [];
+  const html = String(result?.html || '');
+  const pageCount = numberOrUndefined(result?.page_count);
+  const quality = numberOrUndefined(result?.parse_quality_score);
+  if (!html.trim()) issues.push('HTML 为空');
+  if (!Number.isInteger(pageCount) || pageCount < 1) issues.push('page_count 缺失或无效');
+  if (quality === undefined || quality < 0 || quality > 5) issues.push('parse_quality_score 缺失或无效');
+
+  let document;
+  try { document = new JSDOM(html).window.document; }
+  catch { issues.push('HTML 无法解析'); }
+  const pageNodes = document ? [...document.querySelectorAll('.page[data-page-id]')] : [];
+  const pageIds = pageNodes.map((node) => Number(node.getAttribute('data-page-id')));
+  const expected = Array.isArray(expectedPageIds) && expectedPageIds.length
+    ? expectedPageIds
+    : Number.isInteger(pageCount) && pageCount > 0
+      ? Array.from({ length: pageCount }, (_, index) => index)
+      : [];
+  if (pageNodes.length !== expected.length) {
+    issues.push(`分页容器数量不一致:${pageNodes.length}/${expected.length || '未知'}`);
+  }
+  if (pageIds.some((id) => !Number.isInteger(id)) || new Set(pageIds).size !== pageIds.length) {
+    issues.push('分页 ID 缺失、重复或无效');
+  } else if (expected.length && pageIds.join(',') !== expected.join(',')) {
+    issues.push(`分页 ID 不连续或范围不一致:${pageIds.join(',') || '无'}`);
+  }
+  if (Number.isInteger(pageCount) && expected.length && pageCount !== expected.length) {
+    issues.push(`处理页数不一致:${pageCount}/${expected.length}`);
+  }
+
+  const htmlImages = document ? [...document.querySelectorAll('img[src]')] : [];
+  const htmlImageKeys = new Set(htmlImages
+    .map((image) => normalizeAssetKey(image.getAttribute('src')))
+    .filter(Boolean));
+  const resultImageKeys = new Set(Object.keys(result?.images || {}).map(normalizeAssetKey).filter(Boolean));
+  const htmlImageAliases = new Set([...htmlImageKeys].flatMap((key) => [key, path.basename(key)]));
+  const resultImageAliases = new Set([...resultImageKeys].flatMap((key) => [key, path.basename(key)]));
+  const missingImages = [...htmlImageKeys].filter((key) => !resultImageAliases.has(key));
+  const unreferencedImages = [...resultImageKeys].filter((key) => !htmlImageAliases.has(key));
+  if (missingImages.length) issues.push(`HTML 图片缺少返回资产:${missingImages.slice(0, 5).join(',')}`);
+  if (unreferencedImages.length) issues.push(`返回图片未被 HTML 引用:${unreferencedImages.slice(0, 5).join(',')}`);
+
+  return {
+    issues,
+    pageIds,
+    htmlTextCharacters: document
+      ? String(document.body?.textContent || '').replace(/\s+/g, '').length
+      : 0,
+    htmlImageCount: htmlImages.length,
+    resultImageCount: resultImageKeys.size,
+  };
 }
 
 function validateCheckUrl(rawUrl, baseUrl, requestId) {
@@ -200,7 +292,9 @@ async function fetchJson(fetchFn, url, options, timeoutMs) {
 }
 
 function normalizeAssetKey(value) {
-  return decodeURIComponent(String(value || '').split(/[?#]/)[0]).replace(/^\.?\//, '');
+  const raw = String(value || '').split(/[?#]/)[0];
+  try { return decodeURIComponent(raw).replace(/^\.?\//, ''); }
+  catch { return raw.replace(/^\.?\//, ''); }
 }
 
 function safeFilename(value) {
@@ -235,8 +329,26 @@ function positive(value, fallback) {
 }
 
 function numberOrUndefined(value) {
+  if (value === null || value === undefined || value === '') return undefined;
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
+}
+
+function pageIdsFromRange(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return undefined;
+  const ids = [];
+  for (const part of raw.split(',')) {
+    const range = /^(\d+)-(\d+)$/.exec(part.trim());
+    const single = /^(\d+)$/.exec(part.trim());
+    if (single) {
+      ids.push(Number(single[1]));
+      continue;
+    }
+    if (!range || Number(range[2]) < Number(range[1])) return undefined;
+    for (let id = Number(range[1]); id <= Number(range[2]); id += 1) ids.push(id);
+  }
+  return ids;
 }
 
 function unique(values) {

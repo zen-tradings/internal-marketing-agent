@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { convertPdfWithDatalab } from '../src/workflows/datalab-parser.js';
+import {
+  assertDatalabResultComplete,
+  convertPdfWithDatalab,
+} from '../src/workflows/datalab-parser.js';
 
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z2S0AAAAASUVORK5CYII=';
 
@@ -20,6 +23,12 @@ function jsonResponse(value, status = 200) {
 
 test('Datalab 按指定页码解析 PDF，低质量时自动升级 accurate 并落地图片', async () => {
   const submissions = [];
+  const polls = new Map();
+  const pages = Array.from({ length: 11 }, (_, index) => (
+    `<div class="page" data-page-id="${index}">`
+      + `${index === 0 ? '<h1>Paper</h1><figure><img src="image.png"></figure>' : ''}`
+      + `<p>Body page ${index + 1} with enough source text.</p></div>`
+  )).join('');
   const fetchFn = async (url, options = {}) => {
     if (String(url).endsWith('/convert')) {
       const mode = options.body.get('mode');
@@ -35,10 +44,23 @@ test('Datalab 按指定页码解析 PDF，低质量时自动升级 accurate 并�
       });
     }
     const accurate = String(url).endsWith('req-accurate');
+    const key = accurate ? 'accurate' : 'balanced';
+    const poll = (polls.get(key) || 0) + 1;
+    polls.set(key, poll);
+    if (poll === 1) {
+      return jsonResponse({
+        status: 'complete',
+        success: true,
+        html: '<div class="page" data-page-id="0"><p>Result is still hydrating.</p></div>',
+        images: {},
+        parse_quality_score: null,
+        page_count: 11,
+      });
+    }
     return jsonResponse({
       status: 'complete',
       success: true,
-      html: '<article><h1>Paper</h1><p>Body</p><figure><img src="image.png"></figure></article>',
+      html: pages,
       images: { 'image.png': PNG },
       parse_quality_score: accurate ? 4.6 : 2.4,
       page_count: 11,
@@ -59,9 +81,42 @@ test('Datalab 按指定页码解析 PDF，低质量时自动升级 accurate 并�
     { mode: 'accurate', pageRange: '0-10', outputFormat: 'html' },
   ]);
   assert.equal(result.attempts.length, 2);
+  assert.deepEqual(result.attempts.map((attempt) => attempt.completionWaits), [1, 1]);
   assert.equal(result.parseQualityScore, 4.6);
+  assert.deepEqual(result.pageIds, Array.from({ length: 11 }, (_, index) => index));
+  assert.equal(result.htmlImageCount, 1);
+  assert.equal(result.resultImageCount, 1);
   assert.ok(fs.existsSync(result.images['image.png']));
-  assert.match(result.html, /<figure>/);
+  assert.match(result.html, /data-page-id="10"/);
+});
+
+test('Datalab 完成结果硬门禁拒绝缺页、无效质量分和未引用图片', () => {
+  assert.throws(() => assertDatalabResultComplete({
+    status: 'complete',
+    success: true,
+    page_count: 3,
+    parse_quality_score: null,
+    html: '<div class="page" data-page-id="0"><p>Only one page.</p></div>',
+    images: { 'orphan.png': PNG },
+  }, { expectedPageIds: [0, 1, 2] }), /分页容器数量不一致.*parse_quality_score|parse_quality_score.*分页容器数量不一致/);
+
+  assert.throws(() => assertDatalabResultComplete({
+    status: 'complete',
+    success: true,
+    page_count: 2,
+    parse_quality_score: 4.5,
+    html: '<div class="page" data-page-id="0"><p>A</p></div><div class="page" data-page-id="1"><p>B</p></div>',
+    images: { 'orphan.png': PNG },
+  }, { expectedPageIds: [0, 1] }), /返回图片未被 HTML 引用/);
+
+  assert.doesNotThrow(() => assertDatalabResultComplete({
+    status: 'complete',
+    success: true,
+    page_count: 2,
+    parse_quality_score: 4.8,
+    html: '<div class="page" data-page-id="2"><p>Page 3</p></div><div class="page" data-page-id="3"><p>Page 4</p></div>',
+    images: {},
+  }, { expectedPageIds: [2, 3] }));
 });
 
 test('Datalab 未配置密钥时明确失败', async () => {

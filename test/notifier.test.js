@@ -22,6 +22,24 @@ test('success/failure 文案带关键信息', async () => {
   assert.match(sent[3].text, /未完成文件已清理/);
 });
 
+test('直译成功通知只在 PDF 有页级记录时报告真实覆盖页数', async () => {
+  const sent = [];
+  const n = createNotifier(async (message) => sent.push(message));
+  await n.success({ channel: 'C', ts: '1' }, {
+    title: 'PDF 直译',
+    mediaId: 'M-PDF',
+    completeness: { errors: [], pagesProcessed: 37, pagesFound: Array.from({ length: 37 }) },
+  });
+  await n.success({ channel: 'C', ts: '1' }, {
+    title: 'HTML 直译',
+    mediaId: 'M-HTML',
+    completeness: { errors: [] },
+  });
+  assert.match(sent[0].text, /覆盖页码 37 页/);
+  assert.doesNotMatch(sent[1].text, /覆盖页码 0 页/);
+  assert.match(sent[1].text, /完整性:通过/);
+});
+
 test('入队回执显示 Prompt 修订、精确实体、链接数量与完整要求，澄清消息只问一个问题', async () => {
   const sent = [];
   const n = createNotifier(async (message) => sent.push(message));

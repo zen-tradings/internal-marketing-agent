@@ -105,7 +105,9 @@ export async function generateStructuredTranslation({
   const manifest = buildDocumentManifest(source);
   await report(onProgress, {
     stage: 'structure',
-    message: `已提取 ${manifest.blocks} 个结构块：${manifest.headings} 个标题、${manifest.figures} 张图、${manifest.tables} 个表格`,
+    message: `已提取 ${manifest.blocks} 个结构块：${manifest.headings} 个标题、${manifest.figures} 张图、${manifest.tables} 个表格${manifest.pageCoverage
+      ? `，页级覆盖 ${manifest.pageCoverage.processedPages}/${manifest.pageCoverage.requestedPages}`
+      : ''}`,
     completed: 1,
     total: 1,
   });
@@ -470,12 +472,18 @@ export async function sourceDocumentFromHtml({
   ], 'content', 'datetime');
 
   discardExcludedContent(sourceDocument);
+  const datalabPages = extractor === 'datalab-marker-html'
+    ? [...sourceDocument.querySelectorAll('.page[data-page-id]')]
+    : [];
+  if (extractor === 'datalab-marker-html' && !datalabPages.length) {
+    throw new Error('Datalab HTML 缺少分页容器，拒绝按普通网页正文解析');
+  }
   let readable;
   const structured = sourceDocument.querySelector('article.ltx_document,.ltx_document');
-  const titleRoot = structured ? undefined : titleAnchoredContentRoot(sourceDocument, title);
+  const titleRoot = structured || datalabPages.length ? undefined : titleAnchoredContentRoot(sourceDocument, title);
   const articles = [...sourceDocument.querySelectorAll('article')];
   const singleArticle = articles.length === 1 ? articles[0] : undefined;
-  if (!structured && !titleRoot && !singleArticle) {
+  if (!structured && !datalabPages.length && !titleRoot && !singleArticle) {
     try {
       readable = new Readability(sourceDocument.cloneNode(true), { charThreshold: 80, keepClasses: true }).parse();
     } catch {}
@@ -484,7 +492,9 @@ export async function sourceDocumentFromHtml({
     || richestArticle(articles)
     || sourceDocument.body;
   const selectedRoot = structured || titleRoot || singleArticle;
-  const bodyHtml = selectedRoot?.outerHTML || readable?.content || fallback?.innerHTML || '';
+  const bodyHtml = datalabPages.length
+    ? datalabPages.map((page) => page.outerHTML).join('\n')
+    : selectedRoot?.outerHTML || readable?.content || fallback?.innerHTML || '';
   const bodyDom = new JSDOM(`<main>${bodyHtml}</main>`, { url: documentUrl });
   discardExcludedContent(bodyDom.window.document);
   const root = bodyDom.window.document.querySelector('main');
@@ -519,6 +529,14 @@ export async function sourceDocumentFromHtml({
     rawHashInput: String(html || ''),
   });
   document.scope = scoped.scope || scope;
+  if (datalabPages.length) {
+    document.processedPageIds = datalabPages.map((page) => Number(page.getAttribute('data-page-id')));
+    document.datalabHtmlTextCharacters = datalabPages
+      .map((page) => String(page.textContent || '').replace(/\s+/g, '').length)
+      .reduce((sum, length) => sum + length, 0);
+    document.datalabHtmlImageCount = datalabPages
+      .reduce((sum, page) => sum + page.querySelectorAll('img[src]').length, 0);
+  }
   assertSourceDocumentComplete(document);
   return document;
 }
@@ -728,6 +746,8 @@ async function sourceDocumentFromPdf({
     fetchFn,
     onProgress,
   });
+  const expectedPageIds = pdfPageIds(scope, pages);
+  const popplerTextCharacters = pdfTextCharacters(pdfPath, scope, pages);
   const document = await sourceDocumentFromHtml({
     html: converted.html,
     sourceUrl,
@@ -747,11 +767,101 @@ async function sourceDocumentFromPdf({
   document.sha256 = crypto.createHash('sha256').update(pdfBuffer).digest('hex');
   document.pageCount = pages;
   document.processedPageCount = converted.pageCount;
+  document.processedPageIds = converted.pageIds;
   document.parseQualityScore = converted.parseQualityScore;
   document.parserAttempts = converted.attempts;
+  document.datalabHtmlTextCharacters = converted.htmlTextCharacters;
+  document.datalabHtmlImageCount = converted.htmlImageCount;
+  document.datalabResultImageCount = converted.resultImageCount;
+  document.popplerTextCharacters = popplerTextCharacters;
+  document.pageCoverage = assertPdfExtractionCoverage({
+    document,
+    expectedPageIds,
+    popplerTextCharacters,
+  });
   document.scope = scope;
   assertSourceDocumentComplete(document);
   return document;
+}
+
+export function assertPdfExtractionCoverage({
+  document,
+  expectedPageIds,
+  popplerTextCharacters = 0,
+}) {
+  const expected = Array.isArray(expectedPageIds) ? expectedPageIds : [];
+  const found = Array.isArray(document?.processedPageIds) ? document.processedPageIds : [];
+  const datalabCharacters = Number(document?.datalabHtmlTextCharacters) || 0;
+  const extractedCharacters = sourceDocumentCharacters(document);
+  const errors = [];
+  if (!expected.length) errors.push('没有可验证的请求页码');
+  if (found.join(',') !== expected.join(',')) {
+    errors.push(`页码覆盖不一致:${found.join(',') || '无'}/${expected.join(',') || '无'}`);
+  }
+  if (Number(document?.processedPageCount) !== expected.length) {
+    errors.push(`处理页数不一致:${Number(document?.processedPageCount) || 0}/${expected.length}`);
+  }
+  if (datalabCharacters >= 1000 && extractedCharacters < datalabCharacters * 0.5) {
+    errors.push(`结构化正文仅保留 Datalab 文本的 ${percentage(extractedCharacters, datalabCharacters)}`);
+  }
+  const textRichBaseline = expected.length * 200;
+  if (popplerTextCharacters >= textRichBaseline
+    && datalabCharacters < popplerTextCharacters * 0.35) {
+    errors.push(`Datalab 文本仅覆盖 PDF 文本层的 ${percentage(datalabCharacters, popplerTextCharacters)}`);
+  }
+  if (popplerTextCharacters >= textRichBaseline
+    && extractedCharacters < popplerTextCharacters * 0.25) {
+    errors.push(`结构化正文仅覆盖 PDF 文本层的 ${percentage(extractedCharacters, popplerTextCharacters)}`);
+  }
+  if (errors.length) throw new Error(`PDF 页级完整性校验失败:${errors.join('; ')}`);
+  return {
+    requestedPages: expected.length,
+    processedPages: found.length,
+    expectedPageIds: expected,
+    processedPageIds: found,
+    pagesFound: found.map((id) => id + 1),
+    popplerTextCharacters,
+    datalabTextCharacters: datalabCharacters,
+    extractedCharacters,
+    datalabImages: Number(document?.datalabResultImageCount) || 0,
+    referencedImages: Number(document?.datalabHtmlImageCount) || 0,
+  };
+}
+
+function pdfPageIds(scope, totalPages) {
+  const start = scope?.kind === 'pages' ? scope.startPage - 1 : 0;
+  const end = scope?.kind === 'pages' ? scope.endPage - 1 : totalPages - 1;
+  return Array.from({ length: end - start + 1 }, (_, index) => start + index);
+}
+
+function pdfTextCharacters(pdfPath, scope, totalPages) {
+  const firstPage = scope?.kind === 'pages' ? scope.startPage : 1;
+  const lastPage = scope?.kind === 'pages' ? scope.endPage : totalPages;
+  const text = runCommand('pdftotext', [
+    '-f', String(firstPage),
+    '-l', String(lastPage),
+    pdfPath,
+    '-',
+  ], { timeout: 60000 });
+  return text.replace(/\s+/g, '').length;
+}
+
+function sourceDocumentCharacters(document) {
+  return (document?.blocks || []).reduce((total, block) => {
+    const tableText = (block.rows || [])
+      .flatMap((row) => row || [])
+      .map((cell) => cell?.text || '')
+      .join(' ');
+    return total + [block.text, block.caption, block.tex, tableText]
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, '').length;
+  }, 0);
+}
+
+function percentage(value, total) {
+  if (!total) return '0.0%';
+  return `${((value / total) * 100).toFixed(1)}%`;
 }
 
 export async function translateDocument({
@@ -1047,6 +1157,15 @@ export function validateTranslationArtifact({ source, translated, article }) {
     ? translated.validationExceptions
     : [];
   const exceptionIds = new Set(validationExceptions.map((item) => item.id));
+  const pageCoverage = source.sourceType === 'pdf' ? source.pageCoverage : undefined;
+  if (source.sourceType === 'pdf') {
+    if (!pageCoverage) {
+      errors.push('PDF 缺少页级覆盖记录');
+    } else if (pageCoverage.processedPages !== pageCoverage.requestedPages
+      || pageCoverage.pagesFound?.length !== pageCoverage.requestedPages) {
+      errors.push(`PDF 页级覆盖不完整:${pageCoverage.processedPages || 0}/${pageCoverage.requestedPages || 0}`);
+    }
+  }
   const sourceIds = source.blocks.map((block) => block.id);
   const translatedIds = translated.blocks.map((block) => block.id);
   if (sourceIds.join('|') !== translatedIds.join('|')) errors.push('结构块 ID 或顺序发生变化');
@@ -1108,6 +1227,12 @@ export function validateTranslationArtifact({ source, translated, article }) {
     sourceCharacters: translationUnits(source).reduce((sum, unit) => sum + unit.text.length, 0),
     contentMode: 'structured-document',
     scope: source.scope,
+    ...(pageCoverage ? {
+      pagesRequested: pageCoverage.requestedPages,
+      pagesProcessed: pageCoverage.processedPages,
+      pagesFound: pageCoverage.pagesFound,
+      pageCoverage,
+    } : {}),
   };
 }
 
@@ -1124,6 +1249,7 @@ export function buildDocumentManifest(document) {
     blockOrder: document.blocks.map((block) => `${block.id}:${block.type}`),
     pageCount: document.pageCount || undefined,
     processedPageCount: document.processedPageCount || undefined,
+    pageCoverage: document.pageCoverage,
     parseQualityScore: document.parseQualityScore,
     parserAttempts: document.parserAttempts,
     scope: document.scope,

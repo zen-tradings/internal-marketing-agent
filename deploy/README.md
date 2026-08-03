@@ -66,6 +66,15 @@ Droplet therefore does not need Marker/MinerU models; `DATALAB_API_KEY` is
 required only when a translation resolves to PDF. Keep it in the protected
 service environment, never in the repository.
 
+Paginated Datalab HTML is consumed as the complete ordered set of
+`.page[data-page-id]` containers rather than passed through the single-article
+Readability selector. A completed response is accepted only when its quality
+score, requested page IDs, page count, and image references are coherent; the
+service then compares Datalab text and extracted block coverage with Poppler's
+local text layer. For a PDF-related release, staged acceptance must exercise a
+real multi-page PDF without invoking OpenRouter or creating a WeChat draft and
+must confirm requested/processed pages plus figure/table counts in the manifest.
+
 For original analysis, text-layer PDFs can fall back to Poppler `pdftotext`;
 scanned PDFs still require Datalab OCR. Public Google Docs and GitHub
 repositories work without access tokens. Configure the optional read-only
