@@ -1110,6 +1110,18 @@ test('b000067 回归：zero/one 可忠实译为 0/1，型号中的数字保持�
   assert.deepEqual(assessment.warnings, []);
 });
 
+test('b000036 回归：纯公式与引用占位符不被 ZEN_INLINE 名称误判为未翻译', () => {
+  const assessment = assessTranslationUnit({
+    id: 'b000036',
+    kind: 'paragraph',
+    text: '⟦ZEN_INLINE_001⟧\n⟦ZEN_INLINE_002⟧\n⟦ZEN_INLINE_003⟧\n⟦ZEN_INLINE_004⟧\n⟦ZEN_INLINE_005⟧\n⟦ZEN_INLINE_006⟧\n.',
+  }, '⟦ZEN_INLINE_001⟧ ⟦ZEN_INLINE_002⟧ ⟦ZEN_INLINE_003⟧ ⟦ZEN_INLINE_004⟧ ⟦ZEN_INLINE_005⟧ ⟦ZEN_INLINE_006⟧ 。', {
+    afterRepair: true,
+  });
+  assert.deepEqual(assessment.hardErrors, []);
+  assert.deepEqual(assessment.warnings, []);
+});
+
 test('复合英文数字词、序数和中文数字表达按数值等价通过', () => {
   const complex = assessTranslationUnit({
     id: 'b000001',

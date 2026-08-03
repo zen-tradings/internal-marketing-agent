@@ -2422,13 +2422,18 @@ function countTokens(tokens) {
 }
 
 function isClearlyUntranslated(source, translated) {
-  const sourceEnglish = (String(source).match(/[A-Za-z]/g) || []).length;
+  // Protected formulas, citations, links, model IDs and similar immutable
+  // tokens are intentionally identical in source and target. Do not count
+  // their Latin marker text (for example ZEN_INLINE) as untranslated prose.
+  const visibleSource = maskExactInvariantTokens(source);
+  const visibleTranslated = maskExactInvariantTokens(translated);
+  const sourceEnglish = (visibleSource.match(/[A-Za-z]/g) || []).length;
   if (sourceEnglish < 40) return false;
-  const sourceWords = String(source).match(/[A-Za-z][A-Za-z'-]*/g) || [];
+  const sourceWords = visibleSource.match(/[A-Za-z][A-Za-z'-]*/g) || [];
   const capitalized = sourceWords.filter((word) => /^[A-Z]/.test(word)).length;
-  if (/,/.test(source) && sourceWords.length >= 4 && capitalized / sourceWords.length >= 0.7) return false;
-  const words = String(translated).match(/[A-Za-z][A-Za-z'-]*/g) || [];
-  const han = (String(translated).match(/\p{Script=Han}/gu) || []).length;
+  if (/,/.test(visibleSource) && sourceWords.length >= 4 && capitalized / sourceWords.length >= 0.7) return false;
+  const words = visibleTranslated.match(/[A-Za-z][A-Za-z'-]*/g) || [];
+  const han = (visibleTranslated.match(/\p{Script=Han}/gu) || []).length;
   return words.length >= 10 && han < 4;
 }
 
