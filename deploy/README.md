@@ -3,6 +3,41 @@
 The service is designed to run as one systemd instance. Do not start a second
 manual process with the same Slack tokens or SQLite database.
 
+## Production target and release command
+
+The production target is never inferred from local SSH aliases or historical
+VPS names. Copy the tracked template, set the real Droplet SSH target, and keep
+the resulting file local:
+
+```bash
+cp deploy/target.example.env deploy/target.env
+$EDITOR deploy/target.env
+```
+
+Run the read-only preflight first. It refuses non-DigitalOcean hosts by checking
+the Droplet metadata service, then verifies the active service, `.deploy-commit`,
+Slack readiness, idle queue and current model roles:
+
+```bash
+npm run deploy:digitalocean
+```
+
+After reviewing the preflight output, activate the exact pushed commit:
+
+```bash
+npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --activate
+```
+
+The command requires a clean worktree and a commit present on the upstream
+branch. It creates a local archive, stages and tests a separate release on the
+Droplet, runs the SQLite backup service, requires an idle queue, updates the
+writer model and reasoning effort, explicitly pins router/planner/review to
+GLM 5.2 without changing their current effective behavior, switches the single
+systemd service, and verifies the marker, main PID and `/ready`. A failed activation restores
+the previous release and protected environment file. The DigitalOcean metadata
+check is a deployment-target guard only; it is not an application startup,
+publishing or public-IP gate.
+
 ## Filesystem layout
 
 ```text
@@ -110,13 +145,12 @@ sudo systemctl status zen-content-hub
 curl --fail http://127.0.0.1:8080/health
 ```
 
-## Updating an existing service
+## Manual recovery and implementation details
 
-Production uses an immutable release directory rather than an in-place Git
-checkout. Build the archive from an explicit reviewed commit, never from a
-dirty working tree. Extract it into `/opt/zen-content-hub.release-<sha>`, write
-the full commit hash to its `.deploy-commit`, set ownership to `zenbot:zenbot`,
-then run `npm ci && npm run check` inside that staged directory.
+The automated command above is the normal update path. The details below are
+the authoritative recovery reference if automation stops and an operator must
+inspect or roll back the partially staged release. Production uses an immutable
+release directory rather than an in-place Git checkout.
 
 Before activation:
 
