@@ -90,7 +90,7 @@
 | 直译范围识别 | `src/workflows/translation-scope.js` | 页码和章节范围；用户页码为 1-based，Datalab 请求转换为 0-based |
 | 直译内容提取/结构 | `src/workflows/translation-source-text.js` | arXiv HTML 优先、普通 HTML/Notion；保留标题、段落、图表、公式、代码和引用 |
 | PDF 结构化解析 | `src/workflows/datalab-parser.js` | 直译/扫描件走托管 Datalab；完成态需稳定返回有效质量分、完整连续分页及双向匹配的图片引用；有文字层的分析型 PDF 可在 `user-sources.js` 用 Poppler 降级读取 |
-| 直译翻译/完整性/checkpoint | `src/workflows/translation-source-text.js` | Datalab 多页根容器原序解析，Poppler/Datalab/结构化正文三方覆盖校验；逐文本节点翻译、不可变 token、最多两轮定向修复、宽松复核例外、逐单元 checkpoint 及结构/资产硬门禁 |
+| 直译翻译/完整性/checkpoint | `src/workflows/translation-source-text.js` | Datalab 多页根容器原序解析，Poppler/Datalab/结构化正文三方覆盖校验；逐文本节点翻译，不可变 token 在未翻译检测前遮蔽，纯公式/引用占位符块只做 token 等价校验；最多两轮定向修复、宽松复核例外、逐单元 checkpoint 及结构/资产硬门禁 |
 | 直译执行与研究轨迹 | `src/workflows/translate-engine.js` | 把 manifest、严格等价状态、待复核块、全部候选与最终选择写入 trace |
 | 失败直译受限续跑 | `scripts/requeue-translation.mjs` + `src/core/store.js` | 只接受数据库 run-id；要求 checkpoint，拒绝其它工作流、已有 `media_id` 和非白名单失败 |
 | 旧代码输出分析受限重排 | `scripts/requeue-analysis-gate.mjs` + `src/core/store.js` | 仅四个 V2 分析流的旧代码 gate/安全渲染兼容错误，拒绝已发布、无 Slack 通知和其它错误 |
