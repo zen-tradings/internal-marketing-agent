@@ -13,6 +13,12 @@ import path from 'node:path';
 const DEFAULT_PRIORITY_SOURCES = [
   'trendforce.com',        // 含 datatrack.trendforce.com,半导体/AI 供应链/HBM
   'semianalysis.com',
+  'techinsights.com',
+  'counterpointresearch.com',
+  'omdia.tech.informa.com',
+  'blocksandfiles.com',
+  'eetimes.com',
+  'digitimes.com',
   'alphaxiv.org',
   'skhynix.com',           // SK Hynix IR
   'marvell.com',           // investor.marvell.com
@@ -48,6 +54,83 @@ const DEFAULT_OFFICIAL_SOURCES = [
   'cxmt.com',
 ];
 
+// 搜索结果中的新闻/评论来源不能来自政府资助、国家所有或公共广播媒体。
+// 监管机构、交易所和政府原始数据不属于“媒体”，继续通过 officialSources 使用。
+const DEFAULT_EXCLUDED_MEDIA_SOURCES = [
+  'xinhuanet.com',
+  'news.cn',
+  'people.com.cn',
+  'cctv.com',
+  'cgtn.com',
+  'chinadaily.com.cn',
+  'globaltimes.cn',
+  'cri.cn',
+  'cnr.cn',
+  'china.com.cn',
+  'voanews.com',
+  'rfa.org',
+  'rferl.org',
+  'usagm.gov',
+  'alhurra.com',
+  'bbc.com',
+  'bbc.co.uk',
+  'dw.com',
+  'france24.com',
+  'rfi.fr',
+  'rt.com',
+  'sputniknews.com',
+  'tass.com',
+  'trtworld.com',
+  'aljazeera.com',
+  'nhk.or.jp',
+  'kbs.co.kr',
+  'arirang.com',
+  'abc.net.au',
+  'sbs.com.au',
+  'cbc.ca',
+  'channelnewsasia.com',
+  'pbs.org',
+  'npr.org',
+  'rnz.co.nz',
+  'tvnz.co.nz',
+  'swissinfo.ch',
+  'rte.ie',
+  'yle.fi',
+  'svt.se',
+  'nrk.no',
+  'dr.dk',
+  'ard.de',
+  'zdf.de',
+  'deutschlandradio.de',
+];
+
+// 在同一来源层级内优先这些独立第三方报道/研究机构；其它语言不降级，
+// 只要来源独立且能直接支持任务事实，仍可进入证据矩阵。
+const DEFAULT_INDEPENDENT_REPORTING_SOURCES = [
+  'reuters.com',
+  'apnews.com',
+  'ft.com',
+  'wsj.com',
+  'bloomberg.com',
+  'economist.com',
+  'nikkei.com',
+  'caixinglobal.com',
+  'caixin.com',
+  'theinformation.com',
+  'semafor.com',
+  'techcrunch.com',
+  'theregister.com',
+  'trendforce.com',
+  'semianalysis.com',
+  'techinsights.com',
+  'counterpointresearch.com',
+  'omdia.tech.informa.com',
+  'blocksandfiles.com',
+  'eetimes.com',
+  'digitimes.com',
+  'lightcounting.com',
+];
+
 export function prioritySources() {
   const raw = process.env.EXA_PRIORITY_DOMAINS;
   return raw
@@ -62,11 +145,27 @@ export function officialSources() {
     : [...DEFAULT_OFFICIAL_SOURCES];
 }
 
+export function excludedMediaSources() {
+  return uniqueDomains([
+    ...DEFAULT_EXCLUDED_MEDIA_SOURCES,
+    ...csvDomains(process.env.EXA_EXCLUDED_MEDIA_DOMAINS),
+  ]);
+}
+
+export function independentReportingSources() {
+  return uniqueDomains([
+    ...DEFAULT_INDEPENDENT_REPORTING_SOURCES,
+    ...csvDomains(process.env.EXA_INDEPENDENT_MEDIA_DOMAINS),
+  ]);
+}
+
 // 供各工作流 `get research()` 直接返回。
 export function sharedResearch() {
   return {
     prioritySources: prioritySources(),
     officialSources: officialSources(),
+    excludedMediaSources: excludedMediaSources(),
+    independentReportingSources: independentReportingSources(),
     minOfficialSources: 2,
   };
 }
@@ -91,6 +190,15 @@ export function workDirFor(id) {
   return path.join(base, id);
 }
 
+function csvDomains(value) {
+  return String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function uniqueDomains(domains) {
+  return [...new Set(domains.map((domain) => String(domain || '').trim().toLowerCase())
+    .filter(Boolean))];
+}
+
 // 各工作流共用的通用约束块:风格规范 + 调研素材纪律 + 产出格式。
 // 专属方法论内容(各工作流自己的分析框架)拼在【任务内容】之后、本块之前。
 export const COMMON_CONSTRAINTS_BLOCK = `【写作规范 — 严格执行】
@@ -99,7 +207,7 @@ export const COMMON_CONSTRAINTS_BLOCK = `【写作规范 — 严格执行】
 - 括号内容极度克制,非必要不加
 - 金额用中文单位(亿美元、百万美元),不出现美元符号
 - 口径说明板块每个控制在 1-2 句
-- 文章由「开头固定横幅图 + 正文 + 结尾固定二维码图」构成,首尾图由系统自动注入,你只需写正文,不要自己加结尾署名板块或落款
+- 文章由「开头固定横幅图 + 正文 + 内容调研问卷图 + 社群封底图」构成,固定图由系统自动注入,你只需写正文,不要自己加结尾署名板块或落款
 
 【调研素材 — 严格遵守】
 - 调研由系统通过 Exa 完成,你只能使用系统提供的素材与任务内容
@@ -107,7 +215,7 @@ export const COMMON_CONSTRAINTS_BLOCK = `【写作规范 — 严格执行】
 - 不编造素材中没有的事实、数字、日期或来源
 - 如果素材不足,明确说明信息不足,不要猜测
 - 正文不放引用脚标、脚注或来源链接。文章末尾只生成一次“## 引用链接”,精选 1-5 个最相关、最具支持力的可点击链接;以相关性为准,不凑数,不要再生成“引用来源”或罗列全部检索结果
-- “引用链接”必须是最后一个文字章节且左对齐;系统会在其后追加固定二维码尾图,不要在尾图后追加任何内容
+- “引用链接”必须是最后一个文字章节且左对齐;系统会在其后依次追加内容调研问卷图和社群封底图,二者是最终两个节点,不要自行追加任何内容
 - 每个主要章节用 Markdown 粗体突出 1-2 个核心观点或关键词,高亮必须克制且不能改变原意
 
 【产出 — 必须执行】

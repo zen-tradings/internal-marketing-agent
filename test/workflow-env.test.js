@@ -13,10 +13,14 @@ test('workflow env 属性延迟读取:import 后修改 env 仍生效(getter 语�
   try {
     const mod = await import('../src/workflows/wechat.js');
     const wf = mod.default;
+    assert.equal(wf.editorialSkill, 'latepost-ai-writer');
     // 加载后 env 仍为空 → 回退默认值
     assert.equal(wf.workDir, '/srv/zen/wechat');
     assert.equal(wf.model, undefined);
     assert.equal(wf.channel, 'wechat-draft');
+    const prompt = wf.promptTemplate('测试双尾图契约');
+    assert.match(prompt, /内容调研问卷图 \+ 社群封底图/);
+    assert.match(prompt, /依次追加内容调研问卷图和社群封底图,二者是最终两个节点/);
 
     // 模拟 dotenv.config() 注入 env
     process.env.WORK_DIR = '/tmp/test-zen';
@@ -37,8 +41,12 @@ test('workflow env 属性延迟读取:import 后修改 env 仍生效(getter 语�
 test('workflow.research:行业优先源排除 Exa 不支持域名,官方源与两类 env 均可整体覆盖', async () => {
   const orig = process.env.EXA_PRIORITY_DOMAINS;
   const origOfficial = process.env.EXA_OFFICIAL_DOMAINS;
+  const origExcluded = process.env.EXA_EXCLUDED_MEDIA_DOMAINS;
+  const origIndependent = process.env.EXA_INDEPENDENT_MEDIA_DOMAINS;
   delete process.env.EXA_PRIORITY_DOMAINS;
   delete process.env.EXA_OFFICIAL_DOMAINS;
+  delete process.env.EXA_EXCLUDED_MEDIA_DOMAINS;
+  delete process.env.EXA_INDEPENDENT_MEDIA_DOMAINS;
 
   try {
     const mod = await import('../src/workflows/wechat.js');
@@ -49,6 +57,7 @@ test('workflow.research:行业优先源排除 Exa 不支持域名,官方源与�
     assert.ok(Array.isArray(defaults) && defaults.length > 0);
     assert.ok(defaults.includes('trendforce.com'));
     assert.ok(defaults.includes('semianalysis.com'));
+    assert.ok(defaults.includes('alphaxiv.org'));
     assert.ok(!defaults.includes('x.com'));
     assert.ok(!defaults.includes('twitter.com'));
 
@@ -59,15 +68,26 @@ test('workflow.research:行业优先源排除 Exa 不支持域名,官方源与�
     assert.ok(wf.research.officialSources.includes('sse.com.cn'));
     assert.ok(wf.research.officialSources.includes('cninfo.com.cn'));
     assert.ok(wf.research.officialSources.includes('cxmt.com'));
+    assert.ok(wf.research.excludedMediaSources.includes('bbc.com'));
+    assert.ok(wf.research.excludedMediaSources.includes('xinhuanet.com'));
+    assert.ok(wf.research.independentReportingSources.includes('reuters.com'));
+    assert.ok(wf.research.independentReportingSources.includes('caixin.com'));
 
     // 设置 env → 整体覆盖,逗号分隔并去除空白
     process.env.EXA_PRIORITY_DOMAINS = 'foo.com, bar.com ,baz.com';
     assert.deepEqual(wf.research.prioritySources, ['foo.com', 'bar.com', 'baz.com']);
     process.env.EXA_OFFICIAL_DOMAINS = 'sec.test, exchange.test';
     assert.deepEqual(wf.research.officialSources, ['sec.test', 'exchange.test']);
+    process.env.EXA_EXCLUDED_MEDIA_DOMAINS = 'public.test, STATE.test';
+    assert.ok(wf.research.excludedMediaSources.includes('public.test'));
+    assert.ok(wf.research.excludedMediaSources.includes('state.test'));
+    process.env.EXA_INDEPENDENT_MEDIA_DOMAINS = 'independent.test';
+    assert.ok(wf.research.independentReportingSources.includes('independent.test'));
   } finally {
     if (orig) process.env.EXA_PRIORITY_DOMAINS = orig; else delete process.env.EXA_PRIORITY_DOMAINS;
     if (origOfficial) process.env.EXA_OFFICIAL_DOMAINS = origOfficial; else delete process.env.EXA_OFFICIAL_DOMAINS;
+    if (origExcluded) process.env.EXA_EXCLUDED_MEDIA_DOMAINS = origExcluded; else delete process.env.EXA_EXCLUDED_MEDIA_DOMAINS;
+    if (origIndependent) process.env.EXA_INDEPENDENT_MEDIA_DOMAINS = origIndependent; else delete process.env.EXA_INDEPENDENT_MEDIA_DOMAINS;
   }
 });
 
@@ -89,6 +109,10 @@ test('新工作流(earnings/sector/morning):id、channel、workDir 子目录、r
     assert.equal(earnings.id, 'earnings');
     assert.equal(sector.id, 'sector');
     assert.equal(morning.id, 'morning');
+    assert.equal(earnings.editorialSkill, 'latepost-ai-writer');
+    assert.equal(sector.editorialSkill, 'latepost-ai-writer');
+    assert.equal(morning.editorialSkill, undefined);
+    assert.doesNotMatch(morning.promptTemplate('今日晨报'), /LatePost AI Writer/);
 
     // 默认基准目录下按工作流 id 建子目录,避免并发任务 article.md 互相覆盖
     assert.equal(earnings.workDir, '/srv/zen/wechat/earnings');
@@ -117,6 +141,43 @@ test('新工作流(earnings/sector/morning):id、channel、workDir 子目录、r
   }
 });
 
+test('macro 工作流仅由 Slack 触发、只写微信草稿，并组合双 skill 与宏观一手来源', async () => {
+  const origWorkDir = process.env.WORK_DIR;
+  const origChannel = process.env.WECHAT_CHANNEL;
+  delete process.env.WORK_DIR;
+  delete process.env.WECHAT_CHANNEL;
+  try {
+    const { default: macro } = await import('../src/workflows/macro.js');
+    assert.equal(macro.id, 'macro');
+    assert.equal(macro.mode, 'analysis');
+    assert.deepEqual(macro.editorialSkills, [
+      'latepost-ai-writer',
+      'global-macro-strategy-writer',
+    ]);
+    assert.deepEqual(macro.triggers, ['slack']);
+    assert.equal(macro.channel, 'wechat-draft');
+    assert.equal(macro.workDir, '/srv/zen/wechat/macro');
+    assert.equal(macro.sourcePolicy.minOfficialSources, 1);
+    assert.equal(macro.research.minOfficialSources, 1);
+    assert.ok(macro.research.officialSources.includes('federalreserve.gov'));
+    assert.ok(macro.research.officialSources.includes('pbc.gov.cn'));
+    assert.ok(macro.research.officialSources.includes('cmegroup.com'));
+    const prompt = macro.promptTemplate('分析美元流动性');
+    assert.match(prompt, /Zen Trading 全球宏观策略分析师/);
+    assert.match(prompt, /事实、市场已定价预期、增量信息与我们的判断/);
+    assert.match(prompt, /不写买卖、目标价、入场、退出、止损或仓位指令/);
+    assert.doesNotMatch(prompt, /Customer\.io/);
+
+    process.env.WORK_DIR = '/tmp/test-zen';
+    process.env.WECHAT_CHANNEL = 'mock';
+    assert.equal(macro.workDir, '/tmp/test-zen/macro');
+    assert.equal(macro.channel, 'mock');
+  } finally {
+    if (origWorkDir) process.env.WORK_DIR = origWorkDir; else delete process.env.WORK_DIR;
+    if (origChannel) process.env.WECHAT_CHANNEL = origChannel; else delete process.env.WECHAT_CHANNEL;
+  }
+});
+
 test('translate 工作流:id、workDir 子目录、channel/research 与其它工作流语义一致', async () => {
   const origWorkDir = process.env.WORK_DIR;
   const origChannel = process.env.WECHAT_CHANNEL;
@@ -131,6 +192,8 @@ test('translate 工作流:id、workDir 子目录、channel/research 与其它工
     assert.equal(translate.workDir, '/srv/zen/wechat/translate');
     assert.equal(translate.retries, 3);
     assert.equal(translate.retryDelayMs, 15000);
+    assert.equal(translate.shouldRetry(new Error('fetch failed: ECONNRESET')), true);
+    assert.equal(translate.shouldRetry(new Error('Slack PDF 下载返回登录页')), false);
 
     process.env.WECHAT_CHANNEL = 'mock';
     assert.equal(translate.channel, 'mock');
@@ -146,6 +209,7 @@ test('translate 工作流:id、workDir 子目录、channel/research 与其它工
     assert.match(prompt, /翻译为简体中文/);
     assert.match(prompt, /忠实优先/);
     assert.match(prompt, /【写作规范/); // 仍拼装通用约束块
+    assert.doesNotMatch(prompt, /LatePost AI Writer/);
   } finally {
     if (origWorkDir) process.env.WORK_DIR = origWorkDir; else delete process.env.WORK_DIR;
     if (origChannel) process.env.WECHAT_CHANNEL = origChannel; else delete process.env.WECHAT_CHANNEL;
@@ -158,6 +222,7 @@ test('company 工作流:专业分析提示词、独立目录与专项检索', as
   try {
     const { default: company } = await import('../src/workflows/company.js');
     assert.equal(company.id, 'company');
+    assert.equal(company.editorialSkill, 'latepost-ai-writer');
     assert.equal(company.workDir, '/srv/zen/wechat/company');
     assert.equal(typeof company.research.extraQueries, 'function');
     const extraQueries = company.research.extraQueries('AMAT');
@@ -200,7 +265,9 @@ test('email 工作流:Customer.io 草稿渠道、独立目录与 Vol. 版号', a
     assert.equal(email.id, 'email');
     assert.equal(email.channel, 'customerio-draft');
     assert.equal(email.workDir, '/srv/zen/wechat/email');
+    assert.equal(email.editorialSkill, undefined);
     assert.match(email.systemPrompt, /research newsletter/);
+    assert.doesNotMatch(email.promptTemplate('AI market update'), /LatePost AI Writer/);
     assert.match(email.outputInstruction, /Customer\.io/);
     assert.match(email.promptTemplate('HBM update'), /Vol\. 1/);
     assert.match(email.promptTemplate('HBM update'), /preheader:/);

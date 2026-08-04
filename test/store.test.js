@@ -67,13 +67,19 @@ test('recoverRunningWorkflow 只自动恢复指定工作流的运行中任务', 
   assert.equal(s.getRun('wechat').status, 'interrupted');
 });
 
-test('requeueRecoverableTranslation 可恢复中断、历史出口、发布或网络生成失败的直译', () => {
+test('requeueRecoverableTranslation 可恢复中断、历史出口、发布、网络或翻译校验失败的直译', () => {
   const s = openStore(':memory:');
-  for (const id of ['egress', 'publish', 'generate', 'content']) {
+  for (const id of ['egress', 'publish', 'generate', 'validation', 'completeness', 'content']) {
     s.createRun({ id, workflowId: 'translate', source: 'slack', input: '直译', notify: {} });
     s.setStatus(id, 'failed', {
-      stage: ['generate', 'content'].includes(id) ? 'generate' : id,
-      error: id === 'generate' ? '网络请求失败:fetch failed (ECONNRESET)' : id,
+      stage: ['generate', 'validation', 'completeness', 'content'].includes(id) ? 'generate' : id,
+      error: id === 'generate'
+        ? '网络请求失败:fetch failed (ECONNRESET)'
+        : id === 'validation'
+          ? '结构化翻译校验失败:b000067'
+          : id === 'completeness'
+            ? '直译完整性门禁失败:URL、占位符不一致:b000004'
+          : id,
       finishedAt: 2,
     });
   }
@@ -83,6 +89,9 @@ test('requeueRecoverableTranslation 可恢复中断、历史出口、发布或�
   assert.equal(s.getRun('publish').status, 'queued');
   assert.equal(s.requeueRecoverableTranslation('generate'), 1);
   assert.equal(s.getRun('generate').status, 'queued');
+  assert.equal(s.requeueRecoverableTranslation('validation'), 1);
+  assert.equal(s.requeueRecoverableTranslation('completeness'), 1);
+  assert.equal(s.getRun('validation').status, 'queued');
   assert.equal(s.requeueRecoverableTranslation('content'), 0);
   assert.equal(s.getRun('content').status, 'failed');
 });
@@ -108,6 +117,19 @@ test('Slack 线程上下文按 channel + thread_ts 保存并限制最近 12 条'
   assert.equal(thread.messages.length, 12);
   assert.equal(thread.messages[0].text, '第4条');
   assert.equal(thread.last_run_id, 'run-1');
+  assert.equal(thread.prompt_revision, 1);
+  assert.equal(thread.clarification, null);
+  assert.equal(s.setSlackClarification('D1:100.1', {
+    runId: 'run-1',
+    question: '请确认型号',
+  }), 1);
+  assert.equal(s.getSlackThread('D1:100.1').clarification.question, '请确认型号');
+  s.upsertSlackThread({
+    threadKey: 'D1:100.1', channelId: 'D1', threadTs: '100.1',
+    workflowId: 'wechat', messages, lastRunId: 'run-2', promptRevision: 2,
+  });
+  assert.equal(s.getSlackThread('D1:100.1').prompt_revision, 2);
+  assert.equal(s.getSlackThread('D1:100.1').clarification, null, '新修订入队后应清除旧澄清状态');
 });
 
 test('Slack 事件持久化 claim 防止跨进程重复消费,失败前可释放', () => {
@@ -123,16 +145,19 @@ test('过期任务只选择终态记录并和数据库清理保持一致', () =>
   store.createRun({ id: 'done-old', workflowId: 'wechat', source: 'test', input: 'x', notify: {} });
   store.createRun({ id: 'cancelled-old', workflowId: 'wechat', source: 'test', input: 'x', notify: {} });
   store.createRun({ id: 'queued-old', workflowId: 'wechat', source: 'test', input: 'x', notify: {} });
+  store.createRun({ id: 'needs-input-old', workflowId: 'wechat', source: 'test', input: 'x', notify: {} });
   store.setStatus('done-old', 'done', { finishedAt: 1 });
   store.setStatus('cancelled-old', 'cancelled', { finishedAt: 1 });
+  store.setStatus('needs-input-old', 'needs_input', { finishedAt: 1 });
   const expired = store.listPrunableRuns(2);
   assert.deepEqual(
     expired.map((row) => row.id).sort(),
-    ['cancelled-old', 'done-old'],
+    ['cancelled-old', 'done-old', 'needs-input-old'],
   );
   const result = store.prune({ runBefore: 2 });
-  assert.equal(result.runs, 2);
+  assert.equal(result.runs, 3);
   assert.equal(store.getRun('done-old'), undefined);
   assert.equal(store.getRun('cancelled-old'), undefined);
+  assert.equal(store.getRun('needs-input-old'), undefined);
   assert.equal(store.getRun('queued-old').status, 'queued');
 });

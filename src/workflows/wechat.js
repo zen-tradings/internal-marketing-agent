@@ -3,6 +3,7 @@ import { sharedResearch, officialFirstPolicy, envChannel, envModel, envTimeoutMs
 export default {
   id: 'wechat',
   mode: 'analysis',
+  editorialSkill: 'latepost-ai-writer',
   sourcePolicy: officialFirstPolicy(),
   factReview: true,
   triggers: ['slack'],

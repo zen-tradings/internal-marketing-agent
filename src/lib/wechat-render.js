@@ -6,19 +6,39 @@ import { prepareRenderContext, publishToWechatDraft } from '@wenyan-md/core/wrap
 export async function renderAndPublishWithFinalFooter(inputContent, options, getInputContent) {
   const { gzhContent, absoluteDirPath } = await prepareRenderContext(inputContent, options, getInputContent);
   if (!gzhContent?.title) throw new Error('未能找到文章标题');
-  gzhContent.content = normalizeBodyTypography(
+  gzhContent.content = normalizeCodeBreaks(normalizeBodyTypography(
     styleKeyHighlights(alignTerminalReferences(removeDuplicateReferenceSections(gzhContent.content))),
-  );
-  if (options.finalFooterPath) {
-    gzhContent.content = appendFinalFooter(gzhContent.content, options.finalFooterPath);
+  ));
+  if (options.finalSurveyPath || options.finalFooterPath) {
+    gzhContent.content = appendFinalTailImages(gzhContent.content, {
+      surveyPath: options.finalSurveyPath,
+      footerPath: options.finalFooterPath,
+    });
   }
-  validatePreparedWechatHtml(gzhContent.content, { absoluteDirPath });
+  validatePreparedWechatHtml(gzhContent.content, {
+    absoluteDirPath,
+    finalSurveyPath: options.finalSurveyPath,
+    finalFooterPath: options.finalFooterPath,
+  });
   const data = await publishToWechatDraft(gzhContent, { appId: options.appId, relativePath: absoluteDirPath });
   if (!data?.media_id) throw new Error(`发布到微信公众号失败:${JSON.stringify(data)}`);
   return data.media_id;
 }
 
-export function validatePreparedWechatHtml(html, { absoluteDirPath } = {}) {
+export function normalizeCodeBreaks(html) {
+  const dom = new JSDOM(`<body>${String(html || '')}</body>`);
+  const document = dom.window.document;
+  for (const lineBreak of document.querySelectorAll('pre > code br')) {
+    lineBreak.replaceWith(document.createTextNode('\n'));
+  }
+  return document.body.innerHTML;
+}
+
+export function validatePreparedWechatHtml(html, {
+  absoluteDirPath,
+  finalSurveyPath,
+  finalFooterPath,
+} = {}) {
   const errors = [];
   const value = String(html || '');
   if (!value.trim()) errors.push('最终 HTML 为空');
@@ -27,11 +47,26 @@ export function validatePreparedWechatHtml(html, { absoluteDirPath } = {}) {
   if (/source-page-\d+\.(?:png|jpe?g|gif|webp)/i.test(value)) errors.push('最终 HTML 含禁止的 PDF 整页截图');
 
   const document = new JSDOM(`<body>${value}</body>`).window.document;
+  const dangerous = document.querySelectorAll('script,style,iframe,object,embed');
+  if (dangerous.length) errors.push(`最终 HTML 含 ${dangerous.length} 个禁止的可执行或嵌入节点`);
+  for (const [index, pre] of [...document.querySelectorAll('pre')].entries()) {
+    const code = pre.children.length === 1 && pre.firstElementChild?.tagName === 'CODE'
+      ? pre.firstElementChild
+      : undefined;
+    if (!code) {
+      errors.push(`第 ${index + 1} 个代码块缺少唯一的 code 子节点`);
+      continue;
+    }
+    if (!code.textContent.trim()) errors.push(`第 ${index + 1} 个代码块为空`);
+    if ([...code.querySelectorAll('*')].some((node) => node.tagName !== 'SPAN')) {
+      errors.push(`第 ${index + 1} 个代码块含非语法高亮子节点`);
+    }
+  }
   const sourceInfoLabels = [...document.querySelectorAll('strong')]
     .filter((node) => node.textContent.trim() === '原文信息');
   if (sourceInfoLabels.length > 1) errors.push(`最终 HTML 含 ${sourceInfoLabels.length} 个“原文信息”板块`);
   const oversizedBodyNodes = [...document.querySelectorAll('p,li,blockquote')]
-    .filter((node) => !node.closest('[data-zen-final-footer-wrapper="true"]'))
+    .filter((node) => !node.closest('[data-zen-final-tail-wrapper]'))
     .filter((node) => {
       const size = effectiveEmFontSize(node);
       return size !== undefined && size > 0.9;
@@ -47,13 +82,23 @@ export function validatePreparedWechatHtml(html, { absoluteDirPath } = {}) {
     }
     if (/^(?:https?:|data:|asset:|\/\/)/i.test(src)) continue;
     const resolved = pathForHtmlAsset(src, absoluteDirPath);
-    if (!resolved || !fsExists(resolved)) errors.push(`第 ${index + 1} 张本地图片不存在:${src}`);
+    if (!resolved || !fsExists(resolved)) {
+      errors.push(`第 ${index + 1} 张本地图片不存在:${src}`);
+      continue;
+    }
+    const unsupportedFormat = unsupportedWechatImageFormat(resolved);
+    if (unsupportedFormat) {
+      errors.push(`第 ${index + 1} 张本地图片为微信不支持的 ${unsupportedFormat} 格式:${src}`);
+    }
   }
   for (const [index, table] of [...document.querySelectorAll('table')].entries()) {
     const rows = [...table.querySelectorAll('tr')];
     if (!rows.length || rows.some((row) => !row.querySelector('th,td'))) {
       errors.push(`第 ${index + 1} 个表格结构为空或损坏`);
     }
+  }
+  if (finalSurveyPath || finalFooterPath) {
+    errors.push(...validateFinalTailOrder(document, { finalSurveyPath, finalFooterPath }));
   }
   if (errors.length) throw new Error(`微信最终 HTML 完整性校验失败:${errors.join('; ')}`);
   return { images: document.querySelectorAll('img').length, tables: document.querySelectorAll('table').length };
@@ -91,6 +136,29 @@ function pathForHtmlAsset(src, absoluteDirPath) {
 function fsExists(filename) {
   try { return fs.existsSync(filename) && fs.statSync(filename).size > 0; }
   catch { return false; }
+}
+
+function unsupportedWechatImageFormat(filename) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(filename, 'r');
+    const header = Buffer.alloc(512);
+    const length = fs.readSync(descriptor, header, 0, header.length, 0);
+    const bytes = header.subarray(0, length);
+    if (bytes.length >= 12
+      && bytes.subarray(0, 4).toString('ascii') === 'RIFF'
+      && bytes.subarray(8, 12).toString('ascii') === 'WEBP') {
+      return 'WebP';
+    }
+    if (/<svg(?:\s|>)/i.test(bytes.toString('utf8'))) return 'SVG';
+  } catch {
+    return undefined;
+  } finally {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch {}
+    }
+  }
+  return undefined;
 }
 
 function effectiveEmFontSize(node) {
@@ -166,39 +234,108 @@ export function alignTerminalReferences(html) {
 }
 
 export function appendFinalFooter(html, footerPath) {
+  if (!footerPath) throw new Error('固定封底路径缺失');
+  return appendTailDescriptors(html, [{
+    path: footerPath,
+    wrapperValue: 'footer',
+    markerName: 'data-zen-final-footer',
+    alt: 'Zen Trading 社群',
+  }]);
+}
+
+export function appendFinalTailImages(html, { surveyPath, footerPath } = {}) {
+  if (!surveyPath || !footerPath) throw new Error('固定尾图必须同时配置调研图与社群封底');
+  return appendTailDescriptors(html, [
+    {
+      path: surveyPath,
+      wrapperValue: 'survey',
+      markerName: 'data-zen-final-survey',
+      alt: 'Zen Trading 内容调研问卷',
+    },
+    {
+      path: footerPath,
+      wrapperValue: 'footer',
+      markerName: 'data-zen-final-footer',
+      alt: 'Zen Trading 社群',
+    },
+  ]);
+}
+
+function appendTailDescriptors(html, descriptors) {
   const dom = new JSDOM(`<body>${String(html || '')}</body>`);
   const document = dom.window.document;
   const root = document.body.children.length === 1 ? document.body.firstElementChild : document.body;
 
   for (const image of [...document.querySelectorAll('img')]) {
     const src = image.getAttribute('src') || '';
-    if (src !== footerPath && image.getAttribute('data-zen-final-footer') !== 'true') continue;
+    const isFixedTail = descriptors.some(({ path: assetPath, markerName }) => (
+      src === assetPath || image.getAttribute(markerName) === 'true'
+    ));
+    if (!isFixedTail) continue;
     const parent = image.parentElement;
     if (parent && parent !== root && parent.children.length === 1 && !parent.textContent.trim()) parent.remove();
     else image.remove();
   }
 
-  const paragraph = document.createElement('p');
-  paragraph.setAttribute('data-zen-final-footer-wrapper', 'true');
-  paragraph.setAttribute('style', 'font-size:0;line-height:0;margin:1em 0 0;padding:0;');
-  const image = document.createElement('img');
-  image.setAttribute('src', footerPath);
-  image.setAttribute('alt', 'Zen Trading 社群');
-  image.setAttribute('data-zen-final-footer', 'true');
-  image.setAttribute('style', 'max-width:100%;width:100%;height:auto;margin:0 auto;display:block;border:0;border-radius:.5em;');
-  paragraph.appendChild(image);
-  root.appendChild(paragraph);
+  const appended = descriptors.map((descriptor) => {
+    const paragraph = document.createElement('p');
+    paragraph.setAttribute('data-zen-final-tail-wrapper', descriptor.wrapperValue);
+    if (descriptor.wrapperValue === 'footer') {
+      paragraph.setAttribute('data-zen-final-footer-wrapper', 'true');
+    }
+    paragraph.setAttribute('style', 'font-size:0;line-height:0;margin:1em 0 0;padding:0;');
+    const image = document.createElement('img');
+    image.setAttribute('src', descriptor.path);
+    image.setAttribute('alt', descriptor.alt);
+    image.setAttribute(descriptor.markerName, 'true');
+    image.setAttribute('style', 'max-width:100%;width:100%;height:auto;margin:0 auto;display:block;border:0;border-radius:.5em;');
+    paragraph.appendChild(image);
+    root.appendChild(paragraph);
+    return paragraph;
+  });
 
-  const last = root.lastElementChild;
-  if (last !== paragraph || root.lastChild !== paragraph) throw new Error('尾图最终节点校验失败');
+  const last = appended.at(-1);
+  if (root.lastElementChild !== last || root.lastChild !== last) throw new Error('固定尾图最终节点校验失败');
+  if (appended.length === 2 && last.previousElementSibling !== appended[0]) {
+    throw new Error('固定尾图顺序校验失败');
+  }
   return document.body.innerHTML;
 }
 
 export function stripFooterMarkdown(markdown, footerPath) {
-  if (!footerPath) return String(markdown || '');
+  return stripFinalTailMarkdown(markdown, [footerPath]);
+}
+
+export function stripFinalTailMarkdown(markdown, assetPaths = []) {
+  const paths = assetPaths.filter(Boolean);
+  if (!paths.length) return String(markdown || '');
   return String(markdown || '')
     .split('\n')
-    .filter((line) => !line.includes(`](${footerPath})`))
+    .filter((line) => !paths.some((assetPath) => line.includes(`](${assetPath})`)))
     .join('\n')
     .replace(/\n{3,}/g, '\n\n');
+}
+
+function validateFinalTailOrder(document, { finalSurveyPath, finalFooterPath }) {
+  if (!finalSurveyPath || !finalFooterPath) return ['固定尾图必须同时配置调研图与社群封底'];
+  const surveyImages = [...document.querySelectorAll('[data-zen-final-survey="true"]')];
+  const footerImages = [...document.querySelectorAll('[data-zen-final-footer="true"]')];
+  const errors = [];
+  if (surveyImages.length !== 1) errors.push(`固定调研图数量应为 1，实际为 ${surveyImages.length}`);
+  if (footerImages.length !== 1) errors.push(`固定社群封底数量应为 1，实际为 ${footerImages.length}`);
+  if (surveyImages[0]?.getAttribute('src') !== finalSurveyPath) errors.push('固定调研图路径不匹配');
+  if (footerImages[0]?.getAttribute('src') !== finalFooterPath) errors.push('固定社群封底路径不匹配');
+  if (errors.length) return errors;
+
+  const surveyWrapper = surveyImages[0].closest('[data-zen-final-tail-wrapper="survey"]');
+  const footerWrapper = footerImages[0].closest('[data-zen-final-tail-wrapper="footer"]');
+  const root = document.body.children.length === 1 ? document.body.firstElementChild : document.body;
+  if (!surveyWrapper || !footerWrapper) errors.push('固定尾图包装节点缺失');
+  if (footerWrapper !== root.lastElementChild || footerWrapper !== root.lastChild) {
+    errors.push('固定社群封底不是最终节点');
+  }
+  if (footerWrapper?.previousElementSibling !== surveyWrapper) {
+    errors.push('固定调研图必须紧邻社群封底并位于其前');
+  }
+  return errors;
 }

@@ -2,6 +2,8 @@ import { generateStructuredTranslation } from './translation-source-text.js';
 
 export async function generateStrictTranslation({
   input,
+  sourceUrl,
+  sourceRequestHeaders,
   workflow,
   writer,
   fetchFn,
@@ -11,10 +13,13 @@ export async function generateStrictTranslation({
   onProgress,
   resumeFromCheckpoint = false,
   translationConfig = {},
+  documentConfig = {},
   signal,
 }) {
   const result = await generateStructuredTranslation({
     input,
+    sourceUrl,
+    sourceRequestHeaders,
     workflow,
     writer,
     fetchFn,
@@ -22,6 +27,7 @@ export async function generateStrictTranslation({
     completeArticle,
     onProgress,
     translationConfig,
+    documentConfig,
     resumeFromCheckpoint,
     signal,
   });
@@ -43,10 +49,14 @@ export async function generateStrictTranslation({
         blockOrder: result.manifest.blockOrder,
         pageCount: result.manifest.pageCount,
         processedPageCount: result.manifest.processedPageCount,
+        pageCoverage: result.manifest.pageCoverage,
         parseQualityScore: result.manifest.parseQualityScore,
         parserAttempts: result.manifest.parserAttempts,
       },
       completeness: result.completeness,
+      validationWarnings: result.warnings,
+      validationExceptions: result.completeness.validationExceptions,
+      contentPolicy: result.contentPolicy,
     };
   }
   return result;

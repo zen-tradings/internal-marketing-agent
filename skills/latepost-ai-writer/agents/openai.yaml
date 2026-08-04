@@ -1,0 +1,4 @@
+interface:
+  display_name: "晚点 AI 写作"
+  short_description: "从证据账本到成稿的中文 AI 商业科技报道完整工作流"
+  default_prompt: "Use $latepost-ai-writer to turn my source material into a rigorous Chinese AI article, automatically choosing the right reporting format and preserving evidence boundaries."

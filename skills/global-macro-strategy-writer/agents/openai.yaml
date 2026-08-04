@@ -1,0 +1,4 @@
+interface:
+  display_name: "全球宏观策略写作"
+  short_description: "将可靠研究素材转成机构级全资产宏观策略与市场判断微信文章"
+  default_prompt: "Use $global-macro-strategy-writer to turn verified macro and market evidence into a Zen Trading WeChat strategy article."

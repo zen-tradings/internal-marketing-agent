@@ -64,6 +64,7 @@ function extraQueries(task) {
 export default {
   id: 'company',
   mode: 'analysis',
+  editorialSkill: 'latepost-ai-writer',
   sourcePolicy: officialFirstPolicy(),
   factReview: true,
   triggers: ['slack'],
@@ -72,6 +73,7 @@ export default {
   get channel() { return envChannel(); },
   get timeoutMs() { return envTimeoutMs(); },
   get research() { return { ...sharedResearch(), extraQueries }; },
+  defaultMethodology: METHODOLOGY,
   retries: 0,
   promptTemplate: (task) => buildPromptTemplate({
     persona: 'Zen Trading 资深股票研究分析师',

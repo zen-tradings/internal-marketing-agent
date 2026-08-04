@@ -19,7 +19,7 @@ if (!fs.existsSync(dbPath)) {
 
 const db = new Database(dbPath, { readonly: true, fileMustExist: true });
 
-const STATUSES = ['queued', 'running', 'done', 'failed', 'interrupted'];
+const STATUSES = ['queued', 'running', 'needs_input', 'done', 'failed', 'cancelled', 'interrupted'];
 
 function formatLocal(ts) {
   if (!ts) return '-';

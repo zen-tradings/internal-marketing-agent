@@ -13,6 +13,7 @@ const METHODOLOGY = `【行业综述框架 — 专属要求】
 export default {
   id: 'sector',
   mode: 'analysis',
+  editorialSkill: 'latepost-ai-writer',
   sourcePolicy: officialFirstPolicy(),
   factReview: true,
   triggers: ['slack'],
@@ -21,6 +22,7 @@ export default {
   get channel() { return envChannel(); },
   get timeoutMs() { return envTimeoutMs(); },
   get research() { return sharedResearch(); },
+  defaultMethodology: METHODOLOGY,
   retries: 0,
   promptTemplate: (task) => buildPromptTemplate({
     persona: 'Zen Trading 公众号行业研究分析师',

@@ -23,6 +23,7 @@ import morningWorkflow from './workflows/morning.js';
 import translateWorkflow from './workflows/translate.js';
 import companyWorkflow from './workflows/company.js';
 import emailWorkflow from './workflows/email.js';
+import macroWorkflow from './workflows/macro.js';
 import mockChannel from './channels/mock.js';
 import wechatDraft from './channels/wechat-draft.js';
 import customerioDraft from './channels/customerio-draft.js';
@@ -37,6 +38,7 @@ const WORKFLOWS = {
   translate: translateWorkflow,
   company: companyWorkflow,
   email: emailWorkflow,
+  macro: macroWorkflow,
 };
 const CHANNELS = { mock: mockChannel, 'wechat-draft': wechatDraft, 'customerio-draft': customerioDraft };
 
@@ -46,6 +48,7 @@ export async function runWithRetry(
   retryDelayMs = 0,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   signal,
+  shouldRetry,
 ) {
   let last;
   for (let i = 0; i <= retries; i++) {
@@ -54,9 +57,12 @@ export async function runWithRetry(
     catch (e) {
       if (isTaskCancelled(e, signal)) throw cancellationErrorFromSignal(signal);
       last = e;
-      if (i < retries) {
+      const retryAllowed = typeof shouldRetry !== 'function' || shouldRetry(e);
+      if (i < retries && retryAllowed) {
         console.error(`[hub] 执行失败,准备第 ${i + 2}/${retries + 1} 次尝试:${e?.message || e}`);
         if (retryDelayMs > 0) await sleepWithCancellation(sleep, retryDelayMs, signal);
+      } else {
+        break;
       }
     }
   }
@@ -105,12 +111,44 @@ export function makeHandler(deps) {
           workflow: runtimeWorkflow,
           input: run.input,
           config,
+          taskContext: {
+            promptRevision: notify.promptRevision,
+            threadKey: notify.threadKey,
+            attachments: notify.attachments,
+            resolvedClarification: notify.resolvedClarification,
+            routeReason: notify.routeReason,
+          },
           onProgress: (progress) => notifyBestEffort(deps.notifier, 'progress', notify, progress),
           resumeFromCheckpoint,
           signal,
         });
+        if (res.needsInput) {
+          const err = stageError('needs_input', res.stderr || res.clarification?.question || '任务需要用户确认');
+          err.needsInput = true;
+          err.details = res.clarification || { question: err.message };
+          throw err;
+        }
         if (!res.ok) { const err = new Error(res.stderr); err.stage = 'generate'; throw err; }
         throwIfTaskCancelled(signal);
+        if (Array.isArray(res.warnings) && res.warnings.length) {
+          const highRiskRetained = res.warnings
+            .filter((item) => /保留待人工复核\([^/]+\/high\//.test(item)).length;
+          const warningHeading = runtimeWorkflow.mode === 'translation'
+            ? `直译有 ${res.completeness?.reviewRequiredCount || res.warnings.length} 个译块需人工复核，已按策略创建草稿:`
+            : runtimeWorkflow.id === 'macro' && highRiskRetained
+              ? `宏观事实审计提醒 ${res.warnings.length} 项，其中 ${highRiskRetained} 项高风险推断/表述已保留，不阻断草稿，请人工复核:`
+              : `事实审计报告 ${res.warnings.length} 项（含自动修复与保留待复核）:`;
+          const shownWarnings = res.warnings.slice(0, 6).map((item) => `• ${item}`);
+          if (res.warnings.length > shownWarnings.length) {
+            shownWarnings.push(`• 其余 ${res.warnings.length - shownWarnings.length} 项见 research-trace.json`);
+          }
+          await notifyBestEffort(
+            deps.notifier,
+            'warn',
+            notify,
+            `${warningHeading}\n${shownWarnings.join('\n')}`,
+          );
+        }
 
         // dry-run:HUB_DRY_RUN 置位时,不管 workflow 声明的是哪个渠道,一律强制走 mock,
         // 用于本地/CI 演练全流程而不触碰真实微信 API。严格真值判断,避免 "0"/"false"/空串
@@ -123,7 +161,13 @@ export function makeHandler(deps) {
         if (runtimeWorkflow.mode === 'translation' && deps.notifier?.progress) {
           await notifyBestEffort(deps.notifier, 'progress', notify, {
             stage: 'draft',
-            message: DRY ? '完整性校验通过，正在生成 dry-run 草稿结果' : '完整性校验通过，正在创建微信公众号草稿',
+            message: res.completeness?.reviewRequiredCount
+              ? (DRY
+                ? '结构完整性通过且存在待复核译块，正在生成 dry-run 草稿结果'
+                : '结构完整性通过且存在待复核译块，正在创建微信公众号草稿')
+              : (DRY
+                ? '严格等价与完整性校验通过，正在生成 dry-run 草稿结果'
+                : '严格等价与完整性校验通过，正在创建微信公众号草稿'),
             completed: 1,
             total: 1,
           });
@@ -138,11 +182,18 @@ export function makeHandler(deps) {
           notifier: deps.notifier,
           runId: run.id,
           resumeFromCheckpoint,
+          contentPolicy: res.contentPolicy || {},
         });
         store.setMediaId(run.id, mediaId, title); // 早写,发布成功后立刻落库,支撑上面的幂等判断
         setPhase('published');
         return { mediaId, title, sourceCount: res.sources?.length || 0, completeness: res.completeness };
-      }, runtimeWorkflow.retries, runtimeWorkflow.retryDelayMs, undefined, signal);
+      },
+      runtimeWorkflow.retries,
+      runtimeWorkflow.retryDelayMs,
+      undefined,
+      signal,
+      runtimeWorkflow.shouldRetry,
+    );
       store.setStatus(run.id, 'done', { title, mediaId, finishedAt: Date.now() });
       if (deps.notifier) await notifyBestEffort(deps.notifier, 'success', notify, { title, mediaId, channelId: runtimeWorkflow.channel, sourceCount, completeness });
       else console.error('[hub] notifier 未就绪,跳过 success 通知(启动窗口期竞态)', { runId: run.id, title, mediaId });
@@ -159,6 +210,34 @@ export function makeHandler(deps) {
             runId: run.id,
             cleaned: cleanup.cleaned,
             cleanupError: cleanup.error,
+          });
+        }
+        return;
+      }
+      if (e.needsInput || e.stage === 'needs_input') {
+        const cleanup = cleanupRunArtifacts(workflows, run, { preserveResearchTrace: true });
+        store.setStatus(run.id, 'needs_input', {
+          stage: 'needs_input',
+          error: e.message,
+          finishedAt: Date.now(),
+        });
+        if (notify.threadKey) {
+          try {
+            store.setSlackClarification?.(notify.threadKey, {
+              runId: run.id,
+              question: e.details?.question || e.message,
+              details: e.details || {},
+              cleaned: cleanup.cleaned,
+              createdAt: Date.now(),
+            });
+          } catch (storeError) {
+            console.error('[hub] 澄清上下文写入失败:', storeError?.message || storeError);
+          }
+        }
+        if (deps.notifier) {
+          await notifyBestEffort(deps.notifier, 'needsInput', notify, {
+            question: e.details?.question || e.message,
+            details: e.details || {},
           });
         }
         return;
@@ -188,11 +267,18 @@ async function sleepWithCancellation(sleep, ms, signal) {
   }
 }
 
-export function cleanupRunArtifacts(workflows, run) {
+export function cleanupRunArtifacts(workflows, run, { preserveResearchTrace = false } = {}) {
   const workflow = workflows?.[run?.workflowId];
   if (!workflow?.workDir || !run?.id) return { cleaned: false };
   const artifactDir = runWorkDir(workflow.workDir, run.id);
   try {
+    if (preserveResearchTrace && fs.existsSync(artifactDir)) {
+      for (const entry of fs.readdirSync(artifactDir)) {
+        if (entry === 'research-trace.json') continue;
+        fs.rmSync(`${artifactDir}/${entry}`, { recursive: true, force: true });
+      }
+      return { cleaned: true, artifactDir, preserved: ['research-trace.json'] };
+    }
     fs.rmSync(artifactDir, { recursive: true, force: true });
     return { cleaned: true, artifactDir };
   } catch (error) {

@@ -8,6 +8,7 @@ import {
 
 test('固定模板注册表不可变且 mock 渠道豁免', () => {
   assert.equal(Object.isFrozen(FIXED_DRAFT_TEMPLATE_IDS), true);
+  assert.equal(FIXED_DRAFT_TEMPLATE_IDS['wechat-draft'], 'zen-wechat/zen-trading@4');
   assert.equal(assertFixedDraftTemplate('mock', {}), 'mock');
 });
 

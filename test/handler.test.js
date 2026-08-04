@@ -29,11 +29,15 @@ function makeNotifier() {
   const successCalls = [];
   const failureCalls = [];
   const cancelledCalls = [];
+  const needsInputCalls = [];
+  const warnCalls = [];
   return {
-    successCalls, failureCalls, cancelledCalls,
+    successCalls, failureCalls, cancelledCalls, needsInputCalls, warnCalls,
     async success(notify, payload) { successCalls.push({ notify, payload }); },
     async failure(notify, payload) { failureCalls.push({ notify, payload }); },
     async cancelled(notify, payload) { cancelledCalls.push({ notify, payload }); },
+    async needsInput(notify, payload) { needsInputCalls.push({ notify, payload }); },
+    async warn(notify, message) { warnCalls.push({ notify, message }); },
   };
 }
 
@@ -87,6 +91,24 @@ test('happy path:生成 + 发布成功 → done,success 调用一次,failure 不
   assert.equal(store._row().media_id, 'M');
   assert.equal(notifier.successCalls.length, 1);
   assert.equal(notifier.failureCalls.length, 0);
+});
+
+test('macro 高风险推断保留时发 Slack 提醒但不阻断草稿', async () => {
+  const workflows = { macro: { id: 'macro', mode: 'analysis', channel: 'mock', retries: 0 } };
+  const runWriter = async () => ({
+    ok: true,
+    articlePath: '/tmp/macro.md',
+    warnings: ['事实审计已保留待人工复核(medium/high/core):美元可能维持偏强'],
+  });
+  const { deps, store, notifier, publishCalls } = baseDeps({ workflows, runWriter });
+
+  await makeHandler(deps)({ id: 'macro-1', workflowId: 'macro', input: '分析美元路径' });
+
+  assert.equal(publishCalls.length, 1);
+  assert.equal(store._row().status, 'done');
+  assert.equal(notifier.warnCalls.length, 1);
+  assert.match(notifier.warnCalls[0].message, /高风险推断\/表述已保留，不阻断草稿/);
+  assert.equal(notifier.successCalls.length, 1);
 });
 
 test('真实草稿渠道未锁定登记模板时在 publish 前拦截', async () => {
@@ -177,6 +199,41 @@ test('重试后成功:workflow.retries=1,首次抛错次次成功 → 最终 don
   assert.equal(notifier.failureCalls.length, 0);
 });
 
+test('直译确定性 PDF 权限错误不会重复运行或重复发送进度', async () => {
+  let attempts = 0;
+  let progressCalls = 0;
+  const runWriter = async ({ onProgress }) => {
+    attempts += 1;
+    await onProgress({ stage: 'source', message: '正在提取原文结构' });
+    return {
+      ok: false,
+      stderr: 'Slack PDF 下载返回了登录页面而不是文件。请添加 files:read 并重新安装 App。',
+    };
+  };
+  const workflows = {
+    translate: {
+      id: 'translate',
+      mode: 'translation',
+      workDir: '/tmp/zen-handler-test',
+      channel: 'mock',
+      retries: 3,
+      retryDelayMs: 0,
+      shouldRetry: (error) => /网络|超时|HTTP 5\d\d/.test(error?.message || ''),
+    },
+  };
+  const notifier = makeNotifier();
+  notifier.progress = async () => { progressCalls += 1; };
+  const { deps, store, publishCalls } = baseDeps({ runWriter, workflows, notifier });
+
+  await makeHandler(deps)({ id: 'pdf-run', workflowId: 'translate', input: 'translate attachment' });
+
+  assert.equal(attempts, 1);
+  assert.equal(progressCalls, 1);
+  assert.equal(publishCalls.length, 0);
+  assert.equal(store._row().status, 'failed');
+  assert.match(store._row().error, /files:read/);
+});
+
 test('成功通知失败不反向把已发布任务改成 failed', async () => {
   const notifier = {
     async success() { throw new Error('Slack channel_required'); },
@@ -237,4 +294,47 @@ test('Slack 取消生成中任务后标记 cancelled 并删除独立运行目录
   assert.equal(notifier.failureCalls.length, 0);
   assert.equal(notifier.cancelledCalls.length, 1);
   assert.equal(notifier.cancelledCalls[0].payload.cleaned, true);
+});
+
+test('分析核心冲突转为 needs_input，保留研究轨迹并清理其它半成品，不进入发布', async () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-handler-needs-input-'));
+  let actualWorkDir;
+  const clarificationCalls = [];
+  const store = makeStore({
+    notify_json: JSON.stringify({
+      channel: 'C1',
+      ts: '1.0',
+      user: 'U1',
+      threadKey: 'C1:1.0',
+      promptRevision: 2,
+    }),
+  });
+  store.setSlackClarification = (threadKey, payload) => clarificationCalls.push({ threadKey, payload });
+  const workflows = { wechat: { id: 'wechat', mode: 'analysis', workDir: baseDir, channel: 'mock', retries: 0 } };
+  const runWriter = async ({ workflow, taskContext }) => {
+    actualWorkDir = workflow.workDir;
+    assert.equal(taskContext.promptRevision, 2);
+    fs.mkdirSync(actualWorkDir, { recursive: true });
+    fs.writeFileSync(path.join(actualWorkDir, 'research-trace.json'), '{"needsInput":true}\n');
+    fs.writeFileSync(path.join(actualWorkDir, 'article.md'), 'partial');
+    return {
+      ok: false,
+      needsInput: true,
+      stderr: '请确认 Opus 5',
+      clarification: { question: '请确认 Opus 5', conflicts: [] },
+    };
+  };
+  const { deps, notifier, publishCalls } = baseDeps({ store, workflows, runWriter });
+
+  await makeHandler(deps)(RUN);
+
+  assert.equal(store._row().status, 'needs_input');
+  assert.equal(store._row().stage, 'needs_input');
+  assert.equal(publishCalls.length, 0);
+  assert.equal(notifier.failureCalls.length, 0);
+  assert.equal(notifier.needsInputCalls.length, 1);
+  assert.equal(clarificationCalls.length, 1);
+  assert.equal(clarificationCalls[0].threadKey, 'C1:1.0');
+  assert.equal(fs.existsSync(path.join(actualWorkDir, 'research-trace.json')), true);
+  assert.equal(fs.existsSync(path.join(actualWorkDir, 'article.md')), false);
 });

@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS slack_threads (
   workflow_id TEXT NOT NULL,
   messages_json TEXT NOT NULL,
   last_run_id TEXT,
+  prompt_revision INTEGER NOT NULL DEFAULT 1,
+  clarification_json TEXT,
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_slack_threads_updated ON slack_threads(updated_at);
@@ -45,6 +47,8 @@ export function openStore(dbPath) {
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
   db.exec(SCHEMA);
+  ensureColumn(db, 'slack_threads', 'prompt_revision', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(db, 'slack_threads', 'clarification_json', 'TEXT');
   return {
     createRun({ id, workflowId, source, input, notify }) {
       db.prepare(
@@ -75,20 +79,49 @@ export function openStore(dbPath) {
       if (!row) return undefined;
       try { row.messages = JSON.parse(row.messages_json || '[]'); }
       catch { row.messages = []; }
+      try { row.clarification = JSON.parse(row.clarification_json || 'null'); }
+      catch { row.clarification = null; }
       return row;
     },
-    upsertSlackThread({ threadKey, channelId, threadTs, workflowId, messages, lastRunId }) {
+    upsertSlackThread({ threadKey, channelId, threadTs, workflowId, messages, lastRunId, promptRevision }) {
       const bounded = Array.isArray(messages) ? messages.slice(-12) : [];
       db.prepare(`
         INSERT INTO slack_threads
-          (thread_key, channel_id, thread_ts, workflow_id, messages_json, last_run_id, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+          (thread_key, channel_id, thread_ts, workflow_id, messages_json, last_run_id, prompt_revision, clarification_json, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
         ON CONFLICT(thread_key) DO UPDATE SET
           workflow_id = excluded.workflow_id,
           messages_json = excluded.messages_json,
           last_run_id = COALESCE(excluded.last_run_id, slack_threads.last_run_id),
+          prompt_revision = excluded.prompt_revision,
+          clarification_json = NULL,
           updated_at = excluded.updated_at
-      `).run(threadKey, channelId, threadTs, workflowId, JSON.stringify(bounded), lastRunId ?? null, Date.now());
+      `).run(
+        threadKey,
+        channelId,
+        threadTs,
+        workflowId,
+        JSON.stringify(bounded),
+        lastRunId ?? null,
+        Number.isInteger(promptRevision) && promptRevision > 0 ? promptRevision : 1,
+        Date.now(),
+      );
+    },
+    setSlackClarification(threadKey, clarification) {
+      if (!threadKey) return 0;
+      return db.prepare(`
+        UPDATE slack_threads
+        SET clarification_json = ?, updated_at = ?
+        WHERE thread_key = ?
+      `).run(JSON.stringify(clarification || {}), Date.now(), threadKey).changes;
+    },
+    clearSlackClarification(threadKey) {
+      if (!threadKey) return 0;
+      return db.prepare(`
+        UPDATE slack_threads
+        SET clarification_json = NULL, updated_at = ?
+        WHERE thread_key = ?
+      `).run(Date.now(), threadKey).changes;
     },
     claimSlackEvent(eventKey) {
       if (!eventKey) return false;
@@ -104,7 +137,7 @@ export function openStore(dbPath) {
       return db.prepare(`
         SELECT id, workflow_id
         FROM runs
-        WHERE status IN ('done', 'failed', 'interrupted', 'cancelled')
+        WHERE status IN ('done', 'failed', 'interrupted', 'cancelled', 'needs_input')
           AND COALESCE(finished_at, created_at) < ?
         ORDER BY created_at
       `).all(before);
@@ -132,7 +165,27 @@ export function openStore(dbPath) {
               error LIKE '%fetch failed%'
               OR error LIKE '网络请求失败%'
               OR error LIKE '%ECONNRESET%'
+              OR error LIKE '结构化翻译校验失败:%'
+              OR error LIKE '直译完整性门禁失败:%'
             ))
+          )
+      `).run(id).changes;
+    },
+    requeueRecoverableAnalysisGate(id) {
+      return db.prepare(`
+        UPDATE runs
+        SET status = 'queued', stage = NULL, error = NULL, started_at = NULL, finished_at = NULL
+        WHERE id = ?
+          AND workflow_id IN ('wechat', 'sector', 'company', 'earnings')
+          AND status = 'failed'
+          AND media_id IS NULL
+          AND (
+            (stage = 'gate' AND (
+              error LIKE '%正文包含代码围栏%'
+              OR error LIKE '%四空格缩进块%'
+            ))
+            OR (stage = 'publish'
+              AND error LIKE '发布失败:微信最终 HTML 完整性校验失败:%代码块含非语法高亮子节点%')
           )
       `).run(id).changes;
     },
@@ -149,7 +202,7 @@ export function openStore(dbPath) {
         if (Number.isFinite(runBefore)) {
           result.runs = db.prepare(`
             DELETE FROM runs
-            WHERE status IN ('done', 'failed', 'interrupted', 'cancelled')
+            WHERE status IN ('done', 'failed', 'interrupted', 'cancelled', 'needs_input')
               AND COALESCE(finished_at, created_at) < ?
           `).run(runBefore).changes;
         }
@@ -165,4 +218,10 @@ export function openStore(dbPath) {
     },
     close() { db.close(); },
   };
+}
+
+function ensureColumn(db, table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (columns.some((item) => item.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }

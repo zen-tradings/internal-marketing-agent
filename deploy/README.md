@@ -6,7 +6,9 @@ manual process with the same Slack tokens or SQLite database.
 ## Filesystem layout
 
 ```text
-/opt/zen-content-hub/          checked-out repository
+/opt/zen-content-hub/          active immutable release (`.deploy-commit`)
+/opt/zen-content-hub.release-<sha>/  staged release before activation
+/opt/zen-content-hub.rollback-<sha>/ previous release kept for rollback
 /etc/zen-content-hub/          secrets and runtime configuration directory
 /etc/zen-content-hub/zen-content-hub.env  service environment (0640, root:zenbot)
 /var/lib/zen-content-hub/      SQLite database and per-run artifacts
@@ -30,9 +32,31 @@ HEALTH_HOST=127.0.0.1
 HEALTH_PORT=8080
 MAX_CONCURRENCY=1
 MAX_QUEUE_SIZE=100
+OPENROUTER_MODEL=z-ai/glm-5.2
+OPENROUTER_PLANNER_MODEL=z-ai/glm-5.2
+OPENROUTER_REVIEW_MODEL=z-ai/glm-5.2
+ANALYSIS_PIPELINE_VERSION=v2
+ANALYSIS_SEARCH_MAX_QUERIES=8
+ANALYSIS_RECENT_WINDOW_DAYS=60
+# Optional comma-separated extensions to the built-in editorial source policy.
+EXA_EXCLUDED_MEDIA_DOMAINS=
+EXA_INDEPENDENT_MEDIA_DOMAINS=
+NOTION_API_TOKEN=replace-if-private-notion-pages-are-used
+GOOGLE_DOCS_CLIENT_ID=replace-if-private-google-docs-are-used
+GOOGLE_DOCS_CLIENT_SECRET=replace-if-private-google-docs-are-used
+GOOGLE_DOCS_REFRESH_TOKEN=replace-if-private-google-docs-are-used
+# Legacy short-lived fallback only:
+GOOGLE_DOCS_ACCESS_TOKEN=
+GITHUB_TOKEN=replace-if-private-github-repositories-are-used
+SLACK_EDIT_DEBOUNCE_MS=5000
 SLACK_ALLOWED_USER_IDS=U0123456789
 SLACK_ALLOWED_CHANNEL_IDS=C0123456789
 ```
+
+The Slack app's Bot Token Scopes must include `files:read` before it can
+download private PDF or text attachments from `files.slack.com`. After adding
+the scope, reinstall the app to the workspace and rotate `SLACK_BOT_TOKEN` in
+the protected environment if Slack issues a new token.
 
 Structured HTML and arXiv HTML translation run directly in this Node.js
 service. PDF translation sends the downloaded PDF to Datalab's hosted
@@ -41,6 +65,21 @@ artifact directory before translation and rendering continue locally. The
 Droplet therefore does not need Marker/MinerU models; `DATALAB_API_KEY` is
 required only when a translation resolves to PDF. Keep it in the protected
 service environment, never in the repository.
+
+Paginated Datalab HTML is consumed as the complete ordered set of
+`.page[data-page-id]` containers rather than passed through the single-article
+Readability selector. A completed response is accepted only when its quality
+score, requested page IDs, page count, and image references are coherent; the
+service then compares Datalab text and extracted block coverage with Poppler's
+local text layer. For a PDF-related release, staged acceptance must exercise a
+real multi-page PDF without invoking OpenRouter or creating a WeChat draft and
+must confirm requested/processed pages plus figure/table counts in the manifest.
+
+For original analysis, text-layer PDFs can fall back to Poppler `pdftotext`;
+scanned PDFs still require Datalab OCR. Public Google Docs and GitHub
+repositories work without access tokens. Configure the optional read-only
+credentials above only for private material; the service exchanges the Google
+refresh token for short-lived access tokens automatically.
 
 The application does not enforce a public-IP allowlist and does not reject
 proxy environment variables. Outbound routing follows the host and Node.js
@@ -69,10 +108,125 @@ sudo systemctl status zen-content-hub
 curl --fail http://127.0.0.1:8080/health
 ```
 
-Before each deployment, run `npm ci && npm run check`. Deploy by pulling the
-reviewed commit and running `sudo systemctl restart zen-content-hub`. SIGTERM
-stops new queue intake and gives the active task up to 25 seconds to finish;
-queued tasks remain in SQLite and are restored by the new process.
+## Updating an existing service
+
+Production uses an immutable release directory rather than an in-place Git
+checkout. Build the archive from an explicit reviewed commit, never from a
+dirty working tree. Extract it into `/opt/zen-content-hub.release-<sha>`, write
+the full commit hash to its `.deploy-commit`, set ownership to `zenbot:zenbot`,
+then run `npm ci && npm run check` inside that staged directory.
+
+Before activation:
+
+1. Run the SQLite-aware backup service and verify that a new snapshot exists.
+2. Confirm `/ready` reports `active=0`, `pending=0`, Slack connected and
+   `ok=true`.
+3. Confirm the rollback destination does not already exist.
+4. Stop `zen-content-hub`, move the current directory to
+   `/opt/zen-content-hub.rollback-<old-sha>`, move the staged release to
+   `/opt/zen-content-hub`, and start the same systemd unit.
+5. Verify `.deploy-commit`, `/ready`, one Node process and recent service logs.
+
+SIGTERM stops new queue intake and gives the active task up to 25 seconds to
+finish; queued tasks remain in SQLite and are restored by the new process. If
+startup or readiness fails, restore the previous directory and protected
+environment-file backup before restarting the unit.
+
+## One-time macro release acceptance
+
+The `macro` workflow has no cron and never sends a Slack test message. After a
+new immutable release is active, first require `/ready` to report `ok=true`,
+`active=0`, and `pending=0`, then confirm systemd owns exactly one service Node
+process. Run the acceptance command directly in a transient unit that reads the
+same protected environment file but does not start Slack or a second hub
+instance:
+
+```bash
+sudo systemd-run --wait --pipe --collect \
+  --unit=zen-content-hub-macro-acceptance \
+  --uid=zenbot \
+  --property=WorkingDirectory=/opt/zen-content-hub \
+  --property=EnvironmentFile=/etc/zen-content-hub/zen-content-hub.env \
+  /usr/bin/node scripts/run-macro-acceptance.mjs
+```
+
+This performs live research, V2 evidence editing, writing, sentence-level
+audit, fixed-template rendering and exactly one WeChat draft creation. It does
+not publish, send or schedule the draft. The final JSON line must contain a
+non-empty `mediaId`, both editorial skill IDs, the selected macro archetype,
+`auditApproved=true`, the article path and `researchTracePath`. Inspect the
+article and trace at those exact paths, then verify the queue is still idle and
+review recent service and transient-unit logs. The trace must contain routing
+reason `production-direct-acceptance`, evidence boundaries, selected sources
+and a non-skipped audit. Critical numeric, market-pricing and market-reaction
+claims returned by the audit must have at least one supporting evidence ID in
+the final selected references. Retained high-risk inferences are review
+warnings, not release blockers; normal Slack-triggered tasks surface them in
+the original thread.
+
+For a local rehearsal that must not touch WeChat, use:
+
+```bash
+npm run accept:macro -- --dry-run
+```
+
+Treat readiness failure, multiple service Node processes, a failed transient
+unit, missing `mediaId`, missing trace fields, skipped audit or a non-idle queue
+as release failure. The release operator must immediately stop the new unit,
+move the failed active directory back to its staged/failed name, restore the
+previous immutable rollback directory as `/opt/zen-content-hub`, restart the
+single systemd service, verify `/ready`, and stop the rollout. Preserve the
+failed release directory, acceptance output, journal logs and trace for
+diagnosis; do not retry against production or send a Slack test message.
+
+## Recovering a failed translation
+
+Use the restricted recovery command only after the target release has passed
+its checks and is active. Its argument is the SQLite `runs.id`, not the
+hashed run-directory name. The command rejects non-translation workflows,
+tasks without a valid checkpoint, unsupported failure types and any task that
+already has a `media_id`.
+
+```bash
+run_id=replace-with-database-run-id
+sudo -u zenbot env \
+  DB_PATH=/var/lib/zen-content-hub/runs.db \
+  WORK_DIR=/var/lib/zen-content-hub/work \
+  npm --prefix /opt/zen-content-hub run requeue:translation -- "$run_id"
+sudo systemctl restart zen-content-hub
+```
+
+After restart, verify the same row moves from `queued` to `running` and then
+to `done`, the existing checkpoint advances, and exactly one non-empty
+`media_id` is stored. A changed source hash intentionally invalidates the old
+checkpoint and restarts translation from the beginning.
+
+For a V2 analysis that failed under an older release only because the WeChat
+gate rejected fenced code or a four-space indented block, or because the
+historical code renderer emitted safe line-break nodes outside its old final
+HTML allowlist, use the separate restricted command. It accepts only `wechat`,
+`sector`, `company`, or `earnings` rows with those exact errors, requires valid
+Slack notification metadata, and refuses any row with a `media_id` or a
+different error.
+
+```bash
+run_id=replace-with-database-run-id
+sudo -u zenbot env \
+  DB_PATH=/var/lib/zen-content-hub/runs.db \
+  npm --prefix /opt/zen-content-hub run requeue:analysis-gate -- "$run_id"
+sudo systemctl restart zen-content-hub
+```
+
+Both recovery commands only change the database row to `queued`; the one
+systemd instance performs the actual work after restart.
+
+Analysis V2 is the production default. `ANALYSIS_PIPELINE_VERSION=v1` remains
+only as a single-instance emergency fallback; do not run V1 and V2 as separate
+processes. Inspect `research-trace.json` during production acceptance. It records
+`pipelineVersion`, the immutable task contract, bilingual search plan, evidence
+matrix, editorial source classification and sentence-level audit even when a
+task pauses in `needs_input`. Remove the V1 code path only in a separately
+reviewed change.
 
 Back up `/var/lib/zen-content-hub/runs.db` together with its `-wal` and `-shm`
 files using a SQLite-aware snapshot or backup command. Keep only one application
@@ -97,3 +251,9 @@ Snapshots are written to `/var/lib/zen-content-hub/backups/` and retained for
 14 days. They protect against application-level database mistakes but remain on
 the same Droplet; use a separately confirmed off-host or DigitalOcean backup for
 Droplet-level disaster recovery.
+
+Release directories and uploaded `/tmp/zen-content-hub-*.tar` archives are not
+automatically pruned. Inventory them after live verification, preserve the
+active directory and the rollback releases required by the current retention
+decision, and remove only explicit reviewed paths. Never use a recursive
+wildcard that could match `/opt/zen-content-hub`.

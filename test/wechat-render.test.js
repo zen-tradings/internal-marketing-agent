@@ -7,7 +7,9 @@ import path from 'node:path';
 import {
   alignTerminalReferences,
   appendFinalFooter,
+  appendFinalTailImages,
   normalizeBodyTypography,
+  normalizeCodeBreaks,
   removeDuplicateReferenceSections,
   styleKeyHighlights,
   validatePreparedWechatHtml,
@@ -24,6 +26,43 @@ test('微信最终 HTML:尾图移动到脚注和来源之后且只出现一次',
   assert.equal(root.lastElementChild.getAttribute('data-zen-final-footer-wrapper'), 'true');
   assert.equal(root.lastElementChild.nextSibling, null);
   assert.equal(root.lastElementChild.textContent, '');
+});
+
+test('微信最终 HTML:调研图与社群封底固定为最后两张且顺序不可交换', () => {
+  const survey = 'asset:zen-survey-qr.jpg';
+  const footer = 'asset:zen-footer-qr.png';
+  const html = `<section><p><img src="${footer}"></p><p>正文</p><p><img src="${survey}"></p><section class="footnotes">脚注</section></section>`;
+  const output = appendFinalTailImages(html, { surveyPath: survey, footerPath: footer });
+  const document = new JSDOM(`<body>${output}</body>`).window.document;
+  const root = document.body.firstElementChild;
+  const tail = [...root.children].slice(-2);
+
+  assert.equal(document.querySelectorAll('[data-zen-final-survey="true"]').length, 1);
+  assert.equal(document.querySelectorAll('[data-zen-final-footer="true"]').length, 1);
+  assert.equal(tail[0].getAttribute('data-zen-final-tail-wrapper'), 'survey');
+  assert.equal(tail[1].getAttribute('data-zen-final-tail-wrapper'), 'footer');
+  assert.equal(tail[1], root.lastChild);
+  assert.doesNotThrow(() => validatePreparedWechatHtml(output, {
+    finalSurveyPath: survey,
+    finalFooterPath: footer,
+  }));
+
+  root.insertBefore(tail[1], tail[0]);
+  assert.throws(() => validatePreparedWechatHtml(document.body.innerHTML, {
+    finalSurveyPath: survey,
+    finalFooterPath: footer,
+  }), /固定社群封底不是最终节点|固定调研图必须紧邻社群封底并位于其前/);
+});
+
+test('微信最终 HTML:固定尾图必须成对配置', () => {
+  assert.throws(
+    () => appendFinalTailImages('<p>正文</p>', { surveyPath: '/survey.jpg' }),
+    /必须同时配置/,
+  );
+  assert.throws(
+    () => validatePreparedWechatHtml('<p>正文</p>', { finalFooterPath: '/footer.png' }),
+    /必须同时配置/,
+  );
 });
 
 test('微信最终 HTML:文末引用链接及列表强制左对齐', () => {
@@ -84,4 +123,42 @@ test('微信最终 HTML:校验乱码、空表格、坏图和本地图片存在�
     () => validatePreparedWechatHtml('<p>坏字�</p><img src="missing.png"><table></table>', { absoluteDirPath: dir }),
     /疑似乱码.*本地图片不存在.*表格结构为空或损坏/,
   );
+});
+
+test('微信最终 HTML:在调用微信 API 前拦截本地 WebP 和 SVG', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-wechat-image-format-'));
+  fs.writeFileSync(
+    path.join(dir, 'disguised.png'),
+    Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBPVP8 ')]),
+  );
+  fs.writeFileSync(path.join(dir, 'vector.dat'), Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>'));
+
+  assert.throws(
+    () => validatePreparedWechatHtml(
+      '<img src="disguised.png"><img src="vector.dat">',
+      { absoluteDirPath: dir },
+    ),
+    /微信不支持的 WebP.*微信不支持的 SVG/,
+  );
+});
+
+test('微信最终 HTML:合法浅色代码块通过，危险或损坏代码结构拦截', () => {
+  assert.doesNotThrow(() => validatePreparedWechatHtml(
+    '<pre style="background:#F6F7F9"><code class="hljs"><span>print</span>(1)</code></pre>',
+  ));
+  assert.throws(
+    () => validatePreparedWechatHtml('<pre>missing code</pre><script>alert(1)</script>'),
+    /禁止的可执行或嵌入节点.*缺少唯一的 code 子节点/,
+  );
+  assert.throws(
+    () => validatePreparedWechatHtml('<pre><code><a href="https://example.com">bad</a></code></pre>'),
+    /含非语法高亮子节点/,
+  );
+});
+
+test('微信最终 HTML:Wenyan 代码换行节点转成 pre 内纯文本换行', () => {
+  const normalized = normalizeCodeBreaks('<pre><code>ASCII<br><span class="hljs-keyword">line</span><br>end</code></pre>');
+  assert.doesNotMatch(normalized, /<br/i);
+  assert.match(normalized, /ASCII\n<span class="hljs-keyword">line<\/span>\nend/);
+  assert.doesNotThrow(() => validatePreparedWechatHtml(normalized));
 });

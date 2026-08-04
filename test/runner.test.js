@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runWriter, sourcePolicyFor } from '../src/core/runner.js';
+import {
+  isGovernmentFundedMediaSource,
+  runWriter,
+  sanitizeExaDomains,
+  selectAnalysisSources,
+  sourcePolicyFor,
+} from '../src/core/runner.js';
 import { loadConfig } from '../src/config/index.js';
 
 function tempWorkflow(overrides = {}) {
@@ -25,6 +31,66 @@ function jsonResponse(body, init = {}) {
     async text() { return JSON.stringify(body); },
   };
 }
+
+test('Exa includeDomains 会移除已知不支持的 X/Twitter 域名，避免整条优先检索 403', () => {
+  assert.deepEqual(
+    sanitizeExaDomains(['trendforce.com', 'x.com', 'twitter.com', 'www.x.com', 'trendforce.com']),
+    ['trendforce.com'],
+  );
+});
+
+test('搜索门禁排除政府资助媒体，但保留监管原始文件和独立报道', () => {
+  assert.equal(isGovernmentFundedMediaSource({ url: 'https://www.bbc.com/news/a' }), true);
+  assert.equal(isGovernmentFundedMediaSource({ url: 'https://www.sec.gov/Archives/a' }), false);
+  assert.equal(isGovernmentFundedMediaSource({ url: 'https://www.reuters.com/world/a' }), false);
+  assert.deepEqual(
+    sanitizeExaDomains(['news.bbc.co.uk', 'reuters.com', 'sec.gov']),
+    ['reuters.com', 'sec.gov'],
+  );
+});
+
+test('同一检索层级优先英文或独立第三方，并从候选结果中剔除政府资助媒体', () => {
+  const selected = selectAnalysisSources([
+    {
+      title: '政府资助媒体',
+      url: 'https://www.bbc.com/news/a',
+      publishedDate: '2026-07-26',
+      retrievalLane: 'open',
+      text: 'English report',
+    },
+    {
+      title: 'Generic English source',
+      url: 'https://generic.example/en',
+      publishedDate: '2026-07-26',
+      retrievalLane: 'open',
+      text: 'English market report from an unknown publisher.',
+    },
+    {
+      title: '财新独立报道',
+      url: 'https://www.caixin.com/2026/a.html',
+      publishedDate: '2026-07-26',
+      retrievalLane: 'open',
+      text: '中文市场报道。',
+    },
+    {
+      title: '普通中文来源',
+      url: 'https://generic.example/zh',
+      publishedDate: '2026-07-26',
+      retrievalLane: 'open',
+      text: '中文市场信息。',
+    },
+  ], new Date('2026-07-27T00:00:00Z'), 60);
+
+  assert.deepEqual(
+    selected.map((source) => source.url),
+    [
+      'https://generic.example/en',
+      'https://www.caixin.com/2026/a.html',
+      'https://generic.example/zh',
+    ],
+  );
+  assert.equal(selected[1].independentThirdParty, true);
+});
 
 test('成功:Exa 调研 + OpenRouter 写作后写出带 title frontmatter 的 article.md', async () => {
   const workflow = tempWorkflow({ model: 'workflow/model' });
@@ -81,6 +147,114 @@ test('成功:Exa 调研 + OpenRouter 写作后写出带 title frontmatter 的 ar
   assert.match(calls[1].body.messages[0].content, /Zen Trading/);
   assert.match(calls[1].body.messages[1].content, /NVIDIA results/);
   assert.match(calls[1].body.messages[1].content, /写作任务:英伟达业绩/);
+});
+
+test('V1 应急链路为四个中文原创工作流注入确定性编辑方法并记录 trace', async () => {
+  const workflow = tempWorkflow({
+    id: 'wechat',
+    mode: 'analysis',
+    editorialSkill: 'latepost-ai-writer',
+    model: 'workflow/model',
+    factReview: false,
+  });
+  let writingBody;
+  const fetchFn = async (url, opts) => {
+    if (String(url).endsWith('/search')) {
+      return jsonResponse({
+        results: [{
+          title: 'Agent product test',
+          url: 'https://example.com/agent-test',
+          text: 'The product completed one controlled task with human intervention.',
+        }],
+      });
+    }
+    writingBody = JSON.parse(opts.body);
+    return jsonResponse({
+      choices: [{
+        message: {
+          content: '---\ntitle: 一次成功仍不是稳定能力\n---\n\n受控测试需要人工介入。',
+        },
+      }],
+    });
+  };
+  const result = await runWriter({
+    workflow,
+    input: '实测一个 AI Agent 产品',
+    config: {
+      analysis: { pipelineVersion: 'v1' },
+      writer: {
+        openrouterApiKey: 'or-key',
+        model: 'config/model',
+        baseUrl: 'https://openrouter.test/api/v1',
+        exaApiKey: 'exa-key',
+        exaBaseUrl: 'https://exa.test',
+      },
+    },
+    fetchFn,
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(writingBody.messages[1].content, /LatePost AI Writer 编辑方法/);
+  assert.match(writingBody.messages[1].content, /稿型:产品实测/);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.editorialSkill.id, 'latepost-ai-writer');
+  assert.equal(trace.editorialSkill.archetype, '产品实测');
+  assert.equal(trace.editorialSkill.routingSource, 'deterministic-fallback');
+});
+
+test('macro 应急链路按优先级组合双 skill，并把稿型、路由和证据边界写入 trace', async () => {
+  const workflow = tempWorkflow({
+    id: 'macro',
+    mode: 'analysis',
+    editorialSkills: ['latepost-ai-writer', 'global-macro-strategy-writer'],
+    model: 'workflow/model',
+    factReview: false,
+  });
+  let writingBody;
+  const fetchFn = async (url, opts) => {
+    if (String(url).endsWith('/search')) {
+      return jsonResponse({
+        results: [{
+          title: 'Federal Reserve release',
+          url: 'https://www.federalreserve.gov/example',
+          text: 'The policy rate was unchanged.',
+        }],
+      });
+    }
+    writingBody = JSON.parse(opts.body);
+    return jsonResponse({
+      choices: [{ message: { content: '---\ntitle: 利率不变之后\n---\n\n我们的判断仍取决于后续数据。' } }],
+    });
+  };
+  const result = await runWriter({
+    workflow,
+    input: '美联储会议结果后写一篇宏观快评',
+    config: {
+      analysis: { pipelineVersion: 'v1' },
+      writer: {
+        openrouterApiKey: 'or-key',
+        model: 'config/model',
+        baseUrl: 'https://openrouter.test/api/v1',
+        exaApiKey: 'exa-key',
+        exaBaseUrl: 'https://exa.test',
+      },
+    },
+    fetchFn,
+    taskContext: { routeReason: 'natural-rule' },
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(writingBody.messages[1].content, /LatePost AI Writer 编辑方法/);
+  assert.match(writingBody.messages[1].content, /Global Macro Strategy Writer 主导方法/);
+  assert.match(writingBody.messages[1].content, /本宏观方法主导问题、预期差、传导、情景和观察信号/);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.routing.reason, 'natural-rule');
+  assert.deepEqual(trace.editorialSkills.map((item) => item.id), [
+    'latepost-ai-writer',
+    'global-macro-strategy-writer',
+  ]);
+  assert.equal(trace.macroBrief.archetype, '事件快评');
+  assert.match(trace.macroBrief.evidenceBoundary, /没有可确认的一手依据/);
 });
 
 test('工作流可覆盖 system prompt 与最终产出指令', async () => {
@@ -369,6 +543,7 @@ test('严格任务:独立检索官方域名,注入当前时间,正文引用已�
   assert.match(prompt, /America\/Los_Angeles/);
   assert.match(prompt, /周末要明确对应最近一个交易日/);
   assert.match(prompt, /【一级优先·官方\/一手信源】SEC filing/);
+  assert.match(prompt, /依次追加内容调研问卷图和社群封底图，二者是最终两个节点/);
   const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
   assert.equal(trace.selectedSources.filter((source) => source.kind === 'official').length, 2);
 });
@@ -634,7 +809,8 @@ test('company 财报深搜:传递 deep/financial report 参数,展开 subpages �
   assert.equal(deepBody.type, 'deep');
   assert.equal(deepBody.category, 'financial report');
   assert.equal(deepBody.numResults, 8);
-  assert.equal(deepBody.systemPrompt, 'Prefer official filings');
+  assert.match(deepBody.systemPrompt, /^Prefer official filings /);
+  assert.match(deepBody.systemPrompt, /Exclude state-owned, public-service, and government-funded media/);
   assert.deepEqual(deepBody.additionalQueries, ['AMAT SEC 10-Q']);
   assert.ok(result.sources.includes('https://sec.example/q1'));
 

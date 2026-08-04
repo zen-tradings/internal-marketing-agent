@@ -1,0 +1,271 @@
+{
+  "include": {
+    "3650": "WAIC 机器人公司报道，正文主线是世界模型与机器人训练",
+    "3647": "ICML 观察，正文主线是模型研究与 AI 产业变化",
+    "3637": "智谱基础模型团队内部信与研发目标",
+    "3634": "蚂蚁阿福 AI 应用的产品与竞争分析",
+    "3630": "Momenta 自动驾驶公司人物与 IPO 深描",
+    "3628": "Momenta 自动驾驶商业化与上市报道",
+    "3626": "宇树人形机器人 IPO 与具身智能战略分析",
+    "3609": "AI 公司资本与估值主线",
+    "3606": "年轻 AI 创业者与基础模型创业故事",
+    "3603": "钉钉新 CEO 全员信聚焦 Agent 与 AI 组织转型",
+    "3590": "围绕具身、模型公司与科技投资的机构访谈",
+    "3589": "AI 公司 IPO 与资本市场主线",
+    "3587": "AI 研究者创业与技术产业化方法访谈",
+    "3568": "李开复围绕模型、Agent 与 AI 创业的访谈",
+    "3563": "AI 算力需求驱动的 CPO 光模块产业分析",
+    "3542": "OpenAI 控制权与马斯克诉讼现场报道",
+    "3540": "月之暗面模型公司融资独家",
+    "3532": "面向 AI 训练的光计算技术与创业访谈",
+    "3531": "AI 时代风险投资范式变化",
+    "3530": "马斯克商业版图中的 xAI 与自动驾驶主线",
+    "3529": "火山引擎汽车 Agent 与模型平台分析",
+    "3528": "AI token 使用与组织生产力竞争",
+    "3516": "高德面向 AGI 与具身场景的产品路线",
+    "3505": "小鹏世界模型与自动驾驶技术路线访谈",
+    "3500": "医疗 AGI 创业与产品方法",
+    "3475": "Momenta 自动驾驶公司上市独家",
+    "3471": "阿里价值重估中的云与 AI 投入主线",
+    "3469": "理想围绕基座模型与具身业务的组织调整",
+    "3463": "OpenClaw 生态与 Agent 创业共同体分析",
+    "3459": "腾讯 OpenClaw/Agent 团队访谈",
+    "3455": "AI 视频生成公司爱诗科技融资独家",
+    "3439": "荣耀 AI 战略、组织与产品转型深描",
+    "3433": "蔚来智驾芯片公司的资本与技术布局",
+    "3417": "千里科技 AI 与智驾组织人事独家",
+    "3412": "字节 Seed 基础模型团队组织深描",
+    "3383": "蚂蚁 CEO 围绕阿福与 AI 战略的专访",
+    "3366": "AI 应用创业者人物访谈",
+    "3334": "钉钉从协作产品转向 AI Agent 平台的组织深描",
+    "3332": "智谱模型能力、商业化与 IPO 分析",
+    "3309": "阿里通义基础模型组织调整独家",
+    "3302": "AI 视频生成平台 ONE2X 融资独家",
+    "3301": "理想 Livis AI 产品上手体验",
+    "3281": "理想向 AI 与具身智能公司转型的战略分析",
+    "3260": "小鹏财报中的机器人与物理 AI 战略",
+    "3259": "字节 Seed 基础模型人才变动独家",
+    "3214": "AI 视频生成公司爱诗科技融资独家",
+    "3186": "鉴智自动驾驶公司资本交易",
+    "3184": "智平方具身机器人技术与创业访谈",
+    "3659": {
+      "reason": "AI 需求驱动的半导体硅片产业与盈利结构分析",
+      "topics": ["compute_chips", "companies_capital"],
+      "content_type": "公司与产业深描"
+    },
+    "3658": {
+      "reason": "Liblib 创始人围绕 AI 应用 PMF、增长、融资与模型挤压的系统访谈",
+      "topics": ["products_agents", "companies_capital"],
+      "content_type": "AI 创业访谈"
+    },
+    "3144": {
+      "reason": "主动安全与辅助驾驶技术、组织和验证边界是全文主线",
+      "topics": ["autonomous_driving"],
+      "content_type": "公司与产业深描"
+    },
+    "3132": {
+      "reason": "智驾公司鉴智机器人并购与产业整合快讯",
+      "topics": ["autonomous_driving", "companies_capital"],
+      "content_type": "独家快讯"
+    },
+    "3109": {
+      "reason": "阶跃星辰创始人围绕模型开源、创业路径与商业化的系统访谈",
+      "topics": ["models_research", "companies_capital"],
+      "content_type": "AI 创业访谈"
+    },
+    "3097": {
+      "reason": "围绕大模型计算架构与 AI 芯片创业公司的融资报道",
+      "topics": ["compute_chips", "models_research", "companies_capital"],
+      "content_type": "独家快讯"
+    },
+    "3083": {
+      "reason": "智驾方案商卓驭的战略投资与商业化进展",
+      "topics": ["autonomous_driving", "companies_capital"],
+      "content_type": "独家快讯"
+    },
+    "3072": {
+      "reason": "飞书围绕企业 AI 产品、知识与权限体系的战略访谈",
+      "topics": ["products_agents", "companies_capital"],
+      "content_type": "人物对话"
+    },
+    "3059": {
+      "reason": "蚂蚁医疗 AI 产品、数据闭环和供给约束是全文主线",
+      "topics": ["products_agents", "companies_capital"],
+      "content_type": "公司与产业深描"
+    },
+    "3042": {
+      "reason": "宇树具身机器人融资、估值和出货能力快讯",
+      "topics": ["embodied_robotics", "companies_capital"],
+      "content_type": "独家快讯"
+    },
+    "3041": {
+      "reason": "蔚来智能辅助驾驶芯片团队融资与业务拆分",
+      "topics": ["compute_chips", "autonomous_driving", "companies_capital"],
+      "content_type": "独家快讯"
+    },
+    "3025": {
+      "reason": "AI 3D 模型公司 VAST 的产品、融资与创始人访谈",
+      "topics": ["models_research", "products_agents", "companies_capital"],
+      "content_type": "AI 创业访谈"
+    },
+    "3020": {
+      "reason": "AI 视频公司创始团队的产品、组织与创业方法访谈",
+      "topics": ["models_research", "products_agents", "companies_capital"],
+      "content_type": "AI 创业访谈"
+    },
+    "3019": {
+      "reason": "智驾方案商卓驭融资与车企客户关系快讯",
+      "topics": ["autonomous_driving", "companies_capital"],
+      "content_type": "独家快讯"
+    },
+    "3018": {
+      "reason": "投资人围绕具身智能项目筛选与产业判断的系统对话",
+      "topics": ["embodied_robotics", "companies_capital"],
+      "content_type": "人物对话"
+    },
+    "3017": {
+      "reason": "特斯拉人形机器人供应链、成本和规模化约束深描",
+      "topics": ["embodied_robotics", "companies_capital"],
+      "content_type": "公司与产业深描"
+    },
+    "2954": {
+      "reason": "宝马智能驾驶、座舱和软件定义汽车路线报道",
+      "topics": ["autonomous_driving"],
+      "content_type": "公司与产业深描"
+    },
+    "2945": {
+      "reason": "百度智能云大模型应用平台与企业商业化是全文主线",
+      "topics": ["products_agents", "compute_chips", "companies_capital"],
+      "content_type": "公司与产业深描"
+    },
+    "2894": {
+      "reason": "致命事故引出的智驾安全、人机责任与宣传边界议题",
+      "topics": ["autonomous_driving"],
+      "content_type": "AI 议题观察"
+    },
+    "2868": {
+      "reason": "具身机器人创业公司的技术、融资和创始人访谈",
+      "topics": ["embodied_robotics", "companies_capital"],
+      "content_type": "AI 创业访谈"
+    },
+    "2864": {
+      "reason": "大模型改变产品范式与 AI 应用创业机会的产业分析",
+      "topics": ["products_agents", "companies_capital"],
+      "content_type": "公司与产业深描"
+    },
+    "2806": {
+      "reason": "阿里云、模型、算力投入与公司 AI 转型是全文主线",
+      "topics": ["models_research", "compute_chips", "companies_capital"],
+      "content_type": "公司与产业深描"
+    },
+    "2796": {
+      "reason": "字节全员会围绕 AI 业务投入、组织和新旧业务过渡",
+      "topics": ["models_research", "companies_capital"],
+      "content_type": "独家快讯"
+    },
+    "2794": {
+      "reason": "小鹏智驾核心人才回流及端到端组织调整快讯",
+      "topics": ["autonomous_driving", "companies_capital"],
+      "content_type": "独家快讯"
+    },
+    "2780": {
+      "reason": "百川智能创始人围绕 AGI、生命科学与创业路线的系统访谈",
+      "topics": ["models_research", "products_agents", "companies_capital"],
+      "content_type": "AI 创业访谈"
+    },
+    "2766": {
+      "reason": "长城智能驾驶与座舱技术、组织和量产路线",
+      "topics": ["autonomous_driving"],
+      "content_type": "公司与产业深描"
+    },
+    "2757": {
+      "reason": "具身机器人公司维他动力创立与种子轮融资快讯",
+      "topics": ["embodied_robotics", "companies_capital"],
+      "content_type": "独家快讯"
+    },
+    "2694": {
+      "reason": "机器人创业公司创立、团队和首轮融资快讯",
+      "topics": ["embodied_robotics", "companies_capital"],
+      "content_type": "独家快讯"
+    },
+    "2681": {
+      "reason": "小红书组建战投团队并将 AI 应用作为核心投资方向",
+      "topics": ["products_agents", "companies_capital"],
+      "content_type": "独家快讯"
+    },
+    "2660": {
+      "reason": "月之暗面创立、股权争议与大模型创业治理事件",
+      "topics": ["models_research", "companies_capital"],
+      "content_type": "公司与产业深描"
+    },
+    "2649": {
+      "reason": "AI 公司创始人转向汽车智能化的组织与产业深描",
+      "topics": ["autonomous_driving", "companies_capital"],
+      "content_type": "公司与产业深描"
+    },
+    "2646": {
+      "reason": "月之暗面探索 o1 推理模型及核心人才竞争快讯",
+      "topics": ["models_research", "companies_capital"],
+      "content_type": "独家快讯"
+    }
+  },
+  "exclude": {
+    "3200": "“效率算法”指门店与供应链效率，不是 AI 主题",
+    "3300": "标题明确“不谈 AI”，正文主线是拼多多业务策略",
+    "3374": "智能床与数字睡眠产品报道，不以 AI 为主要议题",
+    "3640": "汽车域控公司分析，正文未以 AI 或智驾为主要议题",
+    "3649": "汽车供应链缺芯片回顾，不以 AI 芯片或智能驾驶为主要议题",
+    "3141": "阿里财报同时围绕云与消费两条主线，不是整篇 AI 报道",
+    "3085": "Labubu 消费文化观察，正文中的算法或 AI 只是背景",
+    "2833": "美团沟通会并列食杂、国际化与科技，AI 只是三个方向之一",
+    "2814": "全员信主线是会议与管理效率，AI 只是执行工具",
+    "2702": "奔驰车型换代与品牌报道，智能化未构成 AI 或智驾主线",
+    "2664": "支付宝二十年业务回顾，AI 只出现在局部历史阶段"
+  },
+  "style": {
+    "3142": {
+      "layer": "excluded",
+      "reason": "单一品牌大会与产品方案叙事，不参与编辑部主风格蒸馏"
+    },
+    "3117": {
+      "layer": "excluded",
+      "reason": "单一品牌 AI 产品方案叙事，不参与编辑部主风格蒸馏"
+    },
+    "3092": {
+      "layer": "excluded",
+      "reason": "单一品牌产品成功案例结构，不参与编辑部主风格蒸馏"
+    },
+    "3059": {
+      "layer": "excluded",
+      "reason": "单一品牌医疗 AI 方案叙事，不参与编辑部主风格蒸馏"
+    },
+    "2954": {
+      "layer": "excluded",
+      "reason": "单一汽车品牌技术方案叙事，不参与编辑部主风格蒸馏"
+    },
+    "2945": {
+      "layer": "excluded",
+      "reason": "单一品牌云平台方案叙事，不参与编辑部主风格蒸馏"
+    },
+    "2919": {
+      "layer": "excluded",
+      "reason": "单一教育品牌产品方案叙事，不参与编辑部主风格蒸馏"
+    },
+    "2861": {
+      "layer": "excluded",
+      "reason": "单一汽车品牌座舱方案叙事，不参与编辑部主风格蒸馏"
+    },
+    "2855": {
+      "layer": "excluded",
+      "reason": "单一汽车品牌智驾方案叙事，不参与编辑部主风格蒸馏"
+    },
+    "2804": {
+      "layer": "excluded",
+      "reason": "单一品牌智驾方案叙事，不参与编辑部主风格蒸馏"
+    },
+    "2766": {
+      "layer": "excluded",
+      "reason": "单一汽车品牌智能化方案叙事，不参与编辑部主风格蒸馏"
+    }
+  }
+}
