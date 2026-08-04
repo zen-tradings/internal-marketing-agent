@@ -21,7 +21,7 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal(c.writer.plannerModel, 'deepseek/deepseek-chat');
   assert.equal(c.writer.baseUrl, 'https://openrouter.ai/api/v1');
   assert.equal(c.writer.maxTokens, 12000);
-  assert.equal(c.writer.reasoningEffort, 'none');
+  assert.equal(c.writer.reasoningEffort, 'high');
   assert.equal(c.writer.exaApiKey, 'exa-key');
   assert.equal(c.writer.exaBaseUrl, 'https://api.exa.ai');
   assert.equal(c.writer.exaPriorityResults, 4); // 默认
@@ -104,17 +104,19 @@ test('分析 V2 的模型角色、搜索预算、时效窗口和 Slack 编辑防
     SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
     WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec',
     OPENROUTER_API_KEY: 'or-key',
-    OPENROUTER_MODEL: 'z-ai/glm-5.2',
-    OPENROUTER_PLANNER_MODEL: 'planner/model',
-    OPENROUTER_REVIEW_MODEL: 'review/model',
+    OPENROUTER_MODEL: 'qwen/qwen3.8-max',
+    OPENROUTER_ROUTER_MODEL: 'z-ai/glm-5.2',
+    OPENROUTER_PLANNER_MODEL: 'z-ai/glm-5.2',
+    OPENROUTER_REVIEW_MODEL: 'z-ai/glm-5.2',
     ANALYSIS_PIPELINE_VERSION: 'v1',
     ANALYSIS_SEARCH_MAX_QUERIES: '5',
     ANALYSIS_RECENT_WINDOW_DAYS: '60',
     SLACK_EDIT_DEBOUNCE_MS: '2500',
   });
-  assert.equal(c.writer.model, 'z-ai/glm-5.2');
-  assert.equal(c.writer.plannerModel, 'planner/model');
-  assert.equal(c.writer.reviewModel, 'review/model');
+  assert.equal(c.writer.model, 'qwen/qwen3.8-max');
+  assert.equal(c.writer.routerModel, 'z-ai/glm-5.2');
+  assert.equal(c.writer.plannerModel, 'z-ai/glm-5.2');
+  assert.equal(c.writer.reviewModel, 'z-ai/glm-5.2');
   assert.equal(c.analysis.pipelineVersion, 'v1');
   assert.equal(c.analysis.searchMaxQueries, 5);
   assert.equal(c.analysis.recentWindowDays, 60);

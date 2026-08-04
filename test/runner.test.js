@@ -313,8 +313,8 @@ test('研究型 Newsletter:即使同时提到首封，明确要求市场分析�
   assert.equal(policy.requireCitations, true);
 });
 
-test('OpenRouter 首次空正文时强制关闭 reasoning 重试并成功', async () => {
-  const workflow = tempWorkflow();
+test('Qwen3.8-Max 首次空正文时从 high 降到 low 重试并成功', async () => {
+  const workflow = tempWorkflow({ model: 'qwen/qwen3.8-max' });
   const config = baseConfig();
   config.writer.reasoningEffort = 'high';
   config.writer.maxTokens = 16000;
@@ -334,7 +334,7 @@ test('OpenRouter 首次空正文时强制关闭 reasoning 重试并成功', asyn
   assert.equal(result.ok, true);
   assert.equal(completionBodies.length, 2);
   assert.deepEqual(completionBodies[0].reasoning, { effort: 'high', exclude: true });
-  assert.deepEqual(completionBodies[1].reasoning, { effort: 'none', exclude: true });
+  assert.deepEqual(completionBodies[1].reasoning, { effort: 'low', exclude: true });
   assert.equal(completionBodies[1].max_tokens, 16000);
 });
 

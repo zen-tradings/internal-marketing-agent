@@ -211,7 +211,12 @@ test('buildCoverData: 请求携带 model/temperature 0/鉴权与 OpenRouter 头,
     capturedOpts = opts;
     return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify(payload) } }] }) };
   };
-  const writer = { ...VALID_WRITER, httpReferer: 'https://zentradings.com', appTitle: 'Zen Content Hub' };
+  const writer = {
+    ...VALID_WRITER,
+    reasoningEffort: 'high',
+    httpReferer: 'https://zentradings.com',
+    appTitle: 'Zen Content Hub',
+  };
   await buildCoverData({ title: 'X', markdown: 'Y', writer, fetchFn });
   assert.equal(capturedUrl, 'https://openrouter.ai/api/v1/chat/completions');
   assert.equal(capturedOpts.headers.Authorization, 'Bearer or-key');
@@ -220,7 +225,7 @@ test('buildCoverData: 请求携带 model/temperature 0/鉴权与 OpenRouter 头,
   const body = JSON.parse(capturedOpts.body);
   assert.equal(body.model, 'qwen/x');
   assert.equal(body.max_tokens, 1200);
-  assert.deepEqual(body.reasoning, { effort: 'none', exclude: true });
+  assert.deepEqual(body.reasoning, { effort: 'high', exclude: true });
   assert.equal(body.temperature, 0);
   assert.deepEqual(body.response_format, { type: 'json_object' });
 });
