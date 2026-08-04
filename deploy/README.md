@@ -31,8 +31,8 @@ npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --activate
 The command requires a clean worktree and a commit present on the upstream
 branch. It creates a local archive, stages and tests a separate release on the
 Droplet, runs the SQLite backup service, requires an idle queue, updates the
-writer model and reasoning effort, explicitly pins router/planner/review to
-GLM 5.2 without changing their current effective behavior, switches the single
+writer and planner models plus their independent reasoning effort, pins routing
+and review to GLM 5.2, switches the single
 systemd service, and verifies the marker, main PID and `/ready`. A failed activation restores
 the previous release and protected environment file. The DigitalOcean metadata
 check is a deployment-target guard only; it is not an application startup,
@@ -69,9 +69,12 @@ MAX_CONCURRENCY=1
 MAX_QUEUE_SIZE=100
 OPENROUTER_MODEL=qwen/qwen3.8-max
 OPENROUTER_ROUTER_MODEL=z-ai/glm-5.2
-OPENROUTER_PLANNER_MODEL=z-ai/glm-5.2
+OPENROUTER_PLANNER_MODEL=moonshotai/kimi-k3
 OPENROUTER_REVIEW_MODEL=z-ai/glm-5.2
 OPENROUTER_REASONING_EFFORT=high
+OPENROUTER_PLANNER_REASONING_EFFORT=high
+OPENROUTER_REVIEW_REASONING_EFFORT=none
+OPENROUTER_ROUTER_REASONING_EFFORT=none
 ANALYSIS_PIPELINE_VERSION=v2
 ANALYSIS_SEARCH_MAX_QUERIES=8
 ANALYSIS_RECENT_WINDOW_DAYS=60

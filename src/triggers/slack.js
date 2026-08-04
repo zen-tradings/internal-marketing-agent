@@ -172,7 +172,7 @@ export function createSlackIntentClassifier(config, fetchFn = globalThis.fetch) 
           // GLM 等模型即使 reasoning=none 也可能消耗少量隐藏 token。
           // 给短 JSON 足够预算，避免 80 token 时正文为空而错误回退默认路由。
           max_tokens: 256,
-          reasoning: { effort: 'none', exclude: true },
+          reasoning: { effort: writer.routerReasoningEffort || 'none', exclude: true },
           messages: [
             { role: 'system', content: `Classify a Slack writing request. Return JSON only: {"workflowId":"..."}. Allowed: ${workflowIds.join(', ')}. A URL is research material, not translation intent. Never choose translate for a URL alone; choose translate only when the user explicitly asks for faithful/full translation. email=newsletter/Customer.io; earnings=quarterly earnings; sector=industry; morning=daily brief; company=single-company deep dive including financials, competitors, or value chain; macro=cross-asset macro analysis that combines a macro/market theme with analytical intent, including policy, economic data, rates, FX, liquidity, equities, commodities, credit, risk appetite, volatility, or digital assets; sector=single-industry research; wechat=other public-account analysis and bare URLs. For mixed requests, choose the one workflow that answers the user's final question.` },
             { role: 'user', content: String(task).slice(0, 4000) },

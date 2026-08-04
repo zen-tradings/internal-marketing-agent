@@ -22,6 +22,9 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal(c.writer.baseUrl, 'https://openrouter.ai/api/v1');
   assert.equal(c.writer.maxTokens, 12000);
   assert.equal(c.writer.reasoningEffort, 'high');
+  assert.equal(c.writer.plannerReasoningEffort, 'none');
+  assert.equal(c.writer.reviewReasoningEffort, 'none');
+  assert.equal(c.writer.routerReasoningEffort, 'none');
   assert.equal(c.writer.exaApiKey, 'exa-key');
   assert.equal(c.writer.exaBaseUrl, 'https://api.exa.ai');
   assert.equal(c.writer.exaPriorityResults, 4); // 默认
@@ -88,15 +91,21 @@ test('旧公网出口白名单变量不再生成运行时门禁配置', () => {
   assert.equal('egress' in c, false);
 });
 
-test('OpenRouter 生成预算与 reasoning 可由 env 覆盖', () => {
+test('OpenRouter 各角色的生成预算与 reasoning 可独立覆盖', () => {
   const c = loadConfig({
     SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
     WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec',
     OPENROUTER_API_KEY: 'or-key', EXA_API_KEY: 'exa-key',
     OPENROUTER_MAX_TOKENS: '16000', OPENROUTER_REASONING_EFFORT: 'high',
+    OPENROUTER_PLANNER_REASONING_EFFORT: 'medium',
+    OPENROUTER_REVIEW_REASONING_EFFORT: 'low',
+    OPENROUTER_ROUTER_REASONING_EFFORT: 'low',
   });
   assert.equal(c.writer.maxTokens, 16000);
   assert.equal(c.writer.reasoningEffort, 'high');
+  assert.equal(c.writer.plannerReasoningEffort, 'medium');
+  assert.equal(c.writer.reviewReasoningEffort, 'low');
+  assert.equal(c.writer.routerReasoningEffort, 'low');
 });
 
 test('分析 V2 的模型角色、搜索预算、时效窗口和 Slack 编辑防抖可独立配置', () => {
@@ -106,8 +115,9 @@ test('分析 V2 的模型角色、搜索预算、时效窗口和 Slack 编辑防
     OPENROUTER_API_KEY: 'or-key',
     OPENROUTER_MODEL: 'qwen/qwen3.8-max',
     OPENROUTER_ROUTER_MODEL: 'z-ai/glm-5.2',
-    OPENROUTER_PLANNER_MODEL: 'z-ai/glm-5.2',
+    OPENROUTER_PLANNER_MODEL: 'moonshotai/kimi-k3',
     OPENROUTER_REVIEW_MODEL: 'z-ai/glm-5.2',
+    OPENROUTER_PLANNER_REASONING_EFFORT: 'high',
     ANALYSIS_PIPELINE_VERSION: 'v1',
     ANALYSIS_SEARCH_MAX_QUERIES: '5',
     ANALYSIS_RECENT_WINDOW_DAYS: '60',
@@ -115,8 +125,9 @@ test('分析 V2 的模型角色、搜索预算、时效窗口和 Slack 编辑防
   });
   assert.equal(c.writer.model, 'qwen/qwen3.8-max');
   assert.equal(c.writer.routerModel, 'z-ai/glm-5.2');
-  assert.equal(c.writer.plannerModel, 'z-ai/glm-5.2');
+  assert.equal(c.writer.plannerModel, 'moonshotai/kimi-k3');
   assert.equal(c.writer.reviewModel, 'z-ai/glm-5.2');
+  assert.equal(c.writer.plannerReasoningEffort, 'high');
   assert.equal(c.analysis.pipelineVersion, 'v1');
   assert.equal(c.analysis.searchMaxQueries, 5);
   assert.equal(c.analysis.recentWindowDays, 60);

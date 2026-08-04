@@ -9,6 +9,8 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const TARGET_FILE = path.join(REPO_ROOT, 'deploy', 'target.env');
 const DEFAULT_MODEL = 'qwen/qwen3.8-max';
 const DEFAULT_REASONING = 'high';
+const DEFAULT_PLANNER_MODEL = 'moonshotai/kimi-k3';
+const DEFAULT_PLANNER_REASONING = 'high';
 
 export function parseDeployArgs(argv) {
   const parsed = {
@@ -17,14 +19,17 @@ export function parseDeployArgs(argv) {
     target: '',
     model: DEFAULT_MODEL,
     reasoning: DEFAULT_REASONING,
+    plannerModel: DEFAULT_PLANNER_MODEL,
+    plannerReasoning: DEFAULT_PLANNER_REASONING,
   };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === '--activate') parsed.activate = true;
-    else if (['--commit', '--target', '--model', '--reasoning'].includes(arg)) {
+    else if (['--commit', '--target', '--model', '--reasoning', '--planner-model', '--planner-reasoning'].includes(arg)) {
       const value = argv[++index];
       if (!value) throw new Error(`${arg} requires a value`);
-      parsed[arg.slice(2)] = value;
+      const key = arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+      parsed[key] = value;
     } else throw new Error(`Unknown argument: ${arg}`);
   }
   return parsed;
@@ -45,14 +50,18 @@ export function loadDeployTarget({ target = '', targetFile = TARGET_FILE } = {})
   return config.ZEN_DEPLOY_SSH_TARGET;
 }
 
-export function validateDeployInputs({ target, commit, model, reasoning }) {
+export function validateDeployInputs({ target, commit, model, reasoning, plannerModel, plannerReasoning }) {
   if (!/^[a-z_][a-z0-9_-]*@[a-z0-9_.:-]+$/i.test(target)) {
     throw new Error('Invalid SSH target; expected user@host with no shell metacharacters');
   }
   if (!/^[a-f0-9]{40}$/i.test(commit)) throw new Error('Deploy commit must be a full 40-character SHA');
-  if (!/^[a-z0-9._/-]+$/i.test(model)) throw new Error('Invalid OpenRouter model id');
+  if (typeof model !== 'string' || !/^[a-z0-9._/-]+$/i.test(model)) throw new Error('Invalid OpenRouter model id');
+  if (typeof plannerModel !== 'string' || !/^[a-z0-9._/-]+$/i.test(plannerModel)) throw new Error('Invalid OpenRouter planner model id');
   if (!['low', 'medium', 'high'].includes(reasoning)) {
     throw new Error('Reasoning must be low, medium, or high');
+  }
+  if (!['low', 'medium', 'high'].includes(plannerReasoning)) {
+    throw new Error('Planner reasoning must be low, medium, or high');
   }
 }
 
@@ -104,7 +113,7 @@ process.stdin.on("end", () => {
   console.log("queue_active=" + Number(value.queue?.active || 0));
   console.log("queue_pending=" + Number(value.queue?.pending || 0));
 });'
-for key in OPENROUTER_MODEL OPENROUTER_ROUTER_MODEL OPENROUTER_PLANNER_MODEL OPENROUTER_REVIEW_MODEL OPENROUTER_REASONING_EFFORT; do
+for key in OPENROUTER_MODEL OPENROUTER_ROUTER_MODEL OPENROUTER_PLANNER_MODEL OPENROUTER_REVIEW_MODEL OPENROUTER_REASONING_EFFORT OPENROUTER_PLANNER_REASONING_EFFORT OPENROUTER_REVIEW_REASONING_EFFORT OPENROUTER_ROUTER_REASONING_EFFORT; do
   value=$(sudo awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
   printf '%s=%s\n' "env_$key" "$value"
 done
@@ -114,6 +123,8 @@ export const ACTIVATE_SCRIPT = String.raw`set -euo pipefail
 sha=$1
 model=$2
 reasoning=$3
+planner_model=$4
+planner_reasoning=$5
 short=$(printf '%.12s' "$sha")
 active=/opt/zen-content-hub
 stage="/opt/zen-content-hub.release-$short"
@@ -147,13 +158,20 @@ test ! -e "$stage"
 test ! -e "$rollback"
 test ! -e "$failed"
 test ! -e "$env_backup"
-for key in OPENROUTER_ROUTER_MODEL OPENROUTER_PLANNER_MODEL OPENROUTER_REVIEW_MODEL; do
+for key in OPENROUTER_ROUTER_MODEL OPENROUTER_REVIEW_MODEL; do
   value=$(sudo awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
   if [ -z "$value" ]; then
     value=$(sudo awk -F= '$1 == "OPENROUTER_MODEL" { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
   fi
   test "$value" = z-ai/glm-5.2
 done
+current_planner=$(sudo awk -F= '$1 == "OPENROUTER_PLANNER_MODEL" { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
+if [ -z "$current_planner" ]; then
+  current_planner=$(sudo awk -F= '$1 == "OPENROUTER_MODEL" { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
+fi
+if [ "$current_planner" != z-ai/glm-5.2 ] && [ "$current_planner" != "$planner_model" ]; then
+  exit 1
+fi
 
 sudo install -d -o zenbot -g zenbot -m 0750 "$stage"
 sudo tar -xzf "$archive" -C "$stage"
@@ -195,9 +213,12 @@ sudo cp -a "$env_file" "$env_backup"
 env_changed=1
 update_env OPENROUTER_MODEL "$model"
 update_env OPENROUTER_ROUTER_MODEL z-ai/glm-5.2
-update_env OPENROUTER_PLANNER_MODEL z-ai/glm-5.2
+update_env OPENROUTER_PLANNER_MODEL "$planner_model"
 update_env OPENROUTER_REVIEW_MODEL z-ai/glm-5.2
 update_env OPENROUTER_REASONING_EFFORT "$reasoning"
+update_env OPENROUTER_PLANNER_REASONING_EFFORT "$planner_reasoning"
+update_env OPENROUTER_REVIEW_REASONING_EFFORT none
+update_env OPENROUTER_ROUTER_REASONING_EFFORT none
 
 switch_started=1
 sudo systemctl stop zen-content-hub
@@ -226,6 +247,8 @@ test "$main_pid" -gt 0
 test "$(ps -o comm= -p "$main_pid" | tr -d ' ')" = node
 test "$(sudo awk -F= '$1 == "OPENROUTER_MODEL" { print $2 }' "$env_file" | tail -n 1)" = "$model"
 test "$(sudo awk -F= '$1 == "OPENROUTER_REASONING_EFFORT" { print $2 }' "$env_file" | tail -n 1)" = "$reasoning"
+test "$(sudo awk -F= '$1 == "OPENROUTER_PLANNER_MODEL" { print $2 }' "$env_file" | tail -n 1)" = "$planner_model"
+test "$(sudo awk -F= '$1 == "OPENROUTER_PLANNER_REASONING_EFFORT" { print $2 }' "$env_file" | tail -n 1)" = "$planner_reasoning"
 
 trap - ERR
 rm -f "$archive"
@@ -265,7 +288,7 @@ export function assertLocalRelease(commit, run = runCommand) {
   run('git', ['merge-base', '--is-ancestor', commit, '@{upstream}'], { quiet: true });
 }
 
-export function activateRemote({ target, commit, model, reasoning }, run = runCommand) {
+export function activateRemote({ target, commit, model, reasoning, plannerModel, plannerReasoning }, run = runCommand) {
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-content-hub-deploy-'));
   const short = commit.slice(0, 12);
   const archive = path.join(temporaryDir, `zen-content-hub-${short}.tar.gz`);
@@ -275,7 +298,7 @@ export function activateRemote({ target, commit, model, reasoning }, run = runCo
     return run('ssh', [
       ...SSH_OPTIONS,
       target,
-      `bash -s -- ${commit} ${model} ${reasoning}`,
+      `bash -s -- ${commit} ${model} ${reasoning} ${plannerModel} ${plannerReasoning}`,
     ], { input: ACTIVATE_SCRIPT, quiet: true });
   } finally {
     fs.rmSync(temporaryDir, { recursive: true, force: true });
@@ -298,11 +321,18 @@ export async function main(argv = process.argv.slice(2)) {
   const effectivePlannerModel = preflight.env_OPENROUTER_PLANNER_MODEL || preflight.env_OPENROUTER_MODEL;
   const effectiveReviewModel = preflight.env_OPENROUTER_REVIEW_MODEL || preflight.env_OPENROUTER_MODEL;
   if (effectiveRouterModel !== 'z-ai/glm-5.2'
-    || effectivePlannerModel !== 'z-ai/glm-5.2'
+    || !['z-ai/glm-5.2', options.plannerModel].includes(effectivePlannerModel)
     || effectiveReviewModel !== 'z-ai/glm-5.2') {
-    throw new Error('Production router/planner/review models are not all locked to z-ai/glm-5.2');
+    throw new Error('Production model roles have drifted from the approved GLM-to-Kimi planner migration path');
   }
-  const output = activateRemote({ target, commit, model: options.model, reasoning: options.reasoning });
+  const output = activateRemote({
+    target,
+    commit,
+    model: options.model,
+    reasoning: options.reasoning,
+    plannerModel: options.plannerModel,
+    plannerReasoning: options.plannerReasoning,
+  });
   console.log(output.trim());
 }
 

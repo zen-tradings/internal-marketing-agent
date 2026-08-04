@@ -49,6 +49,9 @@ export function loadConfig(env = process.env) {
       coverTimeoutMs: positiveNumber(env.COVER_REQUEST_TIMEOUT_MS, 30000, 'COVER_REQUEST_TIMEOUT_MS'),
       coverProcessTimeoutMs: positiveNumber(env.COVER_PROCESS_TIMEOUT_MS, 90000, 'COVER_PROCESS_TIMEOUT_MS'),
       reasoningEffort: env.OPENROUTER_REASONING_EFFORT || 'high',
+      plannerReasoningEffort: env.OPENROUTER_PLANNER_REASONING_EFFORT || 'none',
+      reviewReasoningEffort: env.OPENROUTER_REVIEW_REASONING_EFFORT || 'none',
+      routerReasoningEffort: env.OPENROUTER_ROUTER_REASONING_EFFORT || 'none',
       // 直译只需要原始链接/PDF 与 OpenRouter；Exa 仅由原创研究链要求。
       exaApiKey: env.EXA_API_KEY || '',
       exaBaseUrl: env.EXA_BASE_URL || 'https://api.exa.ai',

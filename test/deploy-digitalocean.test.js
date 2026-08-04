@@ -22,6 +22,8 @@ test('DigitalOcean deploy defaults to read-only preflight and Qwen writer settin
     target: '',
     model: 'qwen/qwen3.8-max',
     reasoning: 'high',
+    plannerModel: 'moonshotai/kimi-k3',
+    plannerReasoning: 'high',
   });
   assert.equal(parseDeployArgs(['--activate', '--commit', SHA]).activate, true);
   assert.throws(() => parseDeployArgs(['--unknown']), /Unknown argument/);
@@ -47,13 +49,24 @@ test('deploy target must come from an explicit DigitalOcean target file', () => 
 test('deployment inputs reject shell injection and invalid reasoning', () => {
   assert.doesNotThrow(() => validateDeployInputs({
     target: 'root@203.0.113.8', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
+    plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
   }));
   assert.throws(() => validateDeployInputs({
     target: 'root@example.com;touch /tmp/x', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
+    plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
   }), /Invalid SSH target/);
   assert.throws(() => validateDeployInputs({
     target: 'root@example.com', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'none',
+    plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
   }), /Reasoning must be/);
+  assert.throws(() => validateDeployInputs({
+    target: 'root@example.com', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
+    plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'none',
+  }), /Planner reasoning must be/);
+  assert.throws(() => validateDeployInputs({
+    target: 'root@example.com', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
+    plannerReasoning: 'high',
+  }), /Invalid OpenRouter planner model id/);
 });
 
 test('preflight requires DigitalOcean metadata, healthy idle service and valid marker', () => {

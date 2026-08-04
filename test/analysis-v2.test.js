@@ -38,7 +38,7 @@ function workflow(overrides = {}) {
     id: 'wechat',
     mode: 'analysis',
     editorialSkill: 'latepost-ai-writer',
-    model: 'z-ai/glm-5.2',
+    model: 'qwen/qwen3.8-max',
     timeoutMs: 3000,
     workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'analysis-v2-')),
     research: {
@@ -58,9 +58,12 @@ function config() {
     },
     writer: {
       openrouterApiKey: 'or-key',
-      model: 'z-ai/glm-5.2',
-      plannerModel: 'z-ai/glm-5.2',
+      model: 'qwen/qwen3.8-max',
+      plannerModel: 'moonshotai/kimi-k3',
       reviewModel: 'z-ai/glm-5.2',
+      reasoningEffort: 'high',
+      plannerReasoningEffort: 'high',
+      reviewReasoningEffort: 'none',
       baseUrl: 'https://openrouter.test/api/v1',
       exaApiKey: 'exa-key',
       exaBaseUrl: 'https://exa.test',
@@ -698,6 +701,16 @@ test('V2 完整链路按 Opus 5/Kimi K2 定向搜索、写作、局部审计并�
   assert.ok(searchBodies.length >= 6);
   assert.ok(searchBodies.every((body) => /Opus 5|Kimi K2/.test(body.query)));
   assert.ok(searchBodies.every((body) => !/Opus Genetics|KMI|10-Q|K2\.6|Opus 4\.5/.test(body.query)));
+  const completionBodies = calls.filter((call) => call.url.endsWith('/chat/completions')).map((call) => call.body);
+  assert.deepEqual(completionBodies.slice(0, 2).map((body) => body.model), [
+    'moonshotai/kimi-k3',
+    'moonshotai/kimi-k3',
+  ]);
+  assert.ok(completionBodies.slice(0, 2).every((body) => body.reasoning.effort === 'high'));
+  assert.equal(completionBodies[2].model, 'qwen/qwen3.8-max');
+  assert.equal(completionBodies[2].reasoning.effort, 'high');
+  assert.ok(completionBodies.slice(3).every((body) => body.model === 'z-ai/glm-5.2'));
+  assert.ok(completionBodies.slice(3).every((body) => body.reasoning.effort === 'none'));
   const article = fs.readFileSync(result.articlePath, 'utf8');
   assert.equal((article.match(/^title:/gm) || []).length, 1);
   assert.match(article, /^---\ntitle: "Opus 5 与 Kimi K2"\n---/);
@@ -706,6 +719,11 @@ test('V2 完整链路按 Opus 5/Kimi K2 定向搜索、写作、局部审计并�
   assert.match(article, /kimi\.com\/blog\/kimi-k2/);
   const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
   assert.equal(trace.pipelineVersion, 'v2');
+  assert.deepEqual(trace.models, {
+    writer: 'qwen/qwen3.8-max',
+    planner: 'moonshotai/kimi-k3',
+    review: 'z-ai/glm-5.2',
+  });
   assert.equal(trace.taskContract.prompt_revision, 3);
   assert.deepEqual(trace.evidenceMatrix.entities.map((item) => item.literal), ['Opus 5', 'Kimi K2']);
   assert.equal(trace.editorialSkill.id, 'latepost-ai-writer');

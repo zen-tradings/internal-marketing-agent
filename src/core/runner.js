@@ -321,6 +321,7 @@ async function runAnalysisV2({
     rawPlanning = await completeReviewJson({
       prompt: planningPrompt,
       model: writer.plannerModel || model,
+      reasoningEffort: writer.plannerReasoningEffort,
       writer: { ...writer, temperature: 0 },
       fetchFn,
       timeoutMs: workflow.timeoutMs,
@@ -399,6 +400,7 @@ async function runAnalysisV2({
     rawEvidence = await completeReviewJson({
       prompt: buildEvidencePrompt(taskContract, sources, workflow),
       model: writer.plannerModel || model,
+      reasoningEffort: writer.plannerReasoningEffort,
       writer: { ...writer, temperature: 0 },
       fetchFn,
       timeoutMs: workflow.timeoutMs,
@@ -1914,8 +1916,13 @@ async function completeReviewJson(options) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const raw = await completeArticle({
       ...options,
-      // 规划和审计使用独立的 GLM 角色，不继承 Qwen 正文的 high reasoning。
-      writer: { ...options.writer, reasoningEffort: 'none' },
+      // JSON 角色使用各自的 reasoning 配置；审计默认关闭，Kimi 规划器可独立开启。
+      writer: {
+        ...options.writer,
+        reasoningEffort: options.reasoningEffort
+          ?? options.writer.reviewReasoningEffort
+          ?? 'none',
+      },
       prompt: attempt === 0
         ? options.prompt
         : `${options.prompt}\n\n上一次输出不是有效 JSON。本次只能返回一个语法有效的 JSON 对象，字符串内换行必须转义，不要代码围栏或解释。`,

@@ -17,7 +17,7 @@ Slack 私聊自然语言 / 频道 @Bot / PDF/文本附件 / cron
   → Slack best-effort 回报；通知失败不改变草稿结果
 ```
 
-Node.js 负责流程控制；正文模型由 `.env` 的 `OPENROUTER_MODEL` 指定，生产默认 `qwen/qwen3.8-max`。`OPENROUTER_ROUTER_MODEL`、`OPENROUTER_PLANNER_MODEL` 与 `OPENROUTER_REVIEW_MODEL` 可独立覆盖路由、任务规划和逐句事实审计；生产配置将这三项固定为 `z-ai/glm-5.2`，只切换正文写作。未单独设置时，它们会继承正文模型。Qwen3.8-Max 强制开启 reasoning，正文默认使用 `high`，并由 `OPENROUTER_MAX_TOKENS` 明确控制 reasoning 与正文的共享输出预算；GLM 路由、规划和审计仍关闭 reasoning。仓库内版本化的写作 skill 在运行时加载并注入提示词，不与特定模型绑定。Exa 只负责检索与正文抓取；`alphaxiv.org` 是内置优先检索域名之一，项目不连接 AlphaXiv MCP。
+Node.js 负责流程控制；正文模型由 `.env` 的 `OPENROUTER_MODEL` 指定，生产默认 `qwen/qwen3.8-max`。`OPENROUTER_ROUTER_MODEL`、`OPENROUTER_PLANNER_MODEL` 与 `OPENROUTER_REVIEW_MODEL` 分别控制路由、顶层任务规划/证据编排和逐句事实审计；生产由 `moonshotai/kimi-k3` 负责规划与方向把握，Qwen3.8-Max 负责正文，GLM 5.2 负责路由和审计。未单独设置角色模型时会继承正文模型。`OPENROUTER_REASONING_EFFORT` 与各角色的 `*_REASONING_EFFORT` 独立配置：Kimi 规划和 Qwen 正文使用 `high`，GLM 路由与审计使用 `none`。`OPENROUTER_MAX_TOKENS` 控制每次请求中 reasoning 与最终输出共享的预算。仓库内版本化的写作 skill 在运行时加载并注入提示词，不与特定模型绑定。Exa 只负责检索与正文抓取；`alphaxiv.org` 是内置优先检索域名之一，项目不连接 AlphaXiv MCP。
 
 ## 目录
 
