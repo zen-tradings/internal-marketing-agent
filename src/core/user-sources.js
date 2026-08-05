@@ -14,6 +14,8 @@ const MAX_SLACK_ATTACHMENTS = 4;
 const MAX_GITHUB_FILES = 10;
 const MAX_GITHUB_FILE_BYTES = 512 * 1024;
 const MAX_GITHUB_TOTAL_CHARS = 60000;
+const MAX_OFFICIAL_MIRROR_BYTES = 4 * 1024 * 1024;
+const MAX_OFFICIAL_MIRROR_CANDIDATES = 4;
 const TEXT_FILE_RE = /\.(?:md|mdx|txt|json|ya?ml|toml|ini|js|mjs|cjs|jsx|ts|tsx|py|go|rs|java|kt|kts|swift|rb|php|c|cc|cpp|h|hpp|cs|sh|sql|html|css|scss|vue|svelte)$/i;
 const execFileAsync = promisify(execFile);
 
@@ -103,6 +105,70 @@ export async function loadDirectUserSources({
     handledUrls: descriptors.filter((descriptor) => descriptor.kind !== 'slack').map((descriptor) => descriptor.originalUrl),
     errors,
   };
+}
+
+// Some regulator download hosts reject normal server traffic while publishing the
+// same filing inside an official, machine-readable attachment. Recovery is kept
+// deliberately narrow: a document number must first be discovered in the search
+// material, the replacement must stay on the regulator's official domain, and
+// the fetched text must match both the agency and the original filename topic.
+export async function recoverOfficialDocumentMirrors({
+  userUrls = [],
+  discoverySources = [],
+  config,
+  fetchFn = globalThis.fetch,
+  fetchWithRetry,
+}) {
+  const sources = [];
+  const attempts = [];
+  for (const originalUrl of Array.isArray(userUrls) ? userUrls : []) {
+    const descriptor = fccMirrorDescriptor(originalUrl, discoverySources);
+    if (!descriptor) continue;
+    let recovered = false;
+    for (const documentId of descriptor.documentIds.slice(0, MAX_OFFICIAL_MIRROR_CANDIDATES)) {
+      const mirrorUrl = `https://docs.fcc.gov/public/attachments/${documentId}A1.txt`;
+      const attempt = { originalUrl, mirrorUrl, documentId, status: 'running' };
+      attempts.push(attempt);
+      try {
+        const fetched = await safeFetchResource({
+          url: mirrorUrl,
+          fetchFn,
+          fetchWithRetry,
+          dnsLookup: config?.translation?.dnsLookup,
+          accept: 'text/plain;charset=UTF-8,*/*;q=0.2',
+          maxBytes: MAX_OFFICIAL_MIRROR_BYTES,
+        });
+        const text = fetched.buffer.toString('utf8').replace(/\u0000/g, '').trim();
+        if (!isMatchingFccMirror(text, descriptor, documentId)) {
+          attempt.status = 'rejected-mismatch';
+          continue;
+        }
+        attempt.status = 'ok';
+        attempt.textLength = text.length;
+        sources.push({
+          title: `${documentId} | Federal Communications Commission`,
+          url: mirrorUrl,
+          text,
+          publishedDate: null,
+          userSpecified: true,
+          official: true,
+          retrievalLane: 'user-recovery',
+          sourceType: 'official-document-mirror',
+          extractor: 'fcc-docs-text',
+          recoveredForUserUrl: originalUrl,
+        });
+        recovered = true;
+        break;
+      } catch (error) {
+        attempt.status = 'failed';
+        attempt.error = safeError(error).slice(0, 240);
+      }
+    }
+    if (!recovered && !descriptor.documentIds.length) {
+      attempts.push({ originalUrl, status: 'no-document-id' });
+    }
+  }
+  return { sources, attempts };
 }
 
 function directDescriptors(userUrls, attachments) {
@@ -457,6 +523,60 @@ function parseGithubUrl(rawUrl) {
     return { owner, repo, ref: parts[3], filePath: parts.slice(4).join('/') };
   }
   return { owner, repo };
+}
+
+function fccMirrorDescriptor(rawUrl, discoverySources) {
+  let url;
+  try { url = new URL(rawUrl); } catch { return undefined; }
+  const host = url.hostname.toLowerCase().replace(/^www\./, '');
+  if (host !== 'fcc.gov' || !/\.pdf$/i.test(url.pathname)) return undefined;
+  const topicTokens = documentTopicTokens(path.posix.basename(url.pathname));
+  if (!topicTokens.length) return undefined;
+  const documentIds = [];
+  const seen = new Set();
+  for (const source of Array.isArray(discoverySources) ? discoverySources : []) {
+    const searchable = [
+      source?.title,
+      source?.text,
+      source?.summary,
+      ...(Array.isArray(source?.highlights) ? source.highlights : []),
+    ].filter(Boolean).join('\n');
+    const matches = searchable.matchAll(/\bDA[\s-]*(\d{2})[\s-]*(\d{3,4})\b/gi);
+    for (const match of matches) {
+      const id = `DA-${match[1]}-${match[2]}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      documentIds.push(id);
+    }
+  }
+  return { originalUrl: rawUrl, topicTokens, documentIds };
+}
+
+function documentTopicTokens(filename) {
+  const stop = new Set([
+    'document', 'draft', 'fcc', 'file', 'final', 'national', 'nsd', 'pdf', 'report',
+    'security', 'the', 'determination',
+  ]);
+  return [...new Set(safeDecodeFilename(filename)
+    .toLowerCase()
+    .replace(/\.pdf$/i, '')
+    .split(/[^a-z0-9]+/)
+    .map((token) => token.length > 5 && token.endsWith('s') ? token.slice(0, -1) : token)
+    .filter((token) => token.length >= 4 && !stop.has(token)))];
+}
+
+function safeDecodeFilename(value) {
+  try { return decodeURIComponent(String(value || '')); }
+  catch { return String(value || ''); }
+}
+
+function isMatchingFccMirror(text, descriptor, documentId) {
+  if (String(text || '').length < 400) return false;
+  const normalized = String(text).toLowerCase();
+  if (!/federal\s+communications\s+commission/i.test(text)) return false;
+  const idPattern = new RegExp(documentId.replace(/-/g, '[\\s-]*'), 'i');
+  if (!idPattern.test(text)) return false;
+  return descriptor.topicTokens.some((token) => normalized.includes(token));
 }
 
 function directUrlKind(rawUrl) {

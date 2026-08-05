@@ -978,3 +978,125 @@ test('V2 用户页面抓取失败时用 URL 语义定向恢复，不被规划器
     'https://news.kalshi.com/p/kalshi-public-companies-hub',
   ]);
 });
+
+test('FCC PDF 403 回归:从搜索证据解析文号并恢复官方附件后继续写作', async () => {
+  const calls = [];
+  let completionIndex = 0;
+  const originalUrl = 'https://www.fcc.gov/sites/default/files/robots-nsd.pdf';
+  const mirrorUrl = 'https://docs.fcc.gov/public/attachments/DA-26-786A1.txt';
+  const fetchFn = async (url, options = {}) => {
+    const target = String(url);
+    const body = options.body ? JSON.parse(options.body) : {};
+    calls.push({ url: target, body });
+    if (target === originalUrl) {
+      return new Response('Akamai reference error', {
+        status: 403,
+        statusText: 'Forbidden',
+        headers: { 'content-type': 'text/html' },
+      });
+    }
+    if (target === mirrorUrl) {
+      return new Response([
+        'Federal Communications Commission DA 26-786',
+        'National Security Determination on the Threat Posed by Foreign-Produced Advanced Robotic Devices.',
+        'Advanced robotic devices include connected mobile ground robots subject to stated definitions and exclusions.',
+        'This official attachment contains the complete determination and supporting public notice.',
+        'Robot security, production, connectivity, software, and conditional approval provisions are described here.',
+      ].join('\n').repeat(4), {
+        status: 200,
+        headers: { 'content-type': 'text/plain; charset=UTF-8' },
+      });
+    }
+    if (target.endsWith('/contents')) {
+      return jsonResponse({
+        requestId: 'fcc-cache-miss',
+        results: [],
+        statuses: [{
+          id: originalUrl,
+          status: 'error',
+          error: { tag: 'CRAWL_UNKNOWN_ERROR', httpStatusCode: 500 },
+        }],
+      });
+    }
+    if (target.endsWith('/search')) {
+      if (/fcc\.gov sites default files robots nsd/i.test(body.query || '')) {
+        return jsonResponse({
+          requestId: 'fcc-document-discovery',
+          results: [{
+            title: 'FCC Adds Foreign-Produced Advanced Robotic Devices to Covered List',
+            url: 'https://www.morganlewis.com/pubs/2026/08/fcc-adds-foreign-produced-advanced-robotic-devices',
+            publishedDate: '2026-08-01',
+            text: 'The FCC public notice DA 26-786 includes the National Security Determination for advanced robotic devices.',
+          }],
+        });
+      }
+      return jsonResponse({
+        requestId: 'robot-hiring-search',
+        results: [{
+          title: 'Robotics role in Beijing',
+          url: 'https://job-boards.greenhouse.io/example/jobs/1234',
+          publishedDate: '2026-08-02',
+          text: 'An American robotics company lists an active engineering position in Beijing, China.',
+        }],
+      });
+    }
+
+    completionIndex++;
+    if (completionIndex === 1) {
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({
+        task_contract: {
+          search_aliases: ['FCC robots NSD', 'American robotics companies China hiring'],
+          must_cover: ['Summarize robots-nsd.pdf', 'Verify active robotics hiring in China'],
+          only_user_links: true,
+        },
+        search_plan: [
+          { query: 'FCC robots NSD official document', lane: 'official', language: 'en', recent: false },
+          { query: '美国 机器人 公司 中国 招聘', lane: 'open', language: 'zh', recent: true },
+        ],
+      }) } }] });
+    }
+    if (completionIndex === 2) {
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({
+        source_assessments: [
+          { source_id: 'S1', source_type: 'primary', relevant: true, entity_matches: ['FCC'], safe_statements: ['FCC 发布机器人国家安全决定'] },
+          { source_id: 'S3', source_type: 'secondary', relevant: true, entity_matches: ['robotics hiring'], safe_statements: ['北京职位仍在招聘'] },
+        ],
+        requirements: [
+          { requirement: 'Summarize robots-nsd.pdf', source_ids: ['S1'], safe_statements: ['官方附件包含完整决定'], covered: true },
+          { requirement: 'Verify active robotics hiring in China', source_ids: ['S3'], safe_statements: ['职位页显示北京岗位'], covered: true },
+        ],
+        entities: [{ literal: 'FCC', verified: true, source_ids: ['S1'] }],
+        relevant_source_ids: ['S1', 'S3'],
+        selected_reference_ids: ['S1', 'S3'],
+        conflicts: [],
+      }) } }] });
+    }
+    if (completionIndex === 3) {
+      return jsonResponse({ choices: [{ message: { content: '---\ntitle: FCC 机器人规则与在华招聘\n---\n\nFCC 官方附件给出了适用定义和例外。公开职位页则显示北京仍有机器人相关岗位。' } }] });
+    }
+    return jsonResponse({ choices: [{ message: { content: '{"approved":true,"issues":[],"critical_claims":[]}' } }] });
+  };
+
+  const testConfig = config();
+  testConfig.translation = {
+    dnsLookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    maxSourceBytes: 5 * 1024 * 1024,
+    maxPdfPages: 120,
+  };
+  const result = await runWriter({
+    workflow: workflow(),
+    input: `summarize this document and search American robotics companies hiring in China: ${originalUrl}`,
+    config: testConfig,
+    fetchFn,
+  });
+
+  assert.equal(result.ok, true, result.stderr);
+  assert.ok(result.sources.includes(mirrorUrl));
+  assert.ok(calls.some((call) => call.url === originalUrl));
+  assert.ok(calls.some((call) => call.url === mirrorUrl));
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.taskContract.only_user_links, false);
+  assert.deepEqual(trace.userSourceRecovery.cachedExactUrls, []);
+  assert.deepEqual(trace.userSourceRecovery.officialMirrorUrls, [mirrorUrl]);
+  assert.equal(trace.userSourceRecovery.officialMirrorAttempts[0].status, 'ok');
+});

@@ -8,6 +8,7 @@ import {
   isDirectUserUrl,
   loadDirectUserSources,
   normalizeSlackAttachments,
+  recoverOfficialDocumentMirrors,
   sourceRequestHeadersForAttachment,
   translationAttachment,
 } from '../src/core/user-sources.js';
@@ -33,6 +34,40 @@ function response(body, contentType = 'text/html; charset=utf-8') {
 }
 
 const publicDns = async () => [{ address: '93.184.216.34', family: 4 }];
+
+test('FCC PDF 被 CDN 拒绝时从检索材料识别文号并读取匹配的官方 TXT 附件', async () => {
+  const calls = [];
+  const result = await recoverOfficialDocumentMirrors({
+    userUrls: ['https://www.fcc.gov/sites/default/files/robots-nsd.pdf'],
+    discoverySources: [{
+      title: 'FCC robot covered-list analysis',
+      text: 'The router order was DA 26-278. The advanced robotic-device public notice was DA 26-786 and includes the national security determination.',
+    }],
+    config: { translation: { dnsLookup: publicDns } },
+    fetchFn: async (url) => {
+      calls.push(String(url));
+      const robotDocument = String(url).includes('DA-26-786');
+      const topic = robotDocument
+        ? 'Advanced Robotic Devices robot security determination. '
+        : 'Consumer routers and network equipment determination. ';
+      return response(
+        `Federal Communications Commission ${robotDocument ? 'DA 26-786' : 'DA 26-278'}\n${topic.repeat(20)}`,
+        'text/plain; charset=UTF-8',
+      );
+    },
+  });
+
+  assert.deepEqual(calls, [
+    'https://docs.fcc.gov/public/attachments/DA-26-278A1.txt',
+    'https://docs.fcc.gov/public/attachments/DA-26-786A1.txt',
+  ]);
+  assert.equal(result.sources.length, 1);
+  assert.equal(result.sources[0].url, 'https://docs.fcc.gov/public/attachments/DA-26-786A1.txt');
+  assert.equal(result.sources[0].userSpecified, true);
+  assert.equal(result.sources[0].official, true);
+  assert.equal(result.sources[0].recoveredForUserUrl, 'https://www.fcc.gov/sites/default/files/robots-nsd.pdf');
+  assert.deepEqual(result.attempts.map((attempt) => attempt.status), ['rejected-mismatch', 'ok']);
+});
 
 test('Slack file_share 保留 PDF 元数据并用 Bot token 读取私有下载地址', () => {
   const files = [{

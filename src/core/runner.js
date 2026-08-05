@@ -26,6 +26,7 @@ import {
 import {
   isDirectUserUrl,
   loadDirectUserSources,
+  recoverOfficialDocumentMirrors,
   sourceRequestHeadersForAttachment,
   translationAttachment,
 } from './user-sources.js';
@@ -705,6 +706,7 @@ async function searchExaV2({
     loadedSources: initiallyLoadedUserSources,
     taskContract,
     writer,
+    config,
     fetchFn,
     trace,
   });
@@ -734,6 +736,7 @@ async function recoverUnavailableUserUrls({
   loadedSources,
   taskContract,
   writer,
+  config,
   fetchFn,
   trace,
 }) {
@@ -743,7 +746,33 @@ async function recoverUnavailableUserUrls({
     .slice(0, 2);
   if (!unavailable.length) return [];
 
-  const settled = await Promise.allSettled(unavailable.map((userUrl) =>
+  let cachedExactSources = [];
+  const directDocumentUrls = unavailable.filter(isDirectUserUrl);
+  if (directDocumentUrls.length) {
+    try {
+      cachedExactSources = (await fetchExaContents({
+        urls: directDocumentUrls,
+        writer,
+        fetchFn,
+        trace,
+        kind: 'user-document-cache-recovery',
+      }))
+        .filter((source) => hasUsableSourceText(source)
+          && directDocumentUrls.some((userUrl) => sameSourceUrl(source?.url, userUrl)))
+        .map((source) => ({
+          ...source,
+          userSpecified: true,
+          retrievalLane: 'user-recovery',
+          recoveredForUserUrl: directDocumentUrls.find((userUrl) => sameSourceUrl(source?.url, userUrl)),
+        }));
+    } catch (error) {
+      trace.userDocumentCacheRecoveryError = describeFetchError(error).slice(0, 500);
+    }
+  }
+  const stillUnavailable = unavailable.filter((userUrl) => !cachedExactSources
+    .some((source) => sameSourceUrl(source?.url, userUrl)));
+
+  const settled = await Promise.allSettled(stillUnavailable.map((userUrl) =>
     searchExaOpen({
       query: buildUserUrlRecoveryQuery(userUrl, taskContract),
       options: {
@@ -760,14 +789,34 @@ async function recoverUnavailableUserUrls({
       recoveredForUserUrl: userUrl,
       ...(sameSourceUrl(source.url, userUrl) ? { userSpecified: true } : { specialist: true }),
     })))));
-  const recovered = settled.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
+  const searchedRecoverySources = settled
+    .flatMap((result) => result.status === 'fulfilled' ? result.value : []);
+  const officialMirrors = await recoverOfficialDocumentMirrors({
+    userUrls: stillUnavailable,
+    discoverySources: searchedRecoverySources,
+    config,
+    fetchFn,
+    fetchWithRetry,
+  });
+  const recovered = [
+    ...cachedExactSources,
+    ...officialMirrors.sources,
+    ...searchedRecoverySources,
+  ];
   trace.userSourceRecovery = {
     attemptedUrls: unavailable,
+    cachedExactUrls: cachedExactSources.map((source) => source.url),
+    officialMirrorUrls: officialMirrors.sources.map((source) => source.url),
+    officialMirrorAttempts: officialMirrors.attempts,
     exactRecoveredUrls: recovered.filter((source) => source.userSpecified).map((source) => source.url),
     supplementalUrls: recovered.filter((source) => !source.userSpecified).map((source) => source.url),
     failedSearches: settled.filter((result) => result.status === 'rejected').length,
   };
   return recovered;
+}
+
+function hasUsableSourceText(source) {
+  return String(source?.text || source?.summary || '').trim().length >= 40;
 }
 
 export function buildUserUrlRecoveryQuery(rawUrl, taskContract = {}) {
@@ -1415,9 +1464,9 @@ async function searchExaPriority({ query, writer, prioritySources, fetchFn, trac
 // 用户手工贴的 URL 走全文抓取(text: true,不做 compact verbosity),不请求 highlights
 // (highlights 是围绕 query 摘取片段,对"抓整篇原文"这个用途没有意义);
 // formatResearch 里再按 userSpecified 单独放宽字符上限。
-async function fetchExaContents({ urls, writer, fetchFn, trace }) {
+async function fetchExaContents({ urls, writer, fetchFn, trace, kind = 'user-contents' }) {
   const url = `${trimTrailingSlash(writer.exaBaseUrl || 'https://api.exa.ai')}/contents`;
-  const event = startTrace(trace, { kind: 'user-contents', endpoint: '/contents', urls });
+  const event = startTrace(trace, { kind, endpoint: '/contents', urls });
   try {
   const res = await fetchWithRetry(fetchFn, url, {
     method: 'POST',
