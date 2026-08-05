@@ -12,6 +12,7 @@ import {
   buildWritingPrompt,
   contentPolicyForPrompt,
   extractExplicitEntityVersions,
+  extractUserUrls,
   fallbackTaskContract,
   inferNumericCriticalClaims,
   normalizeAuditCriticalClaims,
@@ -21,7 +22,7 @@ import {
   normalizePlanningResult,
   selectFinalReferenceIds,
 } from '../src/core/analysis-v2.js';
-import { normalizeAnalysisArticle, runWriter } from '../src/core/runner.js';
+import { extractUrls, normalizeAnalysisArticle, runWriter } from '../src/core/runner.js';
 
 function jsonResponse(body, init = {}) {
   return {
@@ -102,6 +103,40 @@ test('TaskContract 锁定 Slack 原文型号，规划器不得偷偷加入附近
   assert.ok(normalized.searchPlan.length >= 4 && normalized.searchPlan.length <= 6);
   assert.ok(normalized.searchPlan.every((item) => /Opus 5|Kimi K2/.test(item.query)));
   assert.ok(normalized.searchPlan.every((item) => !/Opus 4\.5|Kimi K2\.6/.test(item.query)));
+});
+
+test('Slack HTML 转义不会污染用户 URL，规划器也不能擅自关闭补充搜索', () => {
+  const input = 'please write an analysis about this: https://kalshi.com/company-reports?week=2026-08-03&amp;utm_source=news.kalshi.com';
+  const expected = 'https://kalshi.com/company-reports?week=2026-08-03&utm_source=news.kalshi.com';
+  assert.deepEqual(extractUserUrls(input), [expected]);
+  assert.deepEqual(extractUrls(input).urls, [expected]);
+
+  const normalized = normalizePlanningResult({
+    task_contract: {
+      exact_entities_and_versions: [{ literal: 'Kalshi' }],
+      search_aliases: ['Kalshi Public Companies Hub'],
+      must_cover: ['分析 Kalshi Public Companies Hub'],
+      only_user_links: true,
+    },
+    search_plan: [
+      { query: 'Kalshi Public Companies Hub launch', lane: 'official', language: 'en' },
+      { query: 'Kalshi 公司数据中心 分析', lane: 'open', language: 'zh' },
+    ],
+  }, input, { id: 'wechat' }, {}, { maxQueries: 6 });
+
+  assert.equal(normalized.taskContract.only_user_links, false);
+  assert.ok(normalized.searchPlan.length >= 2);
+  assert.ok(normalized.searchPlan.some((item) => /Public Companies Hub/i.test(item.query)));
+});
+
+test('原始 Prompt 明确只依据链接时保留排他约束且不生成搜索计划', () => {
+  const input = 'only use this link https://example.com/report';
+  const normalized = normalizePlanningResult({
+    task_contract: { only_user_links: false },
+    search_plan: [{ query: 'unrelated supplement', lane: 'open', language: 'en' }],
+  }, input, { id: 'wechat' });
+  assert.equal(normalized.taskContract.only_user_links, true);
+  assert.deepEqual(normalized.searchPlan, []);
 });
 
 test('用户明确两方结构时 sector 方法论只能补空白，不能强制 TAM/供需章节', () => {
@@ -801,4 +836,99 @@ test('V2 完全没有检索结果时直接失败，不把缺资料变成 needs_i
   assert.equal(result.ok, false);
   assert.equal(result.needsInput, undefined);
   assert.match(result.stderr, /未检索到与任务直接相关的可靠材料/);
+});
+
+test('V2 用户页面抓取失败时用 URL 语义定向恢复，不被规划器伪造的 only_user_links 卡死', async () => {
+  const calls = [];
+  let completionIndex = 0;
+  const fetchFn = async (url, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : {};
+    calls.push({ url: String(url), body });
+    if (String(url).endsWith('/contents')) {
+      return jsonResponse({
+        requestId: 'contents-kalshi',
+        results: [],
+        statuses: [{
+          id: body.urls[0],
+          status: 'error',
+          error: { tag: 'CRAWL_UNKNOWN_ERROR', httpStatusCode: 500 },
+        }],
+      });
+    }
+    if (String(url).endsWith('/search')) {
+      if (/one stop shop for tracking corporate metrics/i.test(body.query || '')) {
+        return jsonResponse({
+          requestId: 'recovery-kalshi',
+          results: [{
+            title: 'Kalshi launches Public Companies Hub',
+            url: 'https://news.kalshi.com/p/kalshi-public-companies-hub',
+            publishedDate: '2026-08-03',
+            text: 'Kalshi launched a Public Companies Hub for company earnings schedules, corporate metrics, and related prediction markets.',
+          }],
+        });
+      }
+      return jsonResponse({ requestId: 'generic-empty', results: [] });
+    }
+
+    completionIndex++;
+    if (completionIndex === 1) {
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({
+        task_contract: {
+          exact_entities_and_versions: [{ literal: 'Kalshi' }],
+          search_aliases: ['Kalshi Public Companies Hub'],
+          must_cover: [
+            'Analyze the linked company reports page',
+            'Cover the launch as a one-stop shop for tracking corporate metrics',
+          ],
+          only_user_links: true,
+        },
+        search_plan: [
+          { query: 'Kalshi latest analysis', lane: 'priority', language: 'en', recent: true },
+          { query: 'Kalshi 最新分析', lane: 'open', language: 'zh', recent: true },
+        ],
+      }) } }] });
+    }
+    if (completionIndex === 2) {
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({
+        source_assessments: [{
+          source_id: 'S1',
+          source_type: 'primary',
+          relevant: true,
+          entity_matches: ['Kalshi'],
+          safe_statements: ['Kalshi 发布 Public Companies Hub'],
+        }],
+        requirements: [{
+          requirement: '分析 Public Companies Hub',
+          source_ids: ['S1'],
+          safe_statements: ['该页面汇集财报日程、公司指标和相关预测市场'],
+          covered: true,
+        }],
+        entities: [{ literal: 'Kalshi', verified: true, source_ids: ['S1'] }],
+        relevant_source_ids: ['S1'],
+        selected_reference_ids: ['S1'],
+        conflicts: [],
+      }) } }] });
+    }
+    if (completionIndex === 3) {
+      return jsonResponse({ choices: [{ message: { content: '---\ntitle: Kalshi 公司数据入口的意义\n---\n\nKalshi 把财报日程、公司指标与相关预测市场集中到同一入口。' } }] });
+    }
+    return jsonResponse({ choices: [{ message: { content: '{"approved":true,"issues":[],"critical_claims":[]}' } }] });
+  };
+
+  const input = 'please write an analysis about this: https://kalshi.com/company-reports?week=2026-08-03&amp;utm_campaign=kalshi-launches-public-companies-hub-as-one-stop-shop-for-tracking-corporate-metrics';
+  const result = await runWriter({ workflow: workflow(), input, config: config(), fetchFn });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.sources, ['https://news.kalshi.com/p/kalshi-public-companies-hub']);
+  assert.ok(calls.some((call) => call.url.endsWith('/search')
+    && /one stop shop for tracking corporate metrics/i.test(call.body.query || '')));
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.taskContract.only_user_links, false);
+  assert.deepEqual(trace.requests.find((request) => request.kind === 'user-contents').contentStatuses, [{
+    id: 'https://kalshi.com/company-reports?week=2026-08-03&utm_campaign=kalshi-launches-public-companies-hub-as-one-stop-shop-for-tracking-corporate-metrics',
+    status: 'error',
+    error: { tag: 'CRAWL_UNKNOWN_ERROR', httpStatusCode: 500 },
+  }]);
+  assert.deepEqual(trace.userSourceRecovery.supplementalUrls, [
+    'https://news.kalshi.com/p/kalshi-public-companies-hub',
+  ]);
 });

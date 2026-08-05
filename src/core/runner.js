@@ -17,6 +17,7 @@ import {
   throwIfTaskCancelled,
   withTaskCancellation,
 } from '../lib/task-cancellation.js';
+import { decodeBasicHtmlEntities } from '../lib/html-entities.js';
 import { generateStrictTranslation } from '../workflows/translate-engine.js';
 import {
   excludedMediaSources,
@@ -688,7 +689,7 @@ async function searchExaV2({
         .join('; ')}`);
     }
   }
-  const userSources = [
+  const initiallyLoadedUserSources = [
     ...directResult.sources,
     ...(exaContentsResult.status === 'fulfilled'
       ? exaContentsResult.value.map((source) => ({ ...source, userSpecified: true, retrievalLane: 'user' }))
@@ -697,12 +698,23 @@ async function searchExaV2({
   if (exaContentsResult.status === 'rejected') {
     trace.userSourceError = describeFetchError(exaContentsResult.reason).slice(0, 500);
   }
+  const recoveredSources = await recoverUnavailableUserUrls({
+    userUrls,
+    loadedSources: initiallyLoadedUserSources,
+    taskContract,
+    writer,
+    fetchFn,
+    trace,
+  });
+  const exactRecoveredSources = recoveredSources.filter((source) => source.userSpecified);
+  const supplementalRecoveredSources = recoveredSources.filter((source) => !source.userSpecified);
+  const userSources = [...initiallyLoadedUserSources, ...exactRecoveredSources];
   if (taskContract.only_user_links) {
     return assignSourceIds(applyEditorialSourcePolicy(dedupeByUrl(userSources)));
   }
   const searched = [...settled, ...workflowSettled]
     .flatMap((result) => result.status === 'fulfilled' ? result.value : []);
-  const merged = dedupeByUrl([...userSources, ...searched]);
+  const merged = dedupeByUrl([...userSources, ...supplementalRecoveredSources, ...searched]);
   for (const source of merged) {
     if (!source.userSpecified && strictOfficialSource(source, taskContract, officialDomains)) {
       source.official = true;
@@ -713,6 +725,98 @@ async function searchExaV2({
     asOf,
     recentWindowDays,
   ));
+}
+
+async function recoverUnavailableUserUrls({
+  userUrls,
+  loadedSources,
+  taskContract,
+  writer,
+  fetchFn,
+  trace,
+}) {
+  const unavailable = (Array.isArray(userUrls) ? userUrls : [])
+    .filter((userUrl) => !(Array.isArray(loadedSources) ? loadedSources : [])
+      .some((source) => sameSourceUrl(source?.url, userUrl)))
+    .slice(0, 2);
+  if (!unavailable.length) return [];
+
+  const settled = await Promise.allSettled(unavailable.map((userUrl) =>
+    searchExaOpen({
+      query: buildUserUrlRecoveryQuery(userUrl, taskContract),
+      options: {
+        kind: 'user-url-recovery',
+        type: 'auto',
+        numResults: Math.max(5, Number(writer.exaNumResults || 5)),
+      },
+      writer,
+      fetchFn,
+      trace,
+    }).then((results) => results.map((source) => ({
+      ...source,
+      retrievalLane: 'user-recovery',
+      recoveredForUserUrl: userUrl,
+      ...(sameSourceUrl(source.url, userUrl) ? { userSpecified: true } : { specialist: true }),
+    })))));
+  const recovered = settled.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
+  trace.userSourceRecovery = {
+    attemptedUrls: unavailable,
+    exactRecoveredUrls: recovered.filter((source) => source.userSpecified).map((source) => source.url),
+    supplementalUrls: recovered.filter((source) => !source.userSpecified).map((source) => source.url),
+    failedSearches: settled.filter((result) => result.status === 'rejected').length,
+  };
+  return recovered;
+}
+
+export function buildUserUrlRecoveryQuery(rawUrl, taskContract = {}) {
+  const decodedUrl = decodeBasicHtmlEntities(rawUrl);
+  let urlContext = decodedUrl;
+  try {
+    const url = new URL(decodedUrl);
+    const pathTerms = safeDecodeURIComponent(url.pathname)
+      .replace(/\.[a-z0-9]{2,6}$/i, ' ')
+      .replace(/[-_/]+/g, ' ');
+    const campaignTerms = safeDecodeURIComponent(url.searchParams.get('utm_campaign') || '')
+      .replace(/[-_]+/g, ' ');
+    urlContext = `${url.hostname.replace(/^www\./, '')} ${pathTerms} ${campaignTerms}`;
+  } catch {}
+  const entityContext = [
+    ...(taskContract.exact_entities_and_versions || []).map((entity) => entity.literal),
+    ...(taskContract.search_aliases || []).slice(0, 4),
+  ].filter(Boolean).join(' ');
+  const requirementContext = (taskContract.must_cover || [])
+    .slice(0, 2)
+    .join(' ')
+    .replace(/https?:\/\/\S+/g, ' ');
+  return `${urlContext} ${entityContext} ${requirementContext}`
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 420);
+}
+
+function sameSourceUrl(left, right) {
+  return comparableSourceUrl(left) === comparableSourceUrl(right);
+}
+
+function comparableSourceUrl(rawUrl) {
+  try {
+    const url = new URL(decodeBasicHtmlEntities(rawUrl));
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^utm_/i.test(key)) url.searchParams.delete(key);
+    }
+    url.hash = '';
+    url.hostname = url.hostname.toLowerCase();
+    url.pathname = url.pathname.replace(/\/+$/, '') || '/';
+    url.searchParams.sort();
+    return url.toString();
+  } catch {
+    return String(rawUrl || '').trim();
+  }
+}
+
+function safeDecodeURIComponent(value) {
+  try { return decodeURIComponent(String(value || '')); }
+  catch { return String(value || ''); }
 }
 
 async function auditAnalysisV2({
@@ -1324,7 +1428,12 @@ async function fetchExaContents({ urls, writer, fetchFn, trace }) {
   if (!res.ok) throw new Error(`Exa contents failed: ${res.status} ${res.statusText} ${await safeText(res)}`.trim());
   const data = await res.json();
   const results = Array.isArray(data.results) ? data.results : [];
-  finishTrace(event, { requestId: data.requestId, costDollars: data.costDollars, results });
+  finishTrace(event, {
+    requestId: data.requestId,
+    costDollars: data.costDollars,
+    results,
+    contentStatuses: data.statuses,
+  });
   return results;
   } catch (e) {
     failTrace(event, e);
@@ -1338,7 +1447,9 @@ export function extractUrls(text, maxUrls = 5) {
   const re = /https?:\/\/[^\s<>()]+/g;
   const all = String(text || '').match(re) || [];
   const limit = Math.max(1, Math.floor(positiveNumber(maxUrls, 5)));
-  const urls = all.map((u) => u.replace(/[.,;:!?)\]}>]+$/, '')).slice(0, limit);
+  const urls = all
+    .map((u) => decodeBasicHtmlEntities(u).replace(/[.,;:!?)\]}>]+$/, ''))
+    .slice(0, limit);
   const remainder = String(text || '').replace(re, ' ').replace(/\s+/g, ' ').trim();
   return { urls, remainder };
 }
@@ -1414,13 +1525,25 @@ function startTrace(trace, fields) {
   return event;
 }
 
-function finishTrace(event, { requestId, costDollars, results }) {
+function finishTrace(event, { requestId, costDollars, results, contentStatuses }) {
   event.status = 'ok';
   event.finishedAt = new Date().toISOString();
   event.durationMs = Date.parse(event.finishedAt) - Date.parse(event.startedAt);
   event.requestId = requestId || null;
   event.costDollars = costDollars || null;
   event.results = results.map(sourceForTrace);
+  if (Array.isArray(contentStatuses)) {
+    event.contentStatuses = contentStatuses.map((status) => ({
+      id: status?.id || '',
+      status: status?.status || '',
+      ...(status?.error ? {
+        error: {
+          tag: status.error.tag || '',
+          httpStatusCode: Number(status.error.httpStatusCode || 0) || null,
+        },
+      } : {}),
+    }));
+  }
   const trace = findOwningTrace(event);
   if (trace?.live) console.log(`[research] ${trace.workflowId}/${event.kind} done: ${event.results.length} results, ${event.durationMs}ms`);
   persistResearchTrace(trace);

@@ -8,6 +8,7 @@ import {
   normalizeEditorialBrief,
   normalizeMacroEditorialBrief,
 } from '../lib/editorial-skill.js';
+import { decodeBasicHtmlEntities } from '../lib/html-entities.js';
 
 const ANALYSIS_WORKFLOW_IDS = new Set(['wechat', 'sector', 'company', 'earnings', 'macro']);
 const RECENT_RE = /(?:最新|近期|刚发布|新发布|当前|截至目前|\blatest\b|\bcurrent\b|\bnewly\s+released\b|\brecent(?:ly)?\b)/i;
@@ -38,7 +39,7 @@ export function isAnalysisV2Enabled(config, workflow) {
 export function extractUserUrls(text, maxUrls = 8) {
   const matches = String(text || '').match(/https?:\/\/[^\s<>()]+/g) || [];
   return [...new Set(matches
-    .map((url) => url.replace(/[.,;:!?)\]}>，。；：！？]+$/, ''))
+    .map((url) => decodeBasicHtmlEntities(url).replace(/[.,;:!?)\]}>，。；：！？]+$/, ''))
     .filter(Boolean))]
     .slice(0, maxUrls);
 }
@@ -182,7 +183,9 @@ export function normalizePlanningResult(raw, input, workflow = {}, taskContext =
     }));
   const mergedEntities = uniqueByComparable([...locked, ...returnedEntities], (entity) => entity.literal);
   const maxQueries = Math.max(2, positiveInteger(options.maxQueries, 8));
-  const onlyUserLinks = candidate.only_user_links === true || fallback.only_user_links;
+  // “只使用用户链接”会关闭所有补充检索，必须由原始 Prompt 明确授权。
+  // 规划模型不能自行把普通的“分析这个链接”升级成排他性来源约束。
+  const onlyUserLinks = fallback.only_user_links;
   const contract = {
     ...fallback,
     output_language: hasExplicitOutputLanguage(input)
@@ -243,7 +246,9 @@ export function normalizePlanningResult(raw, input, workflow = {}, taskContext =
       reason: searchPlan[1].reason || '使用既定专业来源交叉验证',
     };
   }
-  searchPlan = ensureAliasAndFreshnessCoverage(searchPlan, contract, maxQueries);
+  searchPlan = onlyUserLinks
+    ? []
+    : ensureAliasAndFreshnessCoverage(searchPlan, contract, maxQueries);
   return { taskContract: contract, searchPlan };
 }
 

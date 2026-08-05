@@ -20,6 +20,10 @@ test('识别 "任务:" 前缀', () => {
 });
 test('识别 @bot 提及并清理链接', () => {
   assert.equal(parseSlackTask('<@B1> 分析 <https://x.com|X>', 'B1'), '分析 https://x.com');
+  assert.equal(
+    parseSlackTask('<@B1> 分析 <https://example.com/report?week=2026-08-03&amp;utm_source=slack|Report>', 'B1'),
+    '分析 https://example.com/report?week=2026-08-03&utm_source=slack',
+  );
 });
 test('非任务返回 null', () => {
   assert.equal(parseSlackTask('随便聊聊', 'B1'), null);

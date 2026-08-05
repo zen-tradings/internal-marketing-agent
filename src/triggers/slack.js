@@ -1,10 +1,11 @@
 import boltPkg from '@slack/bolt';
 import { extractExplicitEntityVersions, extractUserUrls } from '../core/analysis-v2.js';
 import { attachmentsFromSlackMessages, normalizeSlackAttachments } from '../core/user-sources.js';
+import { decodeBasicHtmlEntities } from '../lib/html-entities.js';
 const { App } = boltPkg;
 
 export function cleanSlackText(text) {
-  return text
+  return decodeBasicHtmlEntities(text)
     .replace(/<(https?:\/\/[^|>]+)\|[^>]*>/g, '$1')
     .replace(/<(https?:\/\/[^>]+)>/g, '$1')
     .trim();
