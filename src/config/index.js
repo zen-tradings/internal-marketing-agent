@@ -39,16 +39,19 @@ export function loadConfig(env = process.env) {
     },
     writer: {
       openrouterApiKey: need('OPENROUTER_API_KEY'),
-      model: env.OPENROUTER_MODEL || 'qwen/qwen3-235b-a22b',
-      routerModel: env.OPENROUTER_ROUTER_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3-235b-a22b',
-      plannerModel: env.OPENROUTER_PLANNER_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3-235b-a22b',
-      reviewModel: env.OPENROUTER_REVIEW_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3-235b-a22b',
+      model: env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
+      routerModel: env.OPENROUTER_ROUTER_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
+      plannerModel: env.OPENROUTER_PLANNER_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
+      reviewModel: env.OPENROUTER_REVIEW_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
       baseUrl: env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
       maxTokens: positiveIntegerOrThrow(env.OPENROUTER_MAX_TOKENS, 12000, 'OPENROUTER_MAX_TOKENS'),
       maxPromptChars: positiveIntegerOrThrow(env.OPENROUTER_MAX_PROMPT_CHARS, 160000, 'OPENROUTER_MAX_PROMPT_CHARS'),
       coverTimeoutMs: positiveNumber(env.COVER_REQUEST_TIMEOUT_MS, 30000, 'COVER_REQUEST_TIMEOUT_MS'),
       coverProcessTimeoutMs: positiveNumber(env.COVER_PROCESS_TIMEOUT_MS, 90000, 'COVER_PROCESS_TIMEOUT_MS'),
-      reasoningEffort: env.OPENROUTER_REASONING_EFFORT || 'none',
+      reasoningEffort: env.OPENROUTER_REASONING_EFFORT || 'high',
+      plannerReasoningEffort: env.OPENROUTER_PLANNER_REASONING_EFFORT || 'none',
+      reviewReasoningEffort: env.OPENROUTER_REVIEW_REASONING_EFFORT || 'none',
+      routerReasoningEffort: env.OPENROUTER_ROUTER_REASONING_EFFORT || 'none',
       // 直译只需要原始链接/PDF 与 OpenRouter；Exa 仅由原创研究链要求。
       exaApiKey: env.EXA_API_KEY || '',
       exaBaseUrl: env.EXA_BASE_URL || 'https://api.exa.ai',
@@ -134,6 +137,17 @@ export function loadConfig(env = process.env) {
     cover: {
       generatorDir: env.COVER_GENERATOR_DIR
         || path.join(REPO_ROOT, 'tools', 'cover-generator'),
+    },
+    infographic: {
+      // 写作任务按文章内容生成信息图;直译任务在渠道层直接跳过,与此开关无关。
+      enabled: env.INFOGRAPHIC_ENABLED === undefined
+        ? true
+        : booleanFlag(env.INFOGRAPHIC_ENABLED),
+      maxImages: positiveIntegerOrThrow(env.INFOGRAPHIC_MAX_IMAGES, 2, 'INFOGRAPHIC_MAX_IMAGES'),
+      timeoutMs: positiveNumber(env.INFOGRAPHIC_TIMEOUT_MS, 45000, 'INFOGRAPHIC_TIMEOUT_MS'),
+      processTimeoutMs: positiveNumber(env.INFOGRAPHIC_PROCESS_TIMEOUT_MS, 90000, 'INFOGRAPHIC_PROCESS_TIMEOUT_MS'),
+      generatorDir: env.INFOGRAPHIC_GENERATOR_DIR
+        || path.join(REPO_ROOT, 'tools', 'infographic-generator'),
     },
   };
 }

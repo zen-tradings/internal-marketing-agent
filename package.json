@@ -16,6 +16,7 @@
     "auth:google-docs": "node scripts/google-docs-oauth.mjs",
     "check:customerio": "node scripts/check-customerio.mjs",
     "check:egress": "node scripts/check-egress.mjs",
+    "deploy:digitalocean": "node scripts/deploy-digitalocean.mjs",
     "accept:macro": "node scripts/run-macro-acceptance.mjs",
     "preview:newsletter": "node scripts/preview-newsletter.mjs",
     "status": "node scripts/status.mjs",
@@ -27,6 +28,7 @@
     "test:update-golden": "node scripts/update-render-golden.mjs"
   },
   "dependencies": {
+    "@antv/infographic": "^0.2.19",
     "@mozilla/readability": "^0.6.0",
     "@slack/bolt": "^3.17.0",
     "@wenyan-md/core": "3.0.11",

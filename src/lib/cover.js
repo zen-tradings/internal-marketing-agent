@@ -54,7 +54,7 @@ export async function buildCoverData({ title, markdown, writer, fetchFn = global
       body: JSON.stringify({
         model: writer.model,
         max_tokens: 1200,
-        reasoning: { effort: 'none', exclude: true },
+        reasoning: { effort: writer.reasoningEffort || 'none', exclude: true },
         temperature: 0,
         response_format: { type: 'json_object' },
         messages: [

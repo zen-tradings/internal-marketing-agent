@@ -321,6 +321,7 @@ async function runAnalysisV2({
     rawPlanning = await completeReviewJson({
       prompt: planningPrompt,
       model: writer.plannerModel || model,
+      reasoningEffort: writer.plannerReasoningEffort,
       writer: { ...writer, temperature: 0 },
       fetchFn,
       timeoutMs: workflow.timeoutMs,
@@ -399,6 +400,7 @@ async function runAnalysisV2({
     rawEvidence = await completeReviewJson({
       prompt: buildEvidencePrompt(taskContract, sources, workflow),
       model: writer.plannerModel || model,
+      reasoningEffort: writer.plannerReasoningEffort,
       writer: { ...writer, temperature: 0 },
       fetchFn,
       timeoutMs: workflow.timeoutMs,
@@ -1914,6 +1916,13 @@ async function completeReviewJson(options) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const raw = await completeArticle({
       ...options,
+      // JSON 角色使用各自的 reasoning 配置；审计默认关闭，Kimi 规划器可独立开启。
+      writer: {
+        ...options.writer,
+        reasoningEffort: options.reasoningEffort
+          ?? options.writer.reviewReasoningEffort
+          ?? 'none',
+      },
       prompt: attempt === 0
         ? options.prompt
         : `${options.prompt}\n\n上一次输出不是有效 JSON。本次只能返回一个语法有效的 JSON 对象，字符串内换行必须转义，不要代码围栏或解释。`,
@@ -1943,10 +1952,12 @@ async function completeArticle({ prompt, model, writer, fetchFn, timeoutMs, syst
     const configuredEffort = writer.reasoningEffort || 'none';
     let lastDiagnostic = 'unknown response';
 
-    // 空正文通常是 reasoning 吃完输出预算或 provider 瞬时异常。应用层只重试一次,
-    // 第二次强制关闭 reasoning,避免队列无限重试和重复计费。
+    // 空正文通常是 reasoning 吃完输出预算或 provider 瞬时异常。应用层只重试一次。
+    // 强制 reasoning 的模型降到 low；其它模型关闭，避免无效重试和重复计费。
     for (let attempt = 0; attempt < 2; attempt++) {
-      const effort = attempt === 0 ? configuredEffort : 'none';
+      const effort = attempt === 0
+        ? configuredEffort
+        : modelRequiresReasoning(model) ? 'low' : 'none';
       const res = await fetchWithRetry(fetchFn, url, {
         method: 'POST',
         signal: controller.signal,
@@ -1981,6 +1992,10 @@ async function completeArticle({ prompt, model, writer, fetchFn, timeoutMs, syst
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+function modelRequiresReasoning(model) {
+  return /^qwen\/qwen3\.8-max(?:$|[-:])/i.test(String(model || ''));
 }
 
 function extractMessageContent(content) {
