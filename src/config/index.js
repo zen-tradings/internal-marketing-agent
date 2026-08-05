@@ -138,6 +138,17 @@ export function loadConfig(env = process.env) {
       generatorDir: env.COVER_GENERATOR_DIR
         || path.join(REPO_ROOT, 'tools', 'cover-generator'),
     },
+    infographic: {
+      // 写作任务按文章内容生成信息图;直译任务在渠道层直接跳过,与此开关无关。
+      enabled: env.INFOGRAPHIC_ENABLED === undefined
+        ? true
+        : booleanFlag(env.INFOGRAPHIC_ENABLED),
+      maxImages: positiveIntegerOrThrow(env.INFOGRAPHIC_MAX_IMAGES, 2, 'INFOGRAPHIC_MAX_IMAGES'),
+      timeoutMs: positiveNumber(env.INFOGRAPHIC_TIMEOUT_MS, 45000, 'INFOGRAPHIC_TIMEOUT_MS'),
+      processTimeoutMs: positiveNumber(env.INFOGRAPHIC_PROCESS_TIMEOUT_MS, 90000, 'INFOGRAPHIC_PROCESS_TIMEOUT_MS'),
+      generatorDir: env.INFOGRAPHIC_GENERATOR_DIR
+        || path.join(REPO_ROOT, 'tools', 'infographic-generator'),
+    },
   };
 }
 

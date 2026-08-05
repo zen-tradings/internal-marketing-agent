@@ -417,3 +417,89 @@ test('injectFixedImages 未产生变化时不调用 writeArticle(仅 generateCov
   assert.equal(out.mediaId, 'MEDIA-9');
   assert.equal(writeCount, 1); // 只有 cover 那次写入
 });
+
+test('写作任务生成信息图:插入正文并提醒人工复核', async () => {
+  let plannedWith;
+  const writes = [];
+  const warned = [];
+  const channel = makeChannel({
+    ...stubCover,
+    writeArticle: async (p, md) => { writes.push({ p, md }); },
+    renderAndPublish: async () => 'MEDIA-IG',
+    readArticle: async () => ({ markdown: VALID_MD, title: '测试标题' }),
+    generateArticleInfographics: async (args) => {
+      plannedWith = args;
+      return {
+        markdown: `${VALID_MD}![产业链](/x/infographic-1.png)\n`,
+        images: ['/x/infographic-1.png'],
+        warnings: [],
+      };
+    },
+  });
+  const out = await channel.publish({
+    articlePath: '/x/article.md',
+    config: {
+      wechat: { appId: 'wx', appSecret: 's' },
+      infographic: { enabled: true, maxImages: 2 },
+      writer: { openrouterApiKey: 'k', model: 'm' },
+    },
+    workflow: { mode: 'analysis' },
+    notifier: { warn: async (_n, msg) => { warned.push(msg); } },
+    notify: { channel: 'C1' },
+  });
+  assert.equal(out.mediaId, 'MEDIA-IG');
+  assert.equal(plannedWith.outDir, '/x');
+  assert.equal(plannedWith.infographic.maxImages, 2);
+  assert.ok(writes.some(({ md }) => md.includes('infographic-1.png')));
+  assert.ok(warned.some((msg) => msg.includes('信息图') && msg.includes('人工复核')));
+});
+
+test('直译任务不生成信息图', async () => {
+  let called = false;
+  const channel = makeChannel({
+    ...stubCover,
+    renderAndPublish: async () => 'MEDIA-TR',
+    readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
+    generateArticleInfographics: async () => { called = true; return { markdown: VALID_MD, images: [], warnings: [] }; },
+  });
+  const out = await channel.publish({
+    articlePath: '/x/article.md',
+    config: {
+      wechat: { appId: 'wx', appSecret: 's' },
+      infographic: { enabled: true },
+    },
+    workflow: { mode: 'translation' },
+  });
+  assert.equal(out.mediaId, 'MEDIA-TR');
+  assert.equal(called, false);
+});
+
+test('信息图告警不阻断发布;重试稿中的生成图先剥离再门禁', async () => {
+  let gateMarkdown = '';
+  const warned = [];
+  const stale = `${VALID_MD}![文章配图](/x/infographic-1.png)\n`;
+  const channel = makeChannel({
+    ...stubCover,
+    renderAndPublish: async () => 'MEDIA-RE',
+    readArticle: async () => ({ markdown: stale, title: 't' }),
+    checkArticle: (md) => { gateMarkdown = md; return { errors: [], warnings: [] }; },
+    generateArticleInfographics: async () => ({
+      markdown: stale,
+      images: [],
+      warnings: ['第 1 张信息图渲染失败,已跳过:boom'],
+    }),
+  });
+  const out = await channel.publish({
+    articlePath: '/x/article.md',
+    config: {
+      wechat: { appId: 'wx', appSecret: 's' },
+      infographic: { enabled: true },
+    },
+    workflow: { mode: 'analysis' },
+    notifier: { warn: async (_n, msg) => { warned.push(msg); } },
+    notify: { channel: 'C1' },
+  });
+  assert.equal(out.mediaId, 'MEDIA-RE');
+  assert.ok(!gateMarkdown.includes('infographic-1.png'));
+  assert.ok(warned.some((msg) => msg.includes('渲染失败')));
+});

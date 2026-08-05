@@ -209,9 +209,10 @@ npm run requeue:analysis-gate -- <run-id>
 1. 检查 title、疑似密钥、本地路径和格式警告。原文自带代码的直译，或原始 Prompt 明确要求代码、代码示例、ASCII 图时，确定性授权代码块；模型不能自行开启。未授权代码降为 Slack 提醒并继续发布。独立四空格缩进代码先规范为 `text` 围栏，已有围栏、HTML `pre` 和嵌套列表不重复转换。
 2. 判断原创文章中 Markdown 表格的移动端可读性：紧凑五列表直接保留；不可读宽表固定首列、每组三个指标自动拆成多个窄表，再执行最终门禁。直译表格已经是原文 PNG，不进入这一步的表格重排。
 3. 在 Markdown 开头注入 `assets/zen-header-banner.gif`。
-4. 用 OpenRouter 提取封面字段，再由仓库内置 `tools/cover-generator` 把标题与副标题渲染到固定白底 `assets/zen-cover-background.png` 上，输出与底图一致的 900×383 封面；只有替换实现时才需设置 `COVER_GENERATOR_DIR`。浏览器优先读取 `COVER_BROWSER_EXECUTABLE`，否则复用直译浏览器配置并自动发现常见 Chromium/Chrome 路径。
-5. 用 `@wenyan-md/core` 和仓库内固定的 `assets/zen-trading.css` 完成正文渲染；代码使用浅色高亮且 `macStyle:false`，不改变模板 ID。最终 HTML 会把引用块和“原文信息”块归一为正文字号，并在上传前拦截非标题大字号、重复“原文信息”、危险嵌入节点，以及空的或含异常子节点的代码结构。代码中的密钥、本地路径和当前进程真实凭据仍在 Markdown 门禁硬拦截。
-6. 在最终 HTML 最后依次追加内容调研问卷 `assets/zen-survey-qr.jpg` 与四二维码封底 `assets/zen-footer-qr.png`。系统强制断言调研图是倒数第二个节点、社群封底是最终节点，且两图紧邻、其后没有文字或其它节点，再上传微信草稿箱。可分别通过 `WECHAT_SURVEY_IMAGE`、`WECHAT_FOOTER_IMAGE` 覆盖，但两张尾图必须同时存在。
+4. 写作任务(直译除外)按文章内容生成信息图:先用 OpenRouter 规划最多 `INFOGRAPHIC_MAX_IMAGES` 张配图(模板、数据与插入锚点),再由仓库内置 `tools/infographic-generator` 以 `@antv/infographic` SSR 在本地渲染成 SVG、用 Playwright 截图成 PNG,插入锚点标题或段落之后。图中文字与数字只能来自正文,规划、渲染或锚点定位任一失败都只告警并跳过该图,不阻断发布;重试时先按确定性命名 `infographic-N.png` 剥离旧图再重新生成。可用 `INFOGRAPHIC_ENABLED=false` 整体关闭。
+5. 用 OpenRouter 提取封面字段，再由仓库内置 `tools/cover-generator` 把标题与副标题渲染到固定白底 `assets/zen-cover-background.png` 上，输出与底图一致的 900×383 封面；只有替换实现时才需设置 `COVER_GENERATOR_DIR`。浏览器优先读取 `COVER_BROWSER_EXECUTABLE`，否则复用直译浏览器配置并自动发现常见 Chromium/Chrome 路径。
+6. 用 `@wenyan-md/core` 和仓库内固定的 `assets/zen-trading.css` 完成正文渲染；代码使用浅色高亮且 `macStyle:false`，不改变模板 ID。最终 HTML 会把引用块和“原文信息”块归一为正文字号，并在上传前拦截非标题大字号、重复“原文信息”、危险嵌入节点，以及空的或含异常子节点的代码结构。代码中的密钥、本地路径和当前进程真实凭据仍在 Markdown 门禁硬拦截。
+7. 在最终 HTML 最后依次追加内容调研问卷 `assets/zen-survey-qr.jpg` 与四二维码封底 `assets/zen-footer-qr.png`。系统强制断言调研图是倒数第二个节点、社群封底是最终节点，且两图紧邻、其后没有文字或其它节点，再上传微信草稿箱。可分别通过 `WECHAT_SURVEY_IMAGE`、`WECHAT_FOOTER_IMAGE` 覆盖，但两张尾图必须同时存在。
 
 封面字段提取失败会回退到模板示例数据；封面文件生成失败会阻止发布。
 

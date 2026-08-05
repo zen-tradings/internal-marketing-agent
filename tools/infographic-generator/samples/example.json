@@ -1,0 +1,3 @@
+{
+  "syntax": "infographic list-row-simple-horizontal-arrow\ndata\n  title 示例流程\n  items\n    - label 第一步\n      desc 开始\n    - label 第二步\n      desc 进行中\n    - label 第三步\n      desc 完成\n"
+}

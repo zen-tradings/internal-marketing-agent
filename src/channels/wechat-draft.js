@@ -3,6 +3,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getInputContent as defaultGetInputContent } from '../lib/getInputContent.js';
 import { generateCover as defaultGenerateCover, ensureFrontmatterCover as defaultEnsureFrontmatterCover } from '../lib/cover.js';
+import {
+  generateArticleInfographics as defaultGenerateArticleInfographics,
+  stripGeneratedInfographics,
+} from '../lib/infographic.js';
 import { checkArticle as defaultCheckArticle } from '../lib/gate.js';
 import { injectFixedImages as defaultInjectFixedImages } from '../lib/assets.js';
 import { renderAndPublishWithFinalFooter, stripFinalTailMarkdown } from '../lib/wechat-render.js';
@@ -43,7 +47,7 @@ async function defaultWriteArticle(articlePath, content) {
 // 已失败任务重试时,article.md 可能已被上一次发布尝试写入 cover 与固定头尾图。
 // 门禁的对象应始终是模型产出的内容,而不是这些由本渠道确定性注入的本地文件路径。
 function markdownForGate(markdown, assets = {}) {
-  let candidate = String(markdown || '').replace(
+  let candidate = stripGeneratedInfographics(String(markdown || '')).replace(
     /^---\n[\s\S]*?\n---/,
     (block) => block.replace(/^\s*cover\s*:\s*.*(?:\n|$)/gm, '')
   );
@@ -60,6 +64,7 @@ export function makeChannel({
   readArticle = defaultReadArticle,
   getInputContent = defaultGetInputContent,
   generateCover = defaultGenerateCover,
+  generateArticleInfographics = defaultGenerateArticleInfographics,
   ensureFrontmatterCover = defaultEnsureFrontmatterCover,
   writeArticle = defaultWriteArticle,
   checkArticle = defaultCheckArticle,
@@ -84,6 +89,14 @@ export function makeChannel({
       let title, markdown;
       try { ({ title, markdown } = await readArticle(articlePath)); }
       catch (e) { const err = new Error(`读取文章失败:${e.message}`); err.stage = 'render'; throw err; }
+
+      // 失败重试时 article.md 可能已含上一次注入的生成信息图。先确定性剥离,
+      // 保证后续规范化与门禁看到的都是模型产出的原文,重新生成不会累积图片。
+      const withoutStaleInfographics = stripGeneratedInfographics(markdown);
+      if (withoutStaleInfographics !== markdown) {
+        try { await writeArticle(articlePath, withoutStaleInfographics); markdown = withoutStaleInfographics; }
+        catch (e) { const err = new Error(`生成图清理写入失败:${e.message}`); err.stage = 'render'; throw err; }
+      }
 
       const appId = config.wechat && config.wechat.appId;
       const appSecret = config.wechat && config.wechat.appSecret;
@@ -186,6 +199,40 @@ export function makeChannel({
       if (injectResult.markdown !== markdown) {
         await writeArticle(articlePath, injectResult.markdown);
         markdown = injectResult.markdown;
+      }
+
+      // 写作任务按文章内容生成信息图并插入文中;直译任务忠实还原原文,不生成。
+      // 规划、渲染、锚点定位任一失败都只告警并跳过该图,不阻断发布。
+      if ((workflow?.mode || '') !== 'translation' && config.infographic?.enabled === true) {
+        let infographicResult;
+        try {
+          infographicResult = await generateArticleInfographics({
+            title,
+            markdown,
+            outDir: path.dirname(articlePath),
+            writer: config.writer,
+            infographic: config.infographic || {},
+            generatorDir: config.infographic?.generatorDir || undefined,
+          });
+        } catch (e) {
+          infographicResult = { markdown, images: [], warnings: [`信息图生成异常,已跳过:${e.message}`] };
+        }
+        if (infographicResult.markdown !== markdown) {
+          try { await writeArticle(articlePath, infographicResult.markdown); markdown = infographicResult.markdown; }
+          catch (e) { const err = new Error(`信息图写入失败:${e.message}`); err.stage = 'render'; throw err; }
+        }
+        for (const warning of infographicResult.warnings || []) {
+          try { if (notifier && notify) await notifier.warn(notify, warning); }
+          catch (warnErr) { console.error('信息图告警失败(不影响流程):', warnErr); }
+        }
+        if (infographicResult.images?.length) {
+          try {
+            if (notifier && notify) await notifier.warn(
+              notify,
+              `已根据文章内容生成 ${infographicResult.images.length} 张信息图插入文中,图中文字由模型提取,请人工复核。`,
+            );
+          } catch (warnErr) { console.error('信息图提醒失败(不影响流程):', warnErr); }
+        }
       }
 
       // 微信草稿要求封面图:渲染发布前必须先生成封面并写入 frontmatter
