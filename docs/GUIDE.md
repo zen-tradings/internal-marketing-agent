@@ -23,7 +23,9 @@
 ③ 调研+写作  src/core/analysis-v2.js + src/core/runner.js
    微信原创/行业/公司/财报/macro 先把未经截断的 Slack 原始 Prompt 固化为 TaskContract，
    抽取英文/法定别名后再生成最多 8 个 SearchPlan 定向查询。Slack PDF/文本附件、
-   PDF/Notion/Google Docs/GitHub URL 与 Exa 搜索并行读取，并作为一级用户来源；
+   PDF/Notion/Google Docs/GitHub URL 与 Exa 搜索并行读取，并作为一级用户来源。直读失败时
+   依次尝试精确缓存和 URL 语义恢复；FCC PDF 只有在机构、`DA` 文号和文件主题全部匹配时，
+   才使用 `docs.fcc.gov` 的官方 TXT 附件恢复为同一用户文档；
    每个任务至少包含一条中文查询和一条英文查询，默认继续以最新官方/一手、
    既定优先源和开放来源交叉验证。同层级优先英文或任何语言的独立第三方机构，
    搜索结果确定性排除政府资助、国家所有和公共广播媒体；监管、交易所、统计部门
@@ -33,7 +35,7 @@
    EvidenceMatrix；静态域名只用于发现，必须匹配发布主体、页面类型和目标实体才能
    判为一手来源。证据矩阵完成后，通用任务由 latepost-ai-writer 选择受控稿型、证据可支持的
    角度、核心矛盾和结尾约束；Slack Prompt、来源安全、用户指定结构和工作流方法始终
-   优先。GLM 5.2 只接收相关证据写作；事实审计按影响、风险、来源和置信度返回精确原句与
+   优先。正文模型只接收相关证据写作，生产由 Qwen3.8-Max 承担；GLM 5.2 的事实审计按影响、风险、来源和置信度返回精确原句与
    局部动作，低风险/中低置信度/用户前提保留待复核，只有高置信度问题可自动修改，
    不能重写全文。缺资料和无支持句不再提问；只有用户材料与一手来源对核心前提
    形成双边、不可调和冲突时转 needs_input，同一线程回答后不重复询问。
@@ -82,7 +84,7 @@
 | 微信分析编排与外部调用 | `src/core/runner.js` 的 Analysis V2 分支 | 规划、Exa、写作、审计、确定性引用 |
 | 中文原创写作方法、稿型与质量检查 | `skills/latepost-ai-writer/` + `src/lib/editorial-skill.js` | EvidenceMatrix 后路由；trace 记录摘要、稿型与角度；不得覆盖用户结构 |
 | 全资产宏观方法、三类稿型与样本索引 | `skills/global-macro-strategy-writer/` + `src/workflows/macro.js` | 宏观主导、LatePost 约束证据；只创建微信草稿，无 cron |
-| 用户附件与直接文档 | `src/core/user-sources.js` | Slack 私有文件、PDF、Notion、Google Docs、GitHub；并行读取并保留一级来源身份 |
+| 用户附件与直接文档 | `src/core/user-sources.js` | Slack 私有文件、PDF、Notion、Google Docs、GitHub；并行读取并保留一级来源身份；受阻文档的官方镜像必须验证机构、文号和主题 |
 | 备用文章结构 | `src/workflows/<id>.js` 的 `defaultMethodology` | 只在用户未规定结构时补空白 |
 | 新增一种文章类型 | 新建 `src/workflows/<name>.js` + `src/index.js` WORKFLOWS 注册 | 照抄 earnings.js 的结构 |
 | 公司深度备用框架 | `src/workflows/company.js` | 只有 Prompt 确实要求公司财务/竞争/价值链时使用 |
@@ -101,7 +103,7 @@
 | 微信宽表可读性与自动拆分 | `src/lib/mobile-tables.js` | 紧凑五列可放行；不可读表先拆分，转换失败才由 gate 拦截 |
 | 固定头图/尾图换图 | 替换 `assets/` 下文件，或用 `WECHAT_HEADER_IMAGE` / `WECHAT_SURVEY_IMAGE` / `WECHAT_FOOTER_IMAGE` 覆盖 | Markdown 只注入头图；最终 HTML 强制按“调研图、社群封底”顺序保留最后两张 |
 | 封面版式/字段 | `tools/cover-generator/template.html` | 自定义生成器时覆盖 `COVER_GENERATOR_DIR`；数据提取 prompt 在 `src/lib/cover.js` |
-| 分析模型与预算 | `.env` 的 `OPENROUTER_MODEL` / `OPENROUTER_PLANNER_MODEL` / `OPENROUTER_REVIEW_MODEL` / `ANALYSIS_*` | 正文、规划、审计分离；生产默认 V2 |
+| 分析模型与预算 | `.env` 的 `OPENROUTER_MODEL` / `OPENROUTER_ROUTER_MODEL` / `OPENROUTER_PLANNER_MODEL` / `OPENROUTER_REVIEW_MODEL` / `ANALYSIS_*` | 正文、路由、规划、审计分离；生产默认 V2 |
 | 草稿固定模板总门禁 | `src/lib/draft-template.js` | 所有真实渠道必须登记模板 ID 并锁定；任务不得覆盖，改版必须升版本和更新测试 |
 | 微信渲染主题 | `zen-wechat/zen-trading@4`、`assets/zen-trading.css` 与 `RENDER_OPTS` | 主题文件随仓库部署；引用块归一为正文字号，最终 HTML 在发布前执行字体、重复来源与固定尾图顺序检查 |
 | Customer.io 邮件草稿 | `src/workflows/email.js` + `src/channels/customerio-draft.js` | 固定 `zen-customerio/zen-research@1`，只创建草稿；受众由 internal/pilot/full 三阶段配置控制 |
