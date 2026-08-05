@@ -38,6 +38,7 @@ import {
   buildEvidencePrompt,
   buildPlanningPrompt,
   buildWritingPrompt,
+  cleanReferenceTitle,
   contentPolicyForPrompt,
   fallbackTaskContract,
   inferNumericCriticalClaims,
@@ -47,6 +48,7 @@ import {
   normalizeCoreRepairs,
   normalizeEvidenceMatrix,
   normalizePlanningResult,
+  referenceUrlKey,
   selectFinalReferenceIds,
 } from './analysis-v2.js';
 
@@ -1728,7 +1730,7 @@ function validateArticleSourceContract(article, research, policy) {
       throw new Error('严格引用门禁:正文仍含引用链接或引用脚标,请只在文末列出来源');
     }
     const referenceLinks = extractArticleUrls(terminal.section);
-    const uniqueReferenceLinks = new Set(referenceLinks.map(normalizeUrl));
+    const uniqueReferenceLinks = new Set(referenceLinks.map(referenceUrlKey));
     if (uniqueReferenceLinks.size !== referenceLinks.length) throw new Error('严格引用门禁:文末引用来源存在重复 URL');
     if (policy.maxReferences && referenceLinks.length > policy.maxReferences) {
       throw new Error(`严格引用门禁:文末引用链接只能保留 ${policy.maxReferences} 个`);
@@ -1845,7 +1847,7 @@ function canonicalizeTerminalReferences(article, research, policy = {}) {
   body = body.replace(/@@ZEN_IMAGE_(\d+)@@/g, (_, index) => images[Number(index)] || '');
 
   if (!matched.length) return body;
-  const list = matched.map((source, index) => `${index + 1}. [${cleanSourceTitle(source.title, source.url)}](${source.url})`).join('\n');
+  const list = matched.map((source, index) => `${index + 1}. [${cleanReferenceTitle(source.title, source.url)}](${source.url})`).join('\n');
   return `${body}\n\n## 引用链接\n\n${list}\n`;
 }
 
@@ -1869,27 +1871,40 @@ function terminalReferenceSection(article) {
   return { before, section, trailingText: Boolean(nextHeading) };
 }
 
-function extractArticleUrls(article) {
-  return [...String(article || '').matchAll(/https?:\/\/[^\s)>\]]+/g)]
-    .map((match) => match[0].replace(/[.,;，。；]+$/, ''));
+export function extractArticleUrls(article) {
+  const urls = [];
+  let remaining = String(article || '');
+  // 图片地址是资源，不是事实引用；先移除，避免被计入引用数量或重复 URL。
+  remaining = remaining.replace(/!\[[^\]]*\]\(\s*<?https?:\/\/[^\s)>]+>?(?:\s+["'][^"']*["'])?\s*\)/g, ' ');
+  // Markdown 标签里的文字可能本身长得像 URL，只收集真正的链接目标。
+  remaining = remaining.replace(/\[[^\]]*\]\(\s*<?(https?:\/\/[^\s)>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g, (_match, url) => {
+    urls.push(cleanArticleUrl(url));
+    return ' ';
+  });
+  remaining = remaining.replace(/<(https?:\/\/[^>\s]+)>/g, (_match, url) => {
+    urls.push(cleanArticleUrl(url));
+    return ' ';
+  });
+  for (const match of remaining.matchAll(/https?:\/\/[^\s)>\]]+/g)) {
+    urls.push(cleanArticleUrl(match[0]));
+  }
+  return urls.filter(Boolean);
+}
+
+function cleanArticleUrl(url) {
+  return String(url || '').replace(/[.,;，。；]+$/, '');
 }
 
 function matchResearchSources(links, research) {
-  const wanted = new Set((links || []).map(normalizeUrl));
+  const wanted = new Set((links || []).map(referenceUrlKey));
   const seen = new Set();
   return research.filter((source) => {
     if (!source?.url) return false;
-    const key = normalizeUrl(source.url);
+    const key = referenceUrlKey(source.url);
     if (!wanted.has(key) || seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-}
-
-function cleanSourceTitle(title, url) {
-  const value = String(title || '').replace(/[\[\]\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (value) return value;
-  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return '来源'; }
 }
 
 export function sanitizeExaDomains(domains) {

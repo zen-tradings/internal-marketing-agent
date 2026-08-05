@@ -853,10 +853,17 @@ export function applyAuditIssues(article, issues) {
 
 export function appendDeterministicReferences(article, sources, referenceIds, maxReferences = 5) {
   const sourceMap = new Map(sources.map((source) => [source.id, source]));
-  const selected = uniqueStrings(referenceIds)
-    .map((id) => sourceMap.get(id))
-    .filter((source) => source?.url && !source.editorialWarning)
-    .slice(0, maxReferences);
+  const selected = [];
+  const seenUrls = new Set();
+  for (const id of uniqueStrings(referenceIds)) {
+    const source = sourceMap.get(id);
+    if (!source?.url || source.editorialWarning) continue;
+    const urlKey = referenceUrlKey(source.url);
+    if (!urlKey || seenUrls.has(urlKey)) continue;
+    seenUrls.add(urlKey);
+    selected.push(source);
+    if (selected.length >= maxReferences) break;
+  }
   let body = removeReferenceSections(String(article || '').trim());
   const images = [];
   body = body.replace(/!\[[^\]]*\]\([^\s)]+(?:\s+"[^"]*")?\)/g, (image) => {
@@ -1119,11 +1126,30 @@ function removeReferenceSections(article) {
   return matches.length ? article.slice(0, matches[0].index).trimEnd() : article;
 }
 
-function cleanReferenceTitle(title, url) {
+export function cleanReferenceTitle(title, url) {
   const clean = String(title || '').replace(/[\[\]\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (clean) return clean;
-  try { return new URL(url).hostname.replace(/^www\./, ''); }
+  if (clean && !/^https?:\/\/\S+$/i.test(clean)) return clean;
+  try { return new URL(url).hostname.replace(/^www\./, '') || '来源'; }
   catch { return '来源'; }
+}
+
+export function referenceUrlKey(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl || '').replace(/&amp;/gi, '&'));
+    url.hash = '';
+    url.hostname = url.hostname.toLowerCase();
+    url.pathname = url.pathname.replace(/\/+$/, '') || '/';
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^utm_/i.test(key)
+        || ['gh_src', 'gclid', 'fbclid', 'mc_cid', 'mc_eid'].includes(key.toLowerCase())) {
+        url.searchParams.delete(key);
+      }
+    }
+    url.searchParams.sort();
+    return url.toString();
+  } catch {
+    return String(rawUrl || '').trim().toLowerCase().replace(/\/+$/, '');
+  }
 }
 
 function sourceContainsEntity(source, literal) {

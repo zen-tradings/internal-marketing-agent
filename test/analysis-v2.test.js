@@ -10,6 +10,7 @@ import {
   buildCoreRepairPrompt,
   buildEvidencePrompt,
   buildWritingPrompt,
+  cleanReferenceTitle,
   contentPolicyForPrompt,
   extractExplicitEntityVersions,
   extractUserUrls,
@@ -22,7 +23,12 @@ import {
   normalizePlanningResult,
   selectFinalReferenceIds,
 } from '../src/core/analysis-v2.js';
-import { extractUrls, normalizeAnalysisArticle, runWriter } from '../src/core/runner.js';
+import {
+  extractArticleUrls,
+  extractUrls,
+  normalizeAnalysisArticle,
+  runWriter,
+} from '../src/core/runner.js';
 
 function jsonResponse(body, init = {}) {
   return {
@@ -630,6 +636,46 @@ test('系统从证据矩阵确定性生成唯一引用章节，不依赖模型�
   assert.equal((output.match(/^## 引用链接$/gm) || []).length, 1);
   assert.match(output, /https:\/\/official\.example\/release/);
   assert.match(output, /https:\/\/secondary\.example\/a/);
+});
+
+test('Atoms 回归:URL 型来源标题不被误算成重复引用，重复来源 ID 自动合并', () => {
+  const sources = [
+    { id: 'S1', title: 'https://atoms.co/', url: 'https://atoms.co/?utm_source=exa' },
+    { id: 'S2', title: 'Atoms official', url: 'https://atoms.co/' },
+    {
+      id: 'S3',
+      title: 'Product Manager - Guest Engagement',
+      url: 'https://job-boards.greenhouse.io/cssmerge/jobs/8457925002?gh_src=tracking',
+    },
+  ];
+  const output = appendDeterministicReferences(
+    '---\ntitle: Atoms 北京团队\n---\n\n正文。',
+    sources,
+    ['S1', 'S2', 'S3', 'S1'],
+  );
+
+  assert.equal(cleanReferenceTitle(sources[0].title, sources[0].url), 'atoms.co');
+  assert.match(output, /\[atoms\.co\]\(https:\/\/atoms\.co\/\?utm_source=exa\)/);
+  assert.doesNotMatch(output, /\[https:\/\/atoms\.co/);
+  assert.equal((output.match(/^\d+\. /gm) || []).length, 2);
+  assert.deepEqual(extractArticleUrls(output), [
+    'https://atoms.co/?utm_source=exa',
+    'https://job-boards.greenhouse.io/cssmerge/jobs/8457925002?gh_src=tracking',
+  ]);
+});
+
+test('引用 URL 提取只统计链接目标和裸链接，忽略 URL 标签文字及图片资源', () => {
+  const article = [
+    '[https://atoms.co/](https://atoms.co/)',
+    '![cover](https://cdn.example/cover.png)',
+    '<https://example.com/autolink>',
+    '裸链接 https://example.com/bare。',
+  ].join('\n');
+  assert.deepEqual(extractArticleUrls(article), [
+    'https://atoms.co/',
+    'https://example.com/autolink',
+    'https://example.com/bare',
+  ]);
 });
 
 test('V2 把开头 yaml 标题围栏收敛为唯一 frontmatter，不把标题代码块留在正文', () => {
