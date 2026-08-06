@@ -50,7 +50,21 @@ for (const request of trace.requests || []) {
   if (request.durationMs !== undefined) console.log(`耗时: ${request.durationMs}ms`);
   if (request.costDollars) console.log(`费用: ${JSON.stringify(request.costDollars)}`);
   if (request.error) console.log(`错误: ${request.error}`);
+  for (const status of request.contentStatuses || []) {
+    const detail = status.error
+      ? ` (${status.error.tag || 'unknown'}${status.error.httpStatusCode ? ` HTTP ${status.error.httpStatusCode}` : ''})`
+      : '';
+    console.log(`URL 状态: ${status.status || 'unknown'}${detail}\n  ${status.id || '-'}`);
+  }
   for (const result of request.results || []) console.log(`- ${result.title || '(无标题)'}\n  ${result.url}`);
+}
+
+if (trace.userSourceRecovery) {
+  console.log('\n用户来源恢复:');
+  console.log(`- 尝试: ${(trace.userSourceRecovery.attemptedUrls || []).length}`);
+  console.log(`- 原链接恢复: ${(trace.userSourceRecovery.exactRecoveredUrls || []).length}`);
+  console.log(`- 补充来源: ${(trace.userSourceRecovery.supplementalUrls || []).length}`);
+  console.log(`- 搜索失败: ${trace.userSourceRecovery.failedSearches || 0}`);
 }
 
 if (trace.selectedSources?.length) {

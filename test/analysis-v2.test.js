@@ -10,8 +10,10 @@ import {
   buildCoreRepairPrompt,
   buildEvidencePrompt,
   buildWritingPrompt,
+  cleanReferenceTitle,
   contentPolicyForPrompt,
   extractExplicitEntityVersions,
+  extractUserUrls,
   fallbackTaskContract,
   inferNumericCriticalClaims,
   normalizeAuditCriticalClaims,
@@ -21,7 +23,12 @@ import {
   normalizePlanningResult,
   selectFinalReferenceIds,
 } from '../src/core/analysis-v2.js';
-import { normalizeAnalysisArticle, runWriter } from '../src/core/runner.js';
+import {
+  extractArticleUrls,
+  extractUrls,
+  normalizeAnalysisArticle,
+  runWriter,
+} from '../src/core/runner.js';
 
 function jsonResponse(body, init = {}) {
   return {
@@ -102,6 +109,40 @@ test('TaskContract 锁定 Slack 原文型号，规划器不得偷偷加入附近
   assert.ok(normalized.searchPlan.length >= 4 && normalized.searchPlan.length <= 6);
   assert.ok(normalized.searchPlan.every((item) => /Opus 5|Kimi K2/.test(item.query)));
   assert.ok(normalized.searchPlan.every((item) => !/Opus 4\.5|Kimi K2\.6/.test(item.query)));
+});
+
+test('Slack HTML 转义不会污染用户 URL，规划器也不能擅自关闭补充搜索', () => {
+  const input = 'please write an analysis about this: https://kalshi.com/company-reports?week=2026-08-03&amp;utm_source=news.kalshi.com';
+  const expected = 'https://kalshi.com/company-reports?week=2026-08-03&utm_source=news.kalshi.com';
+  assert.deepEqual(extractUserUrls(input), [expected]);
+  assert.deepEqual(extractUrls(input).urls, [expected]);
+
+  const normalized = normalizePlanningResult({
+    task_contract: {
+      exact_entities_and_versions: [{ literal: 'Kalshi' }],
+      search_aliases: ['Kalshi Public Companies Hub'],
+      must_cover: ['分析 Kalshi Public Companies Hub'],
+      only_user_links: true,
+    },
+    search_plan: [
+      { query: 'Kalshi Public Companies Hub launch', lane: 'official', language: 'en' },
+      { query: 'Kalshi 公司数据中心 分析', lane: 'open', language: 'zh' },
+    ],
+  }, input, { id: 'wechat' }, {}, { maxQueries: 6 });
+
+  assert.equal(normalized.taskContract.only_user_links, false);
+  assert.ok(normalized.searchPlan.length >= 2);
+  assert.ok(normalized.searchPlan.some((item) => /Public Companies Hub/i.test(item.query)));
+});
+
+test('原始 Prompt 明确只依据链接时保留排他约束且不生成搜索计划', () => {
+  const input = 'only use this link https://example.com/report';
+  const normalized = normalizePlanningResult({
+    task_contract: { only_user_links: false },
+    search_plan: [{ query: 'unrelated supplement', lane: 'open', language: 'en' }],
+  }, input, { id: 'wechat' });
+  assert.equal(normalized.taskContract.only_user_links, true);
+  assert.deepEqual(normalized.searchPlan, []);
 });
 
 test('用户明确两方结构时 sector 方法论只能补空白，不能强制 TAM/供需章节', () => {
@@ -597,6 +638,46 @@ test('系统从证据矩阵确定性生成唯一引用章节，不依赖模型�
   assert.match(output, /https:\/\/secondary\.example\/a/);
 });
 
+test('Atoms 回归:URL 型来源标题不被误算成重复引用，重复来源 ID 自动合并', () => {
+  const sources = [
+    { id: 'S1', title: 'https://atoms.co/', url: 'https://atoms.co/?utm_source=exa' },
+    { id: 'S2', title: 'Atoms official', url: 'https://atoms.co/' },
+    {
+      id: 'S3',
+      title: 'Product Manager - Guest Engagement',
+      url: 'https://job-boards.greenhouse.io/cssmerge/jobs/8457925002?gh_src=tracking',
+    },
+  ];
+  const output = appendDeterministicReferences(
+    '---\ntitle: Atoms 北京团队\n---\n\n正文。',
+    sources,
+    ['S1', 'S2', 'S3', 'S1'],
+  );
+
+  assert.equal(cleanReferenceTitle(sources[0].title, sources[0].url), 'atoms.co');
+  assert.match(output, /\[atoms\.co\]\(https:\/\/atoms\.co\/\?utm_source=exa\)/);
+  assert.doesNotMatch(output, /\[https:\/\/atoms\.co/);
+  assert.equal((output.match(/^\d+\. /gm) || []).length, 2);
+  assert.deepEqual(extractArticleUrls(output), [
+    'https://atoms.co/?utm_source=exa',
+    'https://job-boards.greenhouse.io/cssmerge/jobs/8457925002?gh_src=tracking',
+  ]);
+});
+
+test('引用 URL 提取只统计链接目标和裸链接，忽略 URL 标签文字及图片资源', () => {
+  const article = [
+    '[https://atoms.co/](https://atoms.co/)',
+    '![cover](https://cdn.example/cover.png)',
+    '<https://example.com/autolink>',
+    '裸链接 https://example.com/bare。',
+  ].join('\n');
+  assert.deepEqual(extractArticleUrls(article), [
+    'https://atoms.co/',
+    'https://example.com/autolink',
+    'https://example.com/bare',
+  ]);
+});
+
 test('V2 把开头 yaml 标题围栏收敛为唯一 frontmatter，不把标题代码块留在正文', () => {
   const output = normalizeAnalysisArticle(
     '```yaml\ntitle: 三票反对与通胀张力\n```\n\n正文。',
@@ -801,4 +882,221 @@ test('V2 完全没有检索结果时直接失败，不把缺资料变成 needs_i
   assert.equal(result.ok, false);
   assert.equal(result.needsInput, undefined);
   assert.match(result.stderr, /未检索到与任务直接相关的可靠材料/);
+});
+
+test('V2 用户页面抓取失败时用 URL 语义定向恢复，不被规划器伪造的 only_user_links 卡死', async () => {
+  const calls = [];
+  let completionIndex = 0;
+  const fetchFn = async (url, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : {};
+    calls.push({ url: String(url), body });
+    if (String(url).endsWith('/contents')) {
+      return jsonResponse({
+        requestId: 'contents-kalshi',
+        results: [],
+        statuses: [{
+          id: body.urls[0],
+          status: 'error',
+          error: { tag: 'CRAWL_UNKNOWN_ERROR', httpStatusCode: 500 },
+        }],
+      });
+    }
+    if (String(url).endsWith('/search')) {
+      if (/one stop shop for tracking corporate metrics/i.test(body.query || '')) {
+        return jsonResponse({
+          requestId: 'recovery-kalshi',
+          results: [{
+            title: 'Kalshi launches Public Companies Hub',
+            url: 'https://news.kalshi.com/p/kalshi-public-companies-hub',
+            publishedDate: '2026-08-03',
+            text: 'Kalshi launched a Public Companies Hub for company earnings schedules, corporate metrics, and related prediction markets.',
+          }],
+        });
+      }
+      return jsonResponse({ requestId: 'generic-empty', results: [] });
+    }
+
+    completionIndex++;
+    if (completionIndex === 1) {
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({
+        task_contract: {
+          exact_entities_and_versions: [{ literal: 'Kalshi' }],
+          search_aliases: ['Kalshi Public Companies Hub'],
+          must_cover: [
+            'Analyze the linked company reports page',
+            'Cover the launch as a one-stop shop for tracking corporate metrics',
+          ],
+          only_user_links: true,
+        },
+        search_plan: [
+          { query: 'Kalshi latest analysis', lane: 'priority', language: 'en', recent: true },
+          { query: 'Kalshi 最新分析', lane: 'open', language: 'zh', recent: true },
+        ],
+      }) } }] });
+    }
+    if (completionIndex === 2) {
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({
+        source_assessments: [{
+          source_id: 'S1',
+          source_type: 'primary',
+          relevant: true,
+          entity_matches: ['Kalshi'],
+          safe_statements: ['Kalshi 发布 Public Companies Hub'],
+        }],
+        requirements: [{
+          requirement: '分析 Public Companies Hub',
+          source_ids: ['S1'],
+          safe_statements: ['该页面汇集财报日程、公司指标和相关预测市场'],
+          covered: true,
+        }],
+        entities: [{ literal: 'Kalshi', verified: true, source_ids: ['S1'] }],
+        relevant_source_ids: ['S1'],
+        selected_reference_ids: ['S1'],
+        conflicts: [],
+      }) } }] });
+    }
+    if (completionIndex === 3) {
+      return jsonResponse({ choices: [{ message: { content: '---\ntitle: Kalshi 公司数据入口的意义\n---\n\nKalshi 把财报日程、公司指标与相关预测市场集中到同一入口。' } }] });
+    }
+    return jsonResponse({ choices: [{ message: { content: '{"approved":true,"issues":[],"critical_claims":[]}' } }] });
+  };
+
+  const input = 'please write an analysis about this: https://kalshi.com/company-reports?week=2026-08-03&amp;utm_campaign=kalshi-launches-public-companies-hub-as-one-stop-shop-for-tracking-corporate-metrics';
+  const result = await runWriter({ workflow: workflow(), input, config: config(), fetchFn });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.sources, ['https://news.kalshi.com/p/kalshi-public-companies-hub']);
+  assert.ok(calls.some((call) => call.url.endsWith('/search')
+    && /one stop shop for tracking corporate metrics/i.test(call.body.query || '')));
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.taskContract.only_user_links, false);
+  assert.deepEqual(trace.requests.find((request) => request.kind === 'user-contents').contentStatuses, [{
+    id: 'https://kalshi.com/company-reports?week=2026-08-03&utm_campaign=kalshi-launches-public-companies-hub-as-one-stop-shop-for-tracking-corporate-metrics',
+    status: 'error',
+    error: { tag: 'CRAWL_UNKNOWN_ERROR', httpStatusCode: 500 },
+  }]);
+  assert.deepEqual(trace.userSourceRecovery.supplementalUrls, [
+    'https://news.kalshi.com/p/kalshi-public-companies-hub',
+  ]);
+});
+
+test('FCC PDF 403 回归:从搜索证据解析文号并恢复官方附件后继续写作', async () => {
+  const calls = [];
+  let completionIndex = 0;
+  const originalUrl = 'https://www.fcc.gov/sites/default/files/robots-nsd.pdf';
+  const mirrorUrl = 'https://docs.fcc.gov/public/attachments/DA-26-786A1.txt';
+  const fetchFn = async (url, options = {}) => {
+    const target = String(url);
+    const body = options.body ? JSON.parse(options.body) : {};
+    calls.push({ url: target, body });
+    if (target === originalUrl) {
+      return new Response('Akamai reference error', {
+        status: 403,
+        statusText: 'Forbidden',
+        headers: { 'content-type': 'text/html' },
+      });
+    }
+    if (target === mirrorUrl) {
+      return new Response([
+        'Federal Communications Commission DA 26-786',
+        'National Security Determination on the Threat Posed by Foreign-Produced Advanced Robotic Devices.',
+        'Advanced robotic devices include connected mobile ground robots subject to stated definitions and exclusions.',
+        'This official attachment contains the complete determination and supporting public notice.',
+        'Robot security, production, connectivity, software, and conditional approval provisions are described here.',
+      ].join('\n').repeat(4), {
+        status: 200,
+        headers: { 'content-type': 'text/plain; charset=UTF-8' },
+      });
+    }
+    if (target.endsWith('/contents')) {
+      return jsonResponse({
+        requestId: 'fcc-cache-miss',
+        results: [],
+        statuses: [{
+          id: originalUrl,
+          status: 'error',
+          error: { tag: 'CRAWL_UNKNOWN_ERROR', httpStatusCode: 500 },
+        }],
+      });
+    }
+    if (target.endsWith('/search')) {
+      if (/fcc\.gov sites default files robots nsd/i.test(body.query || '')) {
+        return jsonResponse({
+          requestId: 'fcc-document-discovery',
+          results: [{
+            title: 'FCC Adds Foreign-Produced Advanced Robotic Devices to Covered List',
+            url: 'https://www.morganlewis.com/pubs/2026/08/fcc-adds-foreign-produced-advanced-robotic-devices',
+            publishedDate: '2026-08-01',
+            text: 'The FCC public notice DA 26-786 includes the National Security Determination for advanced robotic devices.',
+          }],
+        });
+      }
+      return jsonResponse({
+        requestId: 'robot-hiring-search',
+        results: [{
+          title: 'Robotics role in Beijing',
+          url: 'https://job-boards.greenhouse.io/example/jobs/1234',
+          publishedDate: '2026-08-02',
+          text: 'An American robotics company lists an active engineering position in Beijing, China.',
+        }],
+      });
+    }
+
+    completionIndex++;
+    if (completionIndex === 1) {
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({
+        task_contract: {
+          search_aliases: ['FCC robots NSD', 'American robotics companies China hiring'],
+          must_cover: ['Summarize robots-nsd.pdf', 'Verify active robotics hiring in China'],
+          only_user_links: true,
+        },
+        search_plan: [
+          { query: 'FCC robots NSD official document', lane: 'official', language: 'en', recent: false },
+          { query: '美国 机器人 公司 中国 招聘', lane: 'open', language: 'zh', recent: true },
+        ],
+      }) } }] });
+    }
+    if (completionIndex === 2) {
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({
+        source_assessments: [
+          { source_id: 'S1', source_type: 'primary', relevant: true, entity_matches: ['FCC'], safe_statements: ['FCC 发布机器人国家安全决定'] },
+          { source_id: 'S3', source_type: 'secondary', relevant: true, entity_matches: ['robotics hiring'], safe_statements: ['北京职位仍在招聘'] },
+        ],
+        requirements: [
+          { requirement: 'Summarize robots-nsd.pdf', source_ids: ['S1'], safe_statements: ['官方附件包含完整决定'], covered: true },
+          { requirement: 'Verify active robotics hiring in China', source_ids: ['S3'], safe_statements: ['职位页显示北京岗位'], covered: true },
+        ],
+        entities: [{ literal: 'FCC', verified: true, source_ids: ['S1'] }],
+        relevant_source_ids: ['S1', 'S3'],
+        selected_reference_ids: ['S1', 'S3'],
+        conflicts: [],
+      }) } }] });
+    }
+    if (completionIndex === 3) {
+      return jsonResponse({ choices: [{ message: { content: '---\ntitle: FCC 机器人规则与在华招聘\n---\n\nFCC 官方附件给出了适用定义和例外。公开职位页则显示北京仍有机器人相关岗位。' } }] });
+    }
+    return jsonResponse({ choices: [{ message: { content: '{"approved":true,"issues":[],"critical_claims":[]}' } }] });
+  };
+
+  const testConfig = config();
+  testConfig.translation = {
+    dnsLookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    maxSourceBytes: 5 * 1024 * 1024,
+    maxPdfPages: 120,
+  };
+  const result = await runWriter({
+    workflow: workflow(),
+    input: `summarize this document and search American robotics companies hiring in China: ${originalUrl}`,
+    config: testConfig,
+    fetchFn,
+  });
+
+  assert.equal(result.ok, true, result.stderr);
+  assert.ok(result.sources.includes(mirrorUrl));
+  assert.ok(calls.some((call) => call.url === originalUrl));
+  assert.ok(calls.some((call) => call.url === mirrorUrl));
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.taskContract.only_user_links, false);
+  assert.deepEqual(trace.userSourceRecovery.cachedExactUrls, []);
+  assert.deepEqual(trace.userSourceRecovery.officialMirrorUrls, [mirrorUrl]);
+  assert.equal(trace.userSourceRecovery.officialMirrorAttempts[0].status, 'ok');
 });

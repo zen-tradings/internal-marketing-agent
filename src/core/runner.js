@@ -17,6 +17,7 @@ import {
   throwIfTaskCancelled,
   withTaskCancellation,
 } from '../lib/task-cancellation.js';
+import { decodeBasicHtmlEntities } from '../lib/html-entities.js';
 import { generateStrictTranslation } from '../workflows/translate-engine.js';
 import {
   excludedMediaSources,
@@ -25,6 +26,7 @@ import {
 import {
   isDirectUserUrl,
   loadDirectUserSources,
+  recoverOfficialDocumentMirrors,
   sourceRequestHeadersForAttachment,
   translationAttachment,
 } from './user-sources.js';
@@ -37,6 +39,7 @@ import {
   buildEvidencePrompt,
   buildPlanningPrompt,
   buildWritingPrompt,
+  cleanReferenceTitle,
   contentPolicyForPrompt,
   fallbackTaskContract,
   inferNumericCriticalClaims,
@@ -46,6 +49,7 @@ import {
   normalizeCoreRepairs,
   normalizeEvidenceMatrix,
   normalizePlanningResult,
+  referenceUrlKey,
   selectFinalReferenceIds,
 } from './analysis-v2.js';
 
@@ -688,7 +692,7 @@ async function searchExaV2({
         .join('; ')}`);
     }
   }
-  const userSources = [
+  const initiallyLoadedUserSources = [
     ...directResult.sources,
     ...(exaContentsResult.status === 'fulfilled'
       ? exaContentsResult.value.map((source) => ({ ...source, userSpecified: true, retrievalLane: 'user' }))
@@ -697,12 +701,24 @@ async function searchExaV2({
   if (exaContentsResult.status === 'rejected') {
     trace.userSourceError = describeFetchError(exaContentsResult.reason).slice(0, 500);
   }
+  const recoveredSources = await recoverUnavailableUserUrls({
+    userUrls,
+    loadedSources: initiallyLoadedUserSources,
+    taskContract,
+    writer,
+    config,
+    fetchFn,
+    trace,
+  });
+  const exactRecoveredSources = recoveredSources.filter((source) => source.userSpecified);
+  const supplementalRecoveredSources = recoveredSources.filter((source) => !source.userSpecified);
+  const userSources = [...initiallyLoadedUserSources, ...exactRecoveredSources];
   if (taskContract.only_user_links) {
     return assignSourceIds(applyEditorialSourcePolicy(dedupeByUrl(userSources)));
   }
   const searched = [...settled, ...workflowSettled]
     .flatMap((result) => result.status === 'fulfilled' ? result.value : []);
-  const merged = dedupeByUrl([...userSources, ...searched]);
+  const merged = dedupeByUrl([...userSources, ...supplementalRecoveredSources, ...searched]);
   for (const source of merged) {
     if (!source.userSpecified && strictOfficialSource(source, taskContract, officialDomains)) {
       source.official = true;
@@ -713,6 +729,145 @@ async function searchExaV2({
     asOf,
     recentWindowDays,
   ));
+}
+
+async function recoverUnavailableUserUrls({
+  userUrls,
+  loadedSources,
+  taskContract,
+  writer,
+  config,
+  fetchFn,
+  trace,
+}) {
+  const unavailable = (Array.isArray(userUrls) ? userUrls : [])
+    .filter((userUrl) => !(Array.isArray(loadedSources) ? loadedSources : [])
+      .some((source) => sameSourceUrl(source?.url, userUrl)))
+    .slice(0, 2);
+  if (!unavailable.length) return [];
+
+  let cachedExactSources = [];
+  const directDocumentUrls = unavailable.filter(isDirectUserUrl);
+  if (directDocumentUrls.length) {
+    try {
+      cachedExactSources = (await fetchExaContents({
+        urls: directDocumentUrls,
+        writer,
+        fetchFn,
+        trace,
+        kind: 'user-document-cache-recovery',
+      }))
+        .filter((source) => hasUsableSourceText(source)
+          && directDocumentUrls.some((userUrl) => sameSourceUrl(source?.url, userUrl)))
+        .map((source) => ({
+          ...source,
+          userSpecified: true,
+          retrievalLane: 'user-recovery',
+          recoveredForUserUrl: directDocumentUrls.find((userUrl) => sameSourceUrl(source?.url, userUrl)),
+        }));
+    } catch (error) {
+      trace.userDocumentCacheRecoveryError = describeFetchError(error).slice(0, 500);
+    }
+  }
+  const stillUnavailable = unavailable.filter((userUrl) => !cachedExactSources
+    .some((source) => sameSourceUrl(source?.url, userUrl)));
+
+  const settled = await Promise.allSettled(stillUnavailable.map((userUrl) =>
+    searchExaOpen({
+      query: buildUserUrlRecoveryQuery(userUrl, taskContract),
+      options: {
+        kind: 'user-url-recovery',
+        type: 'auto',
+        numResults: Math.max(5, Number(writer.exaNumResults || 5)),
+      },
+      writer,
+      fetchFn,
+      trace,
+    }).then((results) => results.map((source) => ({
+      ...source,
+      retrievalLane: 'user-recovery',
+      recoveredForUserUrl: userUrl,
+      ...(sameSourceUrl(source.url, userUrl) ? { userSpecified: true } : { specialist: true }),
+    })))));
+  const searchedRecoverySources = settled
+    .flatMap((result) => result.status === 'fulfilled' ? result.value : []);
+  const officialMirrors = await recoverOfficialDocumentMirrors({
+    userUrls: stillUnavailable,
+    discoverySources: searchedRecoverySources,
+    config,
+    fetchFn,
+    fetchWithRetry,
+  });
+  const recovered = [
+    ...cachedExactSources,
+    ...officialMirrors.sources,
+    ...searchedRecoverySources,
+  ];
+  trace.userSourceRecovery = {
+    attemptedUrls: unavailable,
+    cachedExactUrls: cachedExactSources.map((source) => source.url),
+    officialMirrorUrls: officialMirrors.sources.map((source) => source.url),
+    officialMirrorAttempts: officialMirrors.attempts,
+    exactRecoveredUrls: recovered.filter((source) => source.userSpecified).map((source) => source.url),
+    supplementalUrls: recovered.filter((source) => !source.userSpecified).map((source) => source.url),
+    failedSearches: settled.filter((result) => result.status === 'rejected').length,
+  };
+  return recovered;
+}
+
+function hasUsableSourceText(source) {
+  return String(source?.text || source?.summary || '').trim().length >= 40;
+}
+
+export function buildUserUrlRecoveryQuery(rawUrl, taskContract = {}) {
+  const decodedUrl = decodeBasicHtmlEntities(rawUrl);
+  let urlContext = decodedUrl;
+  try {
+    const url = new URL(decodedUrl);
+    const pathTerms = safeDecodeURIComponent(url.pathname)
+      .replace(/\.[a-z0-9]{2,6}$/i, ' ')
+      .replace(/[-_/]+/g, ' ');
+    const campaignTerms = safeDecodeURIComponent(url.searchParams.get('utm_campaign') || '')
+      .replace(/[-_]+/g, ' ');
+    urlContext = `${url.hostname.replace(/^www\./, '')} ${pathTerms} ${campaignTerms}`;
+  } catch {}
+  const entityContext = [
+    ...(taskContract.exact_entities_and_versions || []).map((entity) => entity.literal),
+    ...(taskContract.search_aliases || []).slice(0, 4),
+  ].filter(Boolean).join(' ');
+  const requirementContext = (taskContract.must_cover || [])
+    .slice(0, 2)
+    .join(' ')
+    .replace(/https?:\/\/\S+/g, ' ');
+  return `${urlContext} ${entityContext} ${requirementContext}`
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 420);
+}
+
+function sameSourceUrl(left, right) {
+  return comparableSourceUrl(left) === comparableSourceUrl(right);
+}
+
+function comparableSourceUrl(rawUrl) {
+  try {
+    const url = new URL(decodeBasicHtmlEntities(rawUrl));
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^utm_/i.test(key)) url.searchParams.delete(key);
+    }
+    url.hash = '';
+    url.hostname = url.hostname.toLowerCase();
+    url.pathname = url.pathname.replace(/\/+$/, '') || '/';
+    url.searchParams.sort();
+    return url.toString();
+  } catch {
+    return String(rawUrl || '').trim();
+  }
+}
+
+function safeDecodeURIComponent(value) {
+  try { return decodeURIComponent(String(value || '')); }
+  catch { return String(value || ''); }
 }
 
 async function auditAnalysisV2({
@@ -1309,9 +1464,9 @@ async function searchExaPriority({ query, writer, prioritySources, fetchFn, trac
 // 用户手工贴的 URL 走全文抓取(text: true,不做 compact verbosity),不请求 highlights
 // (highlights 是围绕 query 摘取片段,对"抓整篇原文"这个用途没有意义);
 // formatResearch 里再按 userSpecified 单独放宽字符上限。
-async function fetchExaContents({ urls, writer, fetchFn, trace }) {
+async function fetchExaContents({ urls, writer, fetchFn, trace, kind = 'user-contents' }) {
   const url = `${trimTrailingSlash(writer.exaBaseUrl || 'https://api.exa.ai')}/contents`;
-  const event = startTrace(trace, { kind: 'user-contents', endpoint: '/contents', urls });
+  const event = startTrace(trace, { kind, endpoint: '/contents', urls });
   try {
   const res = await fetchWithRetry(fetchFn, url, {
     method: 'POST',
@@ -1324,7 +1479,12 @@ async function fetchExaContents({ urls, writer, fetchFn, trace }) {
   if (!res.ok) throw new Error(`Exa contents failed: ${res.status} ${res.statusText} ${await safeText(res)}`.trim());
   const data = await res.json();
   const results = Array.isArray(data.results) ? data.results : [];
-  finishTrace(event, { requestId: data.requestId, costDollars: data.costDollars, results });
+  finishTrace(event, {
+    requestId: data.requestId,
+    costDollars: data.costDollars,
+    results,
+    contentStatuses: data.statuses,
+  });
   return results;
   } catch (e) {
     failTrace(event, e);
@@ -1338,7 +1498,9 @@ export function extractUrls(text, maxUrls = 5) {
   const re = /https?:\/\/[^\s<>()]+/g;
   const all = String(text || '').match(re) || [];
   const limit = Math.max(1, Math.floor(positiveNumber(maxUrls, 5)));
-  const urls = all.map((u) => u.replace(/[.,;:!?)\]}>]+$/, '')).slice(0, limit);
+  const urls = all
+    .map((u) => decodeBasicHtmlEntities(u).replace(/[.,;:!?)\]}>]+$/, ''))
+    .slice(0, limit);
   const remainder = String(text || '').replace(re, ' ').replace(/\s+/g, ' ').trim();
   return { urls, remainder };
 }
@@ -1414,13 +1576,25 @@ function startTrace(trace, fields) {
   return event;
 }
 
-function finishTrace(event, { requestId, costDollars, results }) {
+function finishTrace(event, { requestId, costDollars, results, contentStatuses }) {
   event.status = 'ok';
   event.finishedAt = new Date().toISOString();
   event.durationMs = Date.parse(event.finishedAt) - Date.parse(event.startedAt);
   event.requestId = requestId || null;
   event.costDollars = costDollars || null;
   event.results = results.map(sourceForTrace);
+  if (Array.isArray(contentStatuses)) {
+    event.contentStatuses = contentStatuses.map((status) => ({
+      id: status?.id || '',
+      status: status?.status || '',
+      ...(status?.error ? {
+        error: {
+          tag: status.error.tag || '',
+          httpStatusCode: Number(status.error.httpStatusCode || 0) || null,
+        },
+      } : {}),
+    }));
+  }
   const trace = findOwningTrace(event);
   if (trace?.live) console.log(`[research] ${trace.workflowId}/${event.kind} done: ${event.results.length} results, ${event.durationMs}ms`);
   persistResearchTrace(trace);
@@ -1605,7 +1779,7 @@ function validateArticleSourceContract(article, research, policy) {
       throw new Error('严格引用门禁:正文仍含引用链接或引用脚标,请只在文末列出来源');
     }
     const referenceLinks = extractArticleUrls(terminal.section);
-    const uniqueReferenceLinks = new Set(referenceLinks.map(normalizeUrl));
+    const uniqueReferenceLinks = new Set(referenceLinks.map(referenceUrlKey));
     if (uniqueReferenceLinks.size !== referenceLinks.length) throw new Error('严格引用门禁:文末引用来源存在重复 URL');
     if (policy.maxReferences && referenceLinks.length > policy.maxReferences) {
       throw new Error(`严格引用门禁:文末引用链接只能保留 ${policy.maxReferences} 个`);
@@ -1722,7 +1896,7 @@ function canonicalizeTerminalReferences(article, research, policy = {}) {
   body = body.replace(/@@ZEN_IMAGE_(\d+)@@/g, (_, index) => images[Number(index)] || '');
 
   if (!matched.length) return body;
-  const list = matched.map((source, index) => `${index + 1}. [${cleanSourceTitle(source.title, source.url)}](${source.url})`).join('\n');
+  const list = matched.map((source, index) => `${index + 1}. [${cleanReferenceTitle(source.title, source.url)}](${source.url})`).join('\n');
   return `${body}\n\n## 引用链接\n\n${list}\n`;
 }
 
@@ -1746,27 +1920,40 @@ function terminalReferenceSection(article) {
   return { before, section, trailingText: Boolean(nextHeading) };
 }
 
-function extractArticleUrls(article) {
-  return [...String(article || '').matchAll(/https?:\/\/[^\s)>\]]+/g)]
-    .map((match) => match[0].replace(/[.,;，。；]+$/, ''));
+export function extractArticleUrls(article) {
+  const urls = [];
+  let remaining = String(article || '');
+  // 图片地址是资源，不是事实引用；先移除，避免被计入引用数量或重复 URL。
+  remaining = remaining.replace(/!\[[^\]]*\]\(\s*<?https?:\/\/[^\s)>]+>?(?:\s+["'][^"']*["'])?\s*\)/g, ' ');
+  // Markdown 标签里的文字可能本身长得像 URL，只收集真正的链接目标。
+  remaining = remaining.replace(/\[[^\]]*\]\(\s*<?(https?:\/\/[^\s)>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g, (_match, url) => {
+    urls.push(cleanArticleUrl(url));
+    return ' ';
+  });
+  remaining = remaining.replace(/<(https?:\/\/[^>\s]+)>/g, (_match, url) => {
+    urls.push(cleanArticleUrl(url));
+    return ' ';
+  });
+  for (const match of remaining.matchAll(/https?:\/\/[^\s)>\]]+/g)) {
+    urls.push(cleanArticleUrl(match[0]));
+  }
+  return urls.filter(Boolean);
+}
+
+function cleanArticleUrl(url) {
+  return String(url || '').replace(/[.,;，。；]+$/, '');
 }
 
 function matchResearchSources(links, research) {
-  const wanted = new Set((links || []).map(normalizeUrl));
+  const wanted = new Set((links || []).map(referenceUrlKey));
   const seen = new Set();
   return research.filter((source) => {
     if (!source?.url) return false;
-    const key = normalizeUrl(source.url);
+    const key = referenceUrlKey(source.url);
     if (!wanted.has(key) || seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-}
-
-function cleanSourceTitle(title, url) {
-  const value = String(title || '').replace(/[\[\]\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (value) return value;
-  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return '来源'; }
 }
 
 export function sanitizeExaDomains(domains) {
