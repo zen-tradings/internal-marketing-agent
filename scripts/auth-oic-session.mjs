@@ -8,6 +8,7 @@ import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { chromium } from 'playwright-core';
 import { loadConfig } from '../src/config/index.js';
+import { countTrendingRows } from '../src/lib/options-volume.js';
 
 const config = loadConfig();
 const digest = config.openingDigest;
@@ -22,15 +23,15 @@ try {
   const prompt = readline.createInterface({ input, output });
   await prompt.question('在临时 VNC 浏览器中完成 OIC 登录/MFA 并确认表格可见后，按 Enter 保存会话。');
   prompt.close();
-  const visibleRows = await maxTableRows(page);
-  if (visibleRows < 21) throw new Error(`未验证到完整 Trending Options 表格（rows=${visibleRows}），不保存会话`);
+  const visibleRows = await maxTrendingRows(page);
+  if (visibleRows < 20) throw new Error(`未验证到完整 Trending Options 表格（rows=${visibleRows}），不保存会话`);
   fs.mkdirSync(path.dirname(digest.storageStatePath), { recursive: true, mode: 0o750 });
   await context.storageState({ path: digest.storageStatePath });
   fs.chmodSync(digest.storageStatePath, 0o640);
   console.log(`已保存 OIC 会话：${digest.storageStatePath}`);
 } finally { await browser.close(); }
 
-async function maxTableRows(page) {
+async function maxTrendingRows(page) {
   let rows = 0;
   for (const frame of page.frames()) {
     const tables = frame.locator('table');
@@ -38,6 +39,7 @@ async function maxTableRows(page) {
     for (let index = 0; index < tableCount; index++) {
       rows = Math.max(rows, await tables.nth(index).locator('tr').count().catch(() => 0));
     }
+    rows = Math.max(rows, countTrendingRows(await frame.locator('body').innerText().catch(() => '')));
   }
   return rows;
 }

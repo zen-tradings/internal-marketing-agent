@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { isUsEquitySession, easternDateKey } from '../src/lib/us-equity-calendar.js';
 import { coverHtml, OPENING_COVER_HEIGHT, OPENING_COVER_WIDTH } from '../src/lib/opening-digest-cover.js';
 import { makeChannel, renderOptionsHtml } from '../src/channels/customerio-opening-digest.js';
+import { countTrendingRows } from '../src/lib/options-volume.js';
 
 const ARTICLE = `---
 title: Zen Opening Digest
@@ -40,6 +41,14 @@ test('US equities calendar rejects weekends and recurring NYSE holidays', () => 
   assert.equal(isUsEquitySession(new Date('2026-07-04T16:00:00Z')), false);
   assert.equal(isUsEquitySession(new Date('2026-07-06T16:00:00Z')), true);
   assert.equal(easternDateKey(new Date('2026-08-10T14:00:00Z')), '2026-08-10');
+});
+
+test('iVolatility component text validates a complete native Top 20 without semantic table rows', () => {
+  const text = ['As of today', 'Ticker Name Call Options Volume Put Options Volume Total Option Volume']
+    .concat(Array.from({ length: 20 }, (_, index) => `${index + 1}\tT${index + 1}\tCompany ${index + 1}\t50 %\t50 %\t${1000 - index}`))
+    .join('\n');
+  assert.equal(countTrendingRows(text), 20);
+  assert.equal(countTrendingRows(text.replace(/^20\t.*$/m, '')), 19);
 });
 
 test('opening cover keeps Zen title and uses date-specific digest line', () => {

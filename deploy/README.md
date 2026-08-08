@@ -130,10 +130,14 @@ proxy environment variables. Outbound routing follows the host and Node.js
 runtime configuration. The health endpoint exposes queue counts only and
 should remain on loopback or behind an authenticated monitoring agent.
 
-## Opening Digest OIC session renewal
+## Opening Digest OIC browser state
 
 The Opening Digest reads the OIC Trending Options Volume table through an
-authorized, logged-in browser session. Do not put an OIC password in the
+authorized browser session. The current public iVolatility embed does not
+require an account login, so a protected empty Playwright storage-state file is
+sufficient. Keep it owned by `root:zenbot` with mode `0640`.
+
+If the provider later requires login, do not put an OIC password in the
 environment. Install the optional GUI helpers only on the Droplet, bind them to
 loopback, and use an SSH tunnel from an operator workstation:
 
