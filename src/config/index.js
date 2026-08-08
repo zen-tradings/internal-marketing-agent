@@ -139,8 +139,6 @@ export function loadConfig(env = process.env) {
       automationAuthorized: booleanFlag(env.OIC_AUTOMATION_AUTHORIZED),
       segmentId: positiveInteger(env.CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID),
       subscriptionTopicId: positiveInteger(env.CUSTOMERIO_OPENING_DIGEST_TOPIC_ID),
-      maxRecipients: positiveIntegerOrThrow(env.OPENING_DIGEST_MAX_RECIPIENTS, 10, 'OPENING_DIGEST_MAX_RECIPIENTS'),
-      expectedRecipients: positiveIntegerOrThrow(env.OPENING_DIGEST_EXPECTED_RECIPIENTS, 4, 'OPENING_DIGEST_EXPECTED_RECIPIENTS'),
       assetFolderId: positiveInteger(env.CUSTOMERIO_OPENING_DIGEST_ASSET_FOLDER_ID),
       eodCachePath: env.OPENING_DIGEST_EOD_CACHE_PATH
         || path.join(env.WORK_DIR || '/var/lib/zen-content-hub/work', 'opening-digest-options-eod.json'),

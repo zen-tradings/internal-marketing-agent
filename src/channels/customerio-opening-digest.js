@@ -30,9 +30,13 @@ export function makeChannel({
       const current = now();
       const dateKey = easternDateKey(current);
       const article = parseNewsletterArticle(await readArticle(articlePath), dateKey);
-      const audienceCount = await audienceCountFor({ baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, segmentId: digest.segmentId, fetchFn, timeoutMs: cio.timeoutMs });
-      if (audienceCount !== digest.expectedRecipients) throw publishError(`Opening Digest test1 人数必须为 ${digest.expectedRecipients}，当前为 ${audienceCount}`);
-      if (audienceCount > digest.maxRecipients) throw publishError(`Opening Digest 收件人数超过上限 ${digest.maxRecipients}`);
+      const { count: audienceCount, name: audienceName } = await audiencePreflightFor({
+        baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, segmentId: digest.segmentId,
+        fetchFn, timeoutMs: cio.timeoutMs,
+      });
+      if (normalizedSegmentName(audienceName) !== 'test1') {
+        throw publishError(`Opening Digest 第一版只能发送到 Customer.io segment test1，当前为 ${audienceName || '(unnamed)'}`);
+      }
 
       const common = { baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, fetchFn, timeoutMs: cio.timeoutMs, parentFolderId: digest.assetFolderId };
       let headerImageUrl = '';
@@ -147,10 +151,15 @@ function assertDigestConfig(cio, digest) {
   if (senderEmail(cio.from) !== SENDER) throw publishError(`Customer.io 发件邮箱必须统一为 ${SENDER}`);
   if (!digest.segmentId || !digest.subscriptionTopicId) throw publishError('缺少 Opening Digest segment 或 subscription topic ID');
 }
-async function audienceCountFor({ baseUrl, appApiKey, segmentId, fetchFn, timeoutMs }) {
-  const data = await customerIoJson({ baseUrl, appApiKey, path: `/v1/segments/${segmentId}/customer_count`, method: 'GET', fetchFn, timeoutMs });
-  if (!Number.isInteger(data?.count)) throw publishError('Customer.io 受众预检返回无效人数');
-  return data.count;
+async function audiencePreflightFor({ baseUrl, appApiKey, segmentId, fetchFn, timeoutMs }) {
+  const [segmentData, countData] = await Promise.all([
+    customerIoJson({ baseUrl, appApiKey, path: `/v1/segments/${segmentId}`, method: 'GET', fetchFn, timeoutMs }),
+    customerIoJson({ baseUrl, appApiKey, path: `/v1/segments/${segmentId}/customer_count`, method: 'GET', fetchFn, timeoutMs }),
+  ]);
+  const segment = segmentData?.segment || segmentData;
+  if (!segment?.name) throw publishError('Customer.io segment 预检没有返回名称');
+  if (!Number.isInteger(countData?.count)) throw publishError('Customer.io 受众预检返回无效人数');
+  return { name: String(segment.name), count: countData.count };
 }
 async function customerIoJson({ baseUrl = 'https://api.customer.io', appApiKey, path: apiPath, method, body, fetchFn, timeoutMs }) {
   const controller = new AbortController();
@@ -173,6 +182,7 @@ function openingSendTarget(now, timezone) {
 }
 function displayDate(dateKey) { return new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(`${dateKey}T12:00:00Z`)); }
 function formatCapturedAt(value) { try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)); } catch { return String(value || ''); } }
+function normalizedSegmentName(value) { return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ''); }
 function senderEmail(value) { const text = String(value || '').trim(); return String(text.match(/<([^<>]+)>\s*$/)?.[1] || text).trim().toLowerCase(); }
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char])); }
 function escapeAttr(value) { return escapeHtml(value); }

@@ -31,7 +31,7 @@ function config() {
       enabled: true, timezone: 'America/New_York', optionsUrl: 'https://options.example/table',
       storageStatePath: '/tmp/oic.json', browserExecutablePath: '/tmp/chrome', captureTimeoutMs: 45000,
       automationAuthorized: true, segmentId: 42, subscriptionTopicId: 19,
-      maxRecipients: 10, expectedRecipients: 4, assetFolderId: 8, eodCachePath: '/tmp/does-not-exist.json',
+      assetFolderId: 8, eodCachePath: '/tmp/does-not-exist.json',
     },
   };
 }
@@ -64,6 +64,7 @@ test('opening digest uploads cover/options, reuses Zen template and schedules th
     fetchFn: async (url, options = {}) => {
       requests.push({ url, options, body: options.body ? JSON.parse(options.body) : undefined });
       if (url.includes('/customer_count')) return response({ count: 4 });
+      if (url.endsWith('/v1/segments/42')) return response({ segment: { id: 42, name: 'test 1' } });
       if (url.endsWith('/v1/newsletters')) return response({ newsletter: { id: 99 } });
       if (url.endsWith('/schedule')) return response({});
       throw new Error(`Unexpected URL ${url}`);
@@ -79,12 +80,38 @@ test('opening digest uploads cover/options, reuses Zen template and schedules th
   assert.ok(requests.some((item) => item.url.endsWith('/schedule')));
 });
 
-test('opening digest refuses an audience that is not exactly test1\'s four people', async () => {
+test('opening digest accepts any current audience size when the segment is test1', async () => {
+  const requests = [];
   const channel = makeChannel({
     readArticle: async () => ARTICLE,
-    fetchFn: async (url) => url.includes('/customer_count') ? response({ count: 5 }) : response({}),
+    renderCover: async () => Buffer.from('cover'),
+    captureOptions: async () => ({ buffer: Buffer.from('options'), capturedAt: '2026-08-10T14:15:00.000Z', rows: 20 }),
+    uploadAsset: async () => ({ id: 1, path: 'https://assets.example/image.png' }),
+    collectMetrics: async () => [],
+    fetchFn: async (url) => {
+      requests.push(url);
+      if (url.includes('/customer_count')) return response({ count: 37 });
+      if (url.endsWith('/v1/segments/42')) return response({ segment: { id: 42, name: 'test1' } });
+      if (url.endsWith('/v1/newsletters')) return response({ newsletter: { id: 100 } });
+      if (url.endsWith('/send')) return response({});
+      throw new Error(`Unexpected URL ${url}`);
+    },
   });
-  await assert.rejects(channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: {} }), /人数必须为 4/);
+  const result = await channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: {}, source: 'manual' });
+  assert.equal(result.audienceRecipientCount, 37);
+  assert.ok(requests.some((url) => url.endsWith('/v1/newsletters/100/send')));
+});
+
+test('opening digest rejects a configured segment whose name is not test1', async () => {
+  const channel = makeChannel({
+    readArticle: async () => ARTICLE,
+    fetchFn: async (url) => {
+      if (url.includes('/customer_count')) return response({ count: 2 });
+      if (url.endsWith('/v1/segments/42')) return response({ segment: { id: 42, name: 'customers' } });
+      return response({});
+    },
+  });
+  await assert.rejects(channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: {} }), /只能发送到 Customer\.io segment test1/);
 });
 
 test('opening digest reuses a persisted Customer.io newsletter id after a send retry', async () => {
@@ -99,6 +126,7 @@ test('opening digest reuses a persisted Customer.io newsletter id after a send r
     fetchFn: async (url, options = {}) => {
       requests.push({ url, options });
       if (url.includes('/customer_count')) return response({ count: 4 });
+      if (url.endsWith('/v1/segments/42')) return response({ segment: { id: 42, name: 'test1' } });
       if (url.endsWith('/send')) return response({});
       throw new Error(`Unexpected URL ${url}`);
     },
