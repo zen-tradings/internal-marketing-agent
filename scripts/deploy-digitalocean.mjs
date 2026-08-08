@@ -180,10 +180,10 @@ sudo chown -R zenbot:zenbot "$stage"
 sudo -u zenbot npm --prefix "$stage" ci
 sudo -u zenbot npm --prefix "$stage" run check
 
-before_backup=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 -type f -name 'runs-*.db' 2>/dev/null | wc -l | tr -d ' ')
+before_backup_manifest=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 -type f -name 'runs-*.db' -printf '%f\n' 2>/dev/null | sort | sha256sum | awk '{ print $1 }')
 sudo systemctl start zen-content-hub-backup.service
-after_backup=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 -type f -name 'runs-*.db' | wc -l | tr -d ' ')
-test "$after_backup" -gt "$before_backup"
+after_backup_manifest=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 -type f -name 'runs-*.db' -printf '%f\n' | sort | sha256sum | awk '{ print $1 }')
+test "$after_backup_manifest" != "$before_backup_manifest"
 
 port=$(sudo awk -F= '$1 == "HEALTH_PORT" { print $2 }' "$env_file" | tail -n 1)
 ready=$(curl -fsS --max-time 5 "http://127.0.0.1:$port/ready")
