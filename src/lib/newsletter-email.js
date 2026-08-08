@@ -35,7 +35,7 @@ export function renderNewsletterEmail(article, options = {}) {
   const headerImageUrl = safeUrl(options.headerImageUrl);
   const contactEmail = safeEmail(options.contactEmail);
   const address = escapeHtml(options.companyAddress || 'Company address required before sending');
-  const content = renderMarkdown(article.body);
+  const content = options.contentHtml || renderMarkdown(article.body);
   const feedback = renderFeedback({ feedbackUrl, contactEmail, edition: article.edition });
   // 开头品牌图:仅在配置了公开图片 URL 时渲染,顶部与卡片圆角对齐,自适应宽度。
   const headerImage = headerImageUrl
@@ -99,7 +99,7 @@ function feedbackMailto(email, rating, edition) {
   return `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
-function renderMarkdown(markdown) {
+export function renderMarkdown(markdown) {
   const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
   const out = [];
   let paragraph = [];

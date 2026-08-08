@@ -265,6 +265,54 @@ test('服务任务使用 run 级工作目录隔离同工作流并发', async () 
   assert.match(actualWorkDir, /^\/tmp\/zen-base\/runs\/r1-/);
 });
 
+test('OIC 登录恢复重试复用同一份 Opening Digest，而不重新生成文章', async () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-opening-auth-'));
+  const workflows = {
+    'opening-digest': { id: 'opening-digest', workDir: baseDir, channel: 'customerio-opening-digest', retries: 0 },
+  };
+  let writerCalls = 0;
+  let publishCalls = 0;
+  const runWriter = async ({ workflow }) => {
+    writerCalls += 1;
+    fs.mkdirSync(workflow.workDir, { recursive: true });
+    const articlePath = path.join(workflow.workDir, 'article.md');
+    fs.writeFileSync(articlePath, 'frozen opening edition');
+    return { ok: true, articlePath };
+  };
+  const channels = {
+    'customerio-opening-digest': {
+      templateId: FIXED_DRAFT_TEMPLATE_IDS['customerio-opening-digest'],
+      templateLocked: true,
+      async publish() {
+        publishCalls += 1;
+        if (publishCalls === 1) {
+          const error = new Error('OIC login expired');
+          error.code = 'OIC_AUTH_EXPIRED';
+          throw error;
+        }
+        return { mediaId: 'CIO-1', title: 'Zen Opening Digest' };
+      },
+    },
+  };
+  const store = makeStore({ created_at: Date.now() });
+  const { deps } = baseDeps({ store, workflows, channels, runWriter });
+  let retryScheduled = false;
+  deps.deferRun = () => { retryScheduled = true; };
+  const handler = makeHandler(deps);
+  const openingRun = { id: 'opening-auth-1', workflowId: 'opening-digest', input: 'opening' };
+
+  await handler(openingRun);
+  assert.equal(store._row().status, 'waiting_options_auth');
+  assert.equal(retryScheduled, true);
+  store.setStatus(openingRun.id, 'queued', { stage: 'options-auth', error: null });
+  await handler({ ...openingRun, restored: true });
+
+  assert.equal(writerCalls, 1);
+  assert.equal(publishCalls, 2);
+  assert.equal(store._row().status, 'done');
+  fs.rmSync(baseDir, { recursive: true, force: true });
+});
+
 test('Slack 取消生成中任务后标记 cancelled 并删除独立运行目录', async () => {
   const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-handler-cancel-'));
   let started;

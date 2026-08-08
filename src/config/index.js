@@ -129,6 +129,25 @@ export function loadConfig(env = process.env) {
       contactEmail: env.CUSTOMERIO_NEWSLETTER_CONTACT_EMAIL || '',
       companyAddress: env.CUSTOMERIO_COMPANY_ADDRESS || '',
     },
+    openingDigest: {
+      enabled: booleanFlag(env.OPENING_DIGEST_ENABLED),
+      timezone: env.OPENING_DIGEST_TIMEZONE || 'America/New_York',
+      optionsUrl: env.OIC_TRENDING_OPTIONS_URL
+        || 'https://www.optionseducation.org/toolsoptionquotes/trending-options-volume',
+      storageStatePath: env.OIC_STORAGE_STATE_PATH || '/etc/zen-content-hub/oic-storage-state.json',
+      captureTimeoutMs: positiveNumber(env.OIC_CAPTURE_TIMEOUT_MS, 45000, 'OIC_CAPTURE_TIMEOUT_MS'),
+      automationAuthorized: booleanFlag(env.OIC_AUTOMATION_AUTHORIZED),
+      segmentId: positiveInteger(env.CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID),
+      subscriptionTopicId: positiveInteger(env.CUSTOMERIO_OPENING_DIGEST_TOPIC_ID),
+      maxRecipients: positiveIntegerOrThrow(env.OPENING_DIGEST_MAX_RECIPIENTS, 10, 'OPENING_DIGEST_MAX_RECIPIENTS'),
+      expectedRecipients: positiveIntegerOrThrow(env.OPENING_DIGEST_EXPECTED_RECIPIENTS, 4, 'OPENING_DIGEST_EXPECTED_RECIPIENTS'),
+      assetFolderId: positiveInteger(env.CUSTOMERIO_OPENING_DIGEST_ASSET_FOLDER_ID),
+      eodCachePath: env.OPENING_DIGEST_EOD_CACHE_PATH
+        || path.join(env.WORK_DIR || '/var/lib/zen-content-hub/work', 'opening-digest-options-eod.json'),
+      browserExecutablePath: env.OPENING_DIGEST_BROWSER_EXECUTABLE
+        || env.TRANSLATION_BROWSER_EXECUTABLE
+        || '/usr/bin/google-chrome',
+    },
     assets: {
       headerImage: env.WECHAT_HEADER_IMAGE || path.join(REPO_ROOT, 'assets', 'zen-header-banner.gif'),
       surveyImage: env.WECHAT_SURVEY_IMAGE || path.join(REPO_ROOT, 'assets', 'zen-survey-qr.jpg'),

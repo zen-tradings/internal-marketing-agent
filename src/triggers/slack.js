@@ -35,7 +35,7 @@ export function parseSlackTask(raw, botUserId, { channelType, channel } = {}) {
 }
 
 // 中文别名 → 工作流 id。别名同样必须命中 workflowIds 才会真正路由。
-const WORKFLOW_ALIASES = { 微信: 'wechat', 宏观: 'macro', 公司: 'company', 个股: 'company', 深度: 'company', 邮件: 'email', 财报: 'earnings', 行业: 'sector', 晨报: 'morning', 直译: 'translate', 翻译: 'translate' };
+const WORKFLOW_ALIASES = { 微信: 'wechat', 宏观: 'macro', 公司: 'company', 个股: 'company', 深度: 'company', 邮件: 'email', 财报: 'earnings', 行业: 'sector', 晨报: 'morning', 开市日报: 'opening-digest', 开市简报: 'opening-digest', 直译: 'translate', 翻译: 'translate' };
 
 // 中文别名按长度从长到短排序,支持多个别名互为前缀时优先取最长匹配。
 const SORTED_ALIAS_KEYS = Object.keys(WORKFLOW_ALIASES).sort((a, b) => b.length - a.length);
@@ -73,6 +73,7 @@ const MACRO_THEME_RE = /(?:宏观|央行|美联储|联储|欧洲央行|日本央
 const MACRO_ANALYSIS_INTENT_RE = /(?:快评|点评|解读|分析|深度|机制|传导|定价|预期|增量|影响|策略|展望|情景|风险|观察|周报|复盘|框架|判断|市场反应|交易逻辑|\banaly(?:sis|ze|se)\b|commentary|quick\s+take|deep\s+dive|mechanism|transmission|pric(?:e|ed|ing)|expectations?|incremental|impact|strategy|outlook|scenario|risk|watch|weekly|review|framework|market\s+reaction)/i;
 
 const NATURAL_RULES = [
+  { id: 'opening-digest', re: /(?:opening\s+digest|market\s+open(?:ing)?\s+digest|开市日报|开市简报)/i },
   { id: 'email', re: /(?:newsletter|customer\.?io|email\s+(?:draft|campaign|newsletter)|subscriber\s+email|订阅者|邮件草稿|邮件通讯|电子报|发邮件)/i },
   // URL 只是素材，不代表翻译意图。只有用户明确要求翻译时才进入完整直译引擎。
   { id: 'translate', re: /(?:\btranslate\b|\b(?:full|complete|faithful|literal|direct)\s+translation\b|\btranslation\s+of\s+(?:this|the)\s+(?:article|paper|pdf|link|file|attachment)\b|直译|全文翻译|完整翻译|忠实翻译|逐字翻译|翻译成(?:简体)?中文|(?:请|帮我|需要|要)(?:完整)?翻译(?:这篇|这个|这份|全文|链接|文章|文件|附件|文档|PDF))/i },
@@ -194,6 +195,7 @@ export function workflowRouteLabel(workflowId) {
   return ({
     translate: '完整直译 → 微信草稿箱',
     email: 'Newsletter → Customer.io 草稿',
+    'opening-digest': 'Zen Opening Digest → Customer.io 发送',
     earnings: '原创财报分析 → 微信草稿箱',
     sector: '原创行业分析 → 微信草稿箱',
     morning: '原创晨报 → 微信草稿箱',

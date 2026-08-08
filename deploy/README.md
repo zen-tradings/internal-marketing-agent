@@ -60,6 +60,10 @@ host):
 WORK_DIR=/var/lib/zen-content-hub/work
 DB_PATH=/var/lib/zen-content-hub/runs.db
 TRANSLATION_BROWSER_EXECUTABLE=/usr/bin/google-chrome
+# Opening Digest reuses the same Chrome binary. OIC storage state must live
+# outside immutable releases and be readable by zenbot (root:zenbot, 0640).
+OPENING_DIGEST_BROWSER_EXECUTABLE=/usr/bin/google-chrome
+OIC_STORAGE_STATE_PATH=/etc/zen-content-hub/oic-storage-state.json
 DATALAB_API_KEY=replace-with-datalab-api-key
 DATALAB_MODE=balanced
 CRON_TIMEZONE=America/Los_Angeles
@@ -125,6 +129,34 @@ The application does not enforce a public-IP allowlist and does not reject
 proxy environment variables. Outbound routing follows the host and Node.js
 runtime configuration. The health endpoint exposes queue counts only and
 should remain on loopback or behind an authenticated monitoring agent.
+
+## Opening Digest OIC session renewal
+
+The Opening Digest reads the OIC Trending Options Volume table through an
+authorized, logged-in browser session. Do not put an OIC password in the
+environment. Install the optional GUI helpers only on the Droplet, bind them to
+loopback, and use an SSH tunnel from an operator workstation:
+
+```bash
+sudo apt-get install -y xvfb x11vnc novnc
+sudo -u zenbot Xvfb :99 -screen 0 1440x1200x24 &
+sudo -u zenbot x11vnc -display :99 -localhost -nopw &
+ssh -L 5900:127.0.0.1:5900 your-user@your-droplet
+```
+
+Open `vnc://127.0.0.1:5900` locally, then run this in a second SSH session with
+`DISPLAY=:99` and the protected service environment. Complete OIC login/MFA in
+the temporary browser and press Enter only after the full table is visible:
+
+```bash
+sudo systemd-run --wait --pipe --collect --uid=zenbot \
+  --property=EnvironmentFile=/etc/zen-content-hub/zen-content-hub.env \
+  --setenv=DISPLAY=:99 \
+  /usr/bin/node /opt/zen-content-hub/scripts/auth-oic-session.mjs
+```
+
+Set `/etc/zen-content-hub/oic-storage-state.json` to `root:zenbot` and `0640`,
+then stop Xvfb/x11vnc. Never expose VNC/noVNC on a public interface.
 
 Create the service account and data/configuration directories. Copy `.env.example`
 to `/etc/zen-content-hub/zen-content-hub.env`, fill it without committing

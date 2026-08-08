@@ -15,6 +15,7 @@
     "check:documents": "node scripts/check-documents.mjs",
     "auth:google-docs": "node scripts/google-docs-oauth.mjs",
     "check:customerio": "node scripts/check-customerio.mjs",
+    "auth:oic": "node scripts/auth-oic-session.mjs",
     "check:egress": "node scripts/check-egress.mjs",
     "deploy:digitalocean": "node scripts/deploy-digitalocean.mjs",
     "accept:macro": "node scripts/run-macro-acceptance.mjs",

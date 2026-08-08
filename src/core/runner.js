@@ -52,6 +52,8 @@ import {
   referenceUrlKey,
   selectFinalReferenceIds,
 } from './analysis-v2.js';
+import { captureTrendingOptionsTable } from '../lib/options-volume.js';
+import { easternDateKey } from '../lib/us-equity-calendar.js';
 
 const DEFAULT_SYSTEM_PROMPT = `你是 Zen Trading 公众号分析师。你会基于系统提供的调研素材写中文金融分析文章。
 
@@ -123,6 +125,26 @@ export async function runWriter({
   try {
     throwIfTaskCancelled(signal);
     fs.mkdirSync(workflow.workDir, { recursive: true });
+    if (workflow.mode === 'opening-digest-eod') {
+      const digest = config.openingDigest || {};
+      const capture = await captureTrendingOptionsTable({
+        url: digest.optionsUrl,
+        storageStatePath: digest.storageStatePath,
+        executablePath: digest.browserExecutablePath,
+        timeoutMs: digest.captureTimeoutMs,
+        automationAuthorized: digest.automationAuthorized,
+      });
+      const article = JSON.stringify({
+        dateKey: easternDateKey(new Date()),
+        capturedAt: capture.capturedAt,
+        png: capture.buffer.toString('base64'),
+      });
+      fs.writeFileSync(articlePath, article, { mode: 0o600 });
+      trace.finishedAt = new Date().toISOString();
+      trace.optionsEod = { rows: capture.rows, capturedAt: capture.capturedAt };
+      writeResearchTrace(researchTracePath, trace);
+      return { ok: true, articlePath, model: 'none', researchTracePath, sources: [] };
+    }
     const writer = config.writer || {};
     const model = workflow.model || writer.model;
     trace.models = {
