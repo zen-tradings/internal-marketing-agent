@@ -3,6 +3,7 @@ import { chromium } from 'playwright-core';
 
 const MIN_IMAGE_BYTES = 20 * 1024;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION = 4096;
 const PREFERRED_DEVICE_SCALES = [4, 3, 2, 1];
 
 export class OptionsAuthenticationError extends Error {
@@ -24,9 +25,11 @@ export async function captureTrendingOptionsTable({
   for (const deviceScaleFactor of PREFERRED_DEVICE_SCALES) {
     const capture = await captureAtScale({ url, storageStatePath, executablePath, timeoutMs, deviceScaleFactor });
     smallestBytes = Math.min(smallestBytes, capture.buffer.length);
-    if (capture.buffer.length <= MAX_IMAGE_BYTES) return capture;
+    if (capture.buffer.length <= MAX_IMAGE_BYTES
+      && capture.width <= MAX_IMAGE_DIMENSION
+      && capture.height <= MAX_IMAGE_DIMENSION) return capture;
   }
-  throw optionsError(`期权表截图超过 Customer.io 2MB 限制:${smallestBytes}`);
+  throw optionsError(`期权表截图无法满足 Customer.io 2MB / 4096px 限制，最小文件:${smallestBytes}`);
 }
 
 async function captureAtScale({ url, storageStatePath, executablePath, timeoutMs, deviceScaleFactor }) {
@@ -65,7 +68,8 @@ async function captureAtScale({ url, storageStatePath, executablePath, timeoutMs
     if (buffer.length < MIN_IMAGE_BYTES || buffer.subarray(1, 4).toString('ascii') !== 'PNG') {
       throw optionsError('OIC 表格截图为空或不是 PNG');
     }
-    return { buffer, rows, tableText: text, capturedAt: new Date().toISOString(), deviceScaleFactor };
+    const { width, height } = pngDimensions(buffer);
+    return { buffer, rows, tableText: text, capturedAt: new Date().toISOString(), deviceScaleFactor, width, height };
   } finally { await browser.close(); }
 }
 
@@ -141,6 +145,10 @@ export function countTrendingRows(text) {
     .map((match) => Number(match[1]))
     .filter((number, index, all) => number >= 1 && number <= 20 && all.indexOf(number) === index)
     .length;
+}
+
+function pngDimensions(buffer) {
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
 }
 
 function optionsError(message) { const error = new Error(message); error.stage = 'options'; return error; }

@@ -19,7 +19,7 @@ export async function uploadCustomerIoAsset({
       signal: controller.signal,
     });
     const detail = await safeBody(response);
-    if (!response.ok) throw assetError(`Customer.io asset 上传失败:${response.status} ${detail}`.trim());
+    if (!response.ok) throw assetError(`Customer.io asset 上传失败:${response.status} ${detailText(detail)}`.trim());
     const asset = detail?.asset;
     if (!asset?.id || !isPublicHttps(asset.path)) throw assetError('Customer.io asset 返回的公开 HTTPS 地址无效');
     await verifyAssetUrl(asset.path, fetchFn, timeoutMs);
@@ -48,4 +48,5 @@ async function safeBody(response) {
   const text = await response.text();
   try { return JSON.parse(text); } catch { return text.slice(0, 500); }
 }
+function detailText(detail) { return typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 500); }
 function assetError(message) { const error = new Error(message); error.stage = 'asset'; return error; }
