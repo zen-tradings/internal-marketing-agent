@@ -6,7 +6,7 @@ import {
 import { assertRenderedTemplateMarker } from '../lib/draft-template.js';
 import { uploadCustomerIoAsset } from '../lib/customerio-assets.js';
 import { renderOpeningDigestCover } from '../lib/opening-digest-cover.js';
-import { captureTrendingOptionsTable } from '../lib/options-volume.js';
+import { captureTrendingOptionsTable, validateTrendingOptionsData } from '../lib/options-volume.js';
 import { collectOpeningMetrics, renderMetricsHtml } from '../lib/opening-digest-metrics.js';
 import { easternDateKey } from '../lib/us-equity-calendar.js';
 
@@ -51,7 +51,7 @@ export function makeChannel({
       // An OIC-login retry must keep the original opening snapshot. Persist this
       // before the OIC call because that call is the only deliberate hold point.
       const metrics = await loadOrCollectMetrics({ articlePath, dateKey, collectMetrics, fetchFn, timeoutMs: Math.min(cio.timeoutMs, 15000) });
-      const options = await resolveOptions({ digest, common, source, dateKey, current, captureOptions, uploadAsset });
+      const options = await resolveOptions({ digest, source, current, captureOptions });
       const contentHtml = [renderMetricsHtml(metrics), renderMarkdown(article.body), renderOptionsHtml(options)].join('\n');
       const body = renderNewsletterEmail({ ...article, edition: dateKey }, { ...cio, headerImageUrl, contentHtml });
       assertRenderedTemplateMarker(body, NEWSLETTER_TEMPLATE_ID);
@@ -98,47 +98,47 @@ async function loadOrCollectMetrics({ articlePath, dateKey, collectMetrics, fetc
   return metrics;
 }
 
-async function resolveOptions({ digest, common, source, dateKey, current, captureOptions, uploadAsset }) {
-  try {
-    const screenshot = await captureOptions({
-      url: digest.optionsUrl, storageStatePath: digest.storageStatePath,
-      executablePath: digest.browserExecutablePath, timeoutMs: digest.captureTimeoutMs,
-      automationAuthorized: digest.automationAuthorized,
-    });
-    const manual = source !== 'cron';
-    const captureKind = manual ? 'Latest available' : 'Opening';
-    const filenameKind = manual ? 'latest' : 'open';
-    const asset = await uploadAsset({
-      ...common, buffer: screenshot.buffer, filename: `opening-digest-options-${dateKey}-${filenameKind}.png`,
-      name: `OIC Trending Options Volume ${dateKey}`,
-    });
-    return { url: asset.path, dateKey, capturedAt: screenshot.capturedAt, kind: captureKind };
-  } catch (error) {
-    if (error?.code === 'OIC_AUTH_EXPIRED') throw error;
-    return { unavailable: true, reason: 'The options table could not be captured for this edition.' };
-  }
+async function resolveOptions({ digest, source, current, captureOptions }) {
+  const screenshot = await captureOptions({
+    url: digest.optionsUrl, storageStatePath: digest.storageStatePath,
+    executablePath: digest.browserExecutablePath, timeoutMs: digest.captureTimeoutMs,
+    automationAuthorized: digest.automationAuthorized,
+  });
+  const manual = source !== 'cron';
+  return {
+    data: validateTrendingOptionsData(screenshot.data),
+    capturedAt: screenshot.capturedAt || current.toISOString(),
+    kind: manual ? 'Latest available' : 'Opening',
+  };
 }
 
-export async function cacheEodOptions({ articlePath, config, fetchFn = globalThis.fetch }) {
+export async function cacheEodOptions({ articlePath, config }) {
   const digest = config.openingDigest || {};
   const cio = config.customerio || {};
   assertDigestConfig(cio, digest);
   const payload = JSON.parse(await fs.readFile(articlePath, 'utf8'));
-  const asset = await uploadCustomerIoAsset({
-    baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, buffer: Buffer.from(payload.png, 'base64'),
-    filename: `opening-digest-options-${payload.dateKey}-close.png`, name: `OIC Trending Options Volume EOD ${payload.dateKey}`,
-    parentFolderId: digest.assetFolderId, fetchFn, timeoutMs: cio.timeoutMs,
-  });
+  const data = validateTrendingOptionsData(payload.data);
   await fs.mkdir(path.dirname(digest.eodCachePath), { recursive: true });
-  await fs.writeFile(digest.eodCachePath, JSON.stringify({ url: asset.path, dateKey: payload.dateKey, capturedAt: payload.capturedAt, kind: 'EOD' }), { mode: 0o600 });
-  return { mediaId: `customerio-asset:${asset.id}`, title: `Opening Digest EOD options cache · ${payload.dateKey}` };
+  await fs.writeFile(digest.eodCachePath, JSON.stringify({ data, dateKey: payload.dateKey, capturedAt: payload.capturedAt, kind: 'EOD' }), { mode: 0o600 });
+  return { mediaId: `opening-digest-eod:${payload.dateKey}`, title: `Opening Digest EOD options cache · ${payload.dateKey}` };
 }
 
 export function renderOptionsHtml(options) {
   const heading = '<h2 style="margin:24px 0 10px;font-size:17px;line-height:1.35;font-weight:500;color:#08272b">Trending options volume</h2>';
-  if (options.unavailable) return `${heading}<p style="margin:0 0 18px;color:#66787a">Options table unavailable. ${escapeHtml(options.reason || '')}</p>`;
+  const data = validateTrendingOptionsData(options.data);
   const captured = formatCapturedAt(options.capturedAt);
-  return `${heading}<a href="https://www.optionseducation.org/toolsoptionquotes/trending-options-volume" style="display:block"><img src="${escapeAttr(options.url)}" alt="OIC Trending Options Volume top twenty table" width="620" style="display:block;width:100%;max-width:620px;height:auto;border:0"></a><p style="margin:8px 0 18px;font-size:11px;line-height:1.55;color:#66787a">Source: OCC/OIC, powered by iVolatility · Data delayed 20 minutes · ${escapeHtml(options.kind || 'Opening')} capture: ${escapeHtml(captured)} · <a href="https://www.optionseducation.org/toolsoptionquotes/trending-options-volume" style="color:#0b6d75">View source</a></p>`;
+  const rows = data.rows.map((cells, index) => renderOptionRows(cells, index)).join('');
+  return `${heading}<p style="margin:0 0 10px;font-size:11px;line-height:150%;color:#66787a">${escapeHtml(data.asOf)}</p><table role="table" aria-label="OIC Trending Options Volume top twenty" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;border:1px solid #dcd8d5;background:#fffdf8;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif"><caption style="text-align:left;padding:0;font-size:0;line-height:0;height:0;overflow:hidden">OIC Trending Options Volume top twenty</caption>${rows}</table><p style="margin:8px 0 18px;font-size:11px;line-height:155%;color:#66787a">Source: OCC/OIC · ${escapeHtml(data.attribution)} · Data delayed 20 minutes · ${escapeHtml(options.kind || 'Opening')} capture: ${escapeHtml(captured)} · <a href="https://www.optionseducation.org/toolsoptionquotes/trending-options-volume" style="color:#0b6d75">View source</a></p>`;
+}
+
+function renderOptionRows(cells, index) {
+  const [rank, ticker, name, callVolume, putVolume, totalVolume, ivx30, ivxChange] = cells;
+  const background = index % 2 === 0 ? '#f7f4ec' : '#fffdf8';
+  const change = Number(String(ivxChange).replace('%', ''));
+  const changeColor = change < 0 ? '#b42318' : change > 0 ? '#167a45' : '#435c5f';
+  const label = 'display:block;margin:0 0 2px;font-size:9px;line-height:120%;letter-spacing:.04em;font-weight:600;color:#66787a;text-transform:uppercase';
+  const value = 'display:block;font-size:11px;line-height:135%;font-weight:500;color:#173f43;white-space:nowrap';
+  return `<tbody><tr style="background:${background}"><th scope="rowgroup" rowspan="2" width="8%" valign="top" align="center" style="width:8%;padding:10px 4px;border-top:1px solid #dcd8d5;font-size:11px;line-height:135%;font-weight:600;color:#66787a">${escapeHtml(rank)}</th><th scope="row" colspan="2" width="46%" valign="top" align="left" style="width:46%;padding:10px 6px;border-top:1px solid #dcd8d5;font-size:12px;line-height:140%;font-weight:600;color:#08272b">${escapeHtml(ticker)}<span style="display:block;margin-top:2px;font-size:10px;line-height:135%;font-weight:300;color:#435c5f;word-break:break-word">${escapeHtml(name)}</span></th><td colspan="2" width="46%" valign="top" align="right" style="width:46%;padding:10px 6px;border-top:1px solid #dcd8d5"><span style="${label}">Total option volume</span><span style="${value};font-size:12px;color:#08272b">${escapeHtml(totalVolume)}</span></td></tr><tr style="background:${background}"><td width="23%" valign="top" align="left" style="width:23%;padding:7px 3px 10px;border-top:1px solid #e7e3df"><span style="${label}">Call</span><span style="${value}">${escapeHtml(callVolume)}</span></td><td width="23%" valign="top" align="left" style="width:23%;padding:7px 3px 10px;border-top:1px solid #e7e3df"><span style="${label}">Put</span><span style="${value}">${escapeHtml(putVolume)}</span></td><td width="23%" valign="top" align="left" style="width:23%;padding:7px 3px 10px;border-top:1px solid #e7e3df"><span style="${label}">IVX 30</span><span style="${value}">${escapeHtml(ivx30)}</span></td><td width="23%" valign="top" align="left" style="width:23%;padding:7px 3px 10px;border-top:1px solid #e7e3df"><span style="${label}">IVX change %</span><span style="${value};color:${changeColor}">${escapeHtml(ivxChange)}</span></td></tr></tbody>`;
 }
 
 function assertDigestConfig(cio, digest) {

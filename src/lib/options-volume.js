@@ -2,12 +2,14 @@ import fs from 'node:fs';
 import { chromium } from 'playwright-core';
 
 const MIN_IMAGE_BYTES = 20 * 1024;
-const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
-const MAX_IMAGE_DIMENSION = 4096;
-// 3.4x keeps the current 20-row table just below Customer.io's 4096px edge
-// limit while materially improving on the former 2x capture. Lower scales are
-// retained only as a stability fallback if the provider changes its layout.
-const PREFERRED_DEVICE_SCALES = [3.4, 3, 2, 1];
+// The screenshot is now a same-session consistency checkpoint only. It is not
+// uploaded or retained, but we keep the previously approved high-resolution
+// capture so the capture step itself remains unchanged.
+const DEVICE_SCALE_FACTOR = 3.4;
+const EXPECTED_HEADERS = [
+  '', 'Ticker', 'Name', 'Call Options Volume (%)', 'Put Options Volume (%)',
+  'Total Option Volume', 'IVX 30', 'IVX Change %',
+];
 
 export class OptionsAuthenticationError extends Error {
   constructor(message = 'OIC 登录会话已失效') {
@@ -24,15 +26,9 @@ export async function captureTrendingOptionsTable({
   if (!automationAuthorized) throw optionsError('未设置 OIC_AUTOMATION_AUTHORIZED=true，拒绝自动访问 OIC');
   if (!storageStatePath || !fs.existsSync(storageStatePath)) throw new OptionsAuthenticationError('OIC 会话文件不存在，请通过 DO 临时 VNC 更新登录状态');
   if (!executablePath || !fs.existsSync(executablePath)) throw optionsError(`找不到 OIC 截图浏览器:${executablePath}`);
-  let smallestBytes = Infinity;
-  for (const deviceScaleFactor of PREFERRED_DEVICE_SCALES) {
-    const capture = await captureAtScale({ url, storageStatePath, executablePath, timeoutMs, deviceScaleFactor });
-    smallestBytes = Math.min(smallestBytes, capture.buffer.length);
-    if (capture.buffer.length <= MAX_IMAGE_BYTES
-      && capture.width <= MAX_IMAGE_DIMENSION
-      && capture.height <= MAX_IMAGE_DIMENSION) return capture;
-  }
-  throw optionsError(`期权表截图无法满足 Customer.io 2MB / 4096px 限制，最小文件:${smallestBytes}`);
+  return captureAtScale({
+    url, storageStatePath, executablePath, timeoutMs, deviceScaleFactor: DEVICE_SCALE_FACTOR,
+  });
 }
 
 async function captureAtScale({ url, storageStatePath, executablePath, timeoutMs, deviceScaleFactor }) {
@@ -58,12 +54,8 @@ async function captureAtScale({ url, storageStatePath, executablePath, timeoutMs
       if (await looksLikeLogin(page)) throw new OptionsAuthenticationError();
       throw optionsError('未找到 OIC Trending Options Volume 表格，可能是页面结构已变更');
     }
-    await waitForStableRows(surface, timeoutMs);
-    const rows = await surface.rowCount();
-    const text = await surface.text();
-    if (rows < 20 || !/volume/i.test(text) || !/(call|put)/i.test(text)) {
-      throw optionsError(`OIC 表格校验失败: rows=${rows}`);
-    }
+    const data = await waitForStableData(surface, timeoutMs);
+    await surface.prepareScreenshot?.();
     await surface.locator.scrollIntoViewIfNeeded();
     const box = await surface.locator.boundingBox();
     if (!box || box.width < 300 || box.height < 200) throw optionsError('OIC 表格尺寸异常');
@@ -71,8 +63,15 @@ async function captureAtScale({ url, storageStatePath, executablePath, timeoutMs
     if (buffer.length < MIN_IMAGE_BYTES || buffer.subarray(1, 4).toString('ascii') !== 'PNG') {
       throw optionsError('OIC 表格截图为空或不是 PNG');
     }
+    const afterScreenshot = validateTrendingOptionsData(await surface.snapshot());
+    if (dataSignature(data) !== dataSignature(afterScreenshot)) {
+      throw optionsError('OIC 表格在截图期间发生变化，拒绝生成不一致的邮件表格');
+    }
     const { width, height } = pngDimensions(buffer);
-    return { buffer, rows, tableText: text, capturedAt: new Date().toISOString(), deviceScaleFactor, width, height };
+    return {
+      buffer, data, rows: data.rows.length, capturedAt: new Date().toISOString(),
+      deviceScaleFactor, width, height,
+    };
   } finally { await browser.close(); }
 }
 
@@ -99,49 +98,163 @@ async function findTrendingSurface(page) {
       if (/volume/i.test(text) && /(call|put)/i.test(text) && tableRows >= 21) {
         return {
           locator: table,
-          text: () => table.innerText(),
-          rowCount: async () => Math.max(0, (await table.locator('tr').count()) - 1),
+          snapshot: async () => {
+            const bodyText = await frame.locator('body').innerText().catch(() => '');
+            const extracted = await table.evaluate((element) => {
+              const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+              const allRows = [...element.querySelectorAll('tr')];
+              const headerRow = allRows.find((row) => /total option volume/i.test(clean(row.innerText)));
+              const rows = allRows
+                .map((row) => [...row.querySelectorAll(':scope > th, :scope > td')].map((cell) => clean(cell.innerText)))
+                .filter((cells) => cells.length === 8 && /^\d{1,2}$/.test(cells[0]));
+              return {
+                headers: headerRow
+                  ? [...headerRow.querySelectorAll(':scope > th, :scope > td')].map((cell) => clean(cell.innerText))
+                  : [],
+                rows,
+              };
+            });
+            return dataFromExtractedText(bodyText, extracted);
+          },
         };
       }
     }
   }
-  // The live iVolatility embed renders its native table with component divs,
-  // not a semantic <table>. Capture the cross-origin iframe element itself;
-  // this preserves the original table appearance without reconstructing data.
+  // The live iVolatility embed renders component divs rather than a semantic
+  // table. Each native row currently contains eight direct child cells. Read
+  // those cells from the authenticated frame and keep the iframe screenshot as
+  // a same-session consistency checkpoint.
   const frame = page.frames().find((item) => /private-authorization\.ivolatility\.com/i.test(item.url()));
   const iframe = page.locator('iframe[src*="private-authorization.ivolatility.com"]').first();
   if (frame && await iframe.count().catch(() => 0)) {
-    const readText = () => frame.locator('body').innerText().catch(() => '');
-    const text = await readText();
-    if (/total option volume/i.test(text) && countTrendingRows(text) >= 20) {
-      const contentHeight = await frame.evaluate(() => Math.max(
-        document.documentElement?.scrollHeight || 0,
-        document.body?.scrollHeight || 0,
-      )).catch(() => 0);
-      if (contentHeight > 0) {
-        await iframe.evaluate((element, height) => {
-          element.style.setProperty('height', `${height + 8}px`, 'important');
-          element.setAttribute('height', String(height + 8));
-        }, contentHeight);
-      }
-      return { locator: iframe, text: readText, rowCount: async () => countTrendingRows(await readText()) };
-    }
+    return {
+      locator: iframe,
+      prepareScreenshot: async () => {
+        const contentHeight = await frame.evaluate(() => Math.max(
+          document.documentElement?.scrollHeight || 0,
+          document.body?.scrollHeight || 0,
+        )).catch(() => 0);
+        if (contentHeight > 0) {
+          await iframe.evaluate((element, height) => {
+            element.style.setProperty('height', `${height + 8}px`, 'important');
+            element.setAttribute('height', String(height + 8));
+          }, contentHeight);
+        }
+      },
+      snapshot: () => frame.evaluate(() => {
+        const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+        const bodyText = document.body?.innerText || '';
+        const nativeHeader = document.querySelector('.oic-most-active-stocks-table-header');
+        const headerCandidate = nativeHeader || [...document.querySelectorAll('div')].find((element) => {
+          const cells = [...element.children].map((child) => clean(child.innerText));
+          return cells.length === 8 && cells.includes('Ticker') && cells.includes('Total Option Volume');
+        });
+        let rowElements = [...document.querySelectorAll('.oic-most-active-stocks-table-row:not(.oic-most-active-stocks-table-header)')];
+        if (!rowElements.length) {
+          rowElements = [...document.querySelectorAll('div')].filter((element) => {
+            const cells = [...element.children].map((child) => clean(child.innerText));
+            return cells.length === 8 && /^\d{1,2}$/.test(cells[0]) && /^\S+$/.test(cells[1]);
+          });
+        }
+        return {
+          bodyText,
+          headers: headerCandidate ? [...headerCandidate.children].map((child) => clean(child.innerText)) : [],
+          rows: rowElements.map((element) => [...element.children].map((child) => clean(child.innerText))),
+        };
+      }).then((extracted) => dataFromExtractedText(extracted.bodyText, extracted)),
+    };
   }
   return null;
 }
 
-async function waitForStableRows(surface, timeoutMs) {
-  const signature = async () => (await surface.text()).replace(/\s+/g, ' ').trim();
-  const first = await signature();
-  if (!first) throw optionsError('OIC 表格尚未加载');
-  await new Promise((resolve) => setTimeout(resolve, Math.min(2000, Math.max(250, timeoutMs / 20))));
-  const second = await signature();
-  if (first !== second) {
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    const third = await signature();
-    if (second !== third) throw optionsError('OIC 表格在截图前持续变化');
+async function waitForStableData(surface, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let priorSignature = '';
+  let priorData;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      const data = validateTrendingOptionsData(await surface.snapshot());
+      const signature = dataSignature(data);
+      if (signature === priorSignature) return priorData;
+      priorSignature = signature;
+      priorData = data;
+    } catch (error) {
+      lastError = error;
+      priorSignature = '';
+      priorData = undefined;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
+  throw optionsError(`OIC 表格未能稳定通过完整校验: ${lastError?.message || 'timeout'}`);
 }
+
+function dataFromExtractedText(bodyText, extracted) {
+  const lines = String(bodyText || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return {
+    asOf: lines.find((line) => /^As of\s+/i.test(line)) || '',
+    headers: extracted.headers || [],
+    rows: extracted.rows || [],
+    attribution: lines.find((line) => /^Data provided by\s+/i.test(line)) || '',
+  };
+}
+
+export function validateTrendingOptionsData(input) {
+  const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+  const data = {
+    asOf: clean(input?.asOf),
+    headers: Array.isArray(input?.headers) ? input.headers.map(clean) : [],
+    rows: Array.isArray(input?.rows) ? input.rows.map((row) => Array.isArray(row) ? row.map(clean) : []) : [],
+    attribution: clean(input?.attribution),
+  };
+  if (!/^As of\s+\S+/i.test(data.asOf)) throw optionsError('OIC 数据缺少 As of 时间戳');
+  if (data.headers.length !== EXPECTED_HEADERS.length) throw optionsError(`OIC 表头列数异常:${data.headers.length}`);
+  const actualHeaders = data.headers.map(canonicalHeader);
+  const expectedHeaders = EXPECTED_HEADERS.map(canonicalHeader);
+  if (!['', 'rank'].includes(actualHeaders[0])
+    || actualHeaders.slice(1).some((header, index) => header !== expectedHeaders[index + 1])) {
+    throw optionsError(`OIC 表头不匹配:${data.headers.join(' | ')}`);
+  }
+  if (data.rows.length !== 20) throw optionsError(`OIC 表格必须恰好包含20行，当前:${data.rows.length}`);
+  let priorVolume = Infinity;
+  for (let index = 0; index < data.rows.length; index++) {
+    const cells = data.rows[index];
+    if (cells.length !== 8) throw optionsError(`OIC 第${index + 1}行列数异常:${cells.length}`);
+    const [rank, ticker, name, callVolume, putVolume, totalVolume, ivx30, ivxChange] = cells;
+    if (Number(rank) !== index + 1) throw optionsError(`OIC 排名必须连续1-20，第${index + 1}行得到:${rank}`);
+    if (!/^\S{1,20}$/.test(ticker)) throw optionsError(`OIC 第${rank}行 ticker 无效`);
+    if (!name || name.length > 200) throw optionsError(`OIC 第${rank}行名称无效`);
+    const call = parsePercent(callVolume);
+    const put = parsePercent(putVolume);
+    if (!Number.isFinite(call) || !Number.isFinite(put) || Math.abs(call + put - 100) > 0.02) {
+      throw optionsError(`OIC 第${rank}行 call/put 百分比无效`);
+    }
+    if (!/^\d{1,3}(?:,\d{3})*$/.test(totalVolume) && !/^\d+$/.test(totalVolume)) {
+      throw optionsError(`OIC 第${rank}行总成交量格式无效`);
+    }
+    const volume = Number(totalVolume.replaceAll(',', ''));
+    if (!Number.isSafeInteger(volume) || volume <= 0 || volume > priorVolume) {
+      throw optionsError(`OIC 第${rank}行总成交量排序或数值无效`);
+    }
+    priorVolume = volume;
+    if (!isFiniteNumberText(ivx30) || !isFiniteNumberText(ivxChange)) {
+      throw optionsError(`OIC 第${rank}行 IVX 数值无效`);
+    }
+  }
+  if (!/ivolatility/i.test(data.attribution)) throw optionsError('OIC 数据缺少 iVolatility attribution');
+  return data;
+}
+
+function canonicalHeader(value) { return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ''); }
+function parsePercent(value) {
+  if (!/^[+-]?\d+(?:\.\d+)?\s*%$/.test(String(value || ''))) return NaN;
+  return Number(String(value).replace('%', '').trim());
+}
+function isFiniteNumberText(value) {
+  return /^[+-]?\d+(?:\.\d+)?%?$/.test(String(value || ''))
+    && Number.isFinite(Number(String(value).replace('%', '')));
+}
+function dataSignature(data) { return JSON.stringify(data); }
 
 export function countTrendingRows(text) {
   return [...String(text || '').matchAll(/(?:^|\n)(\d{1,2})\s+[^\n]+/g)]

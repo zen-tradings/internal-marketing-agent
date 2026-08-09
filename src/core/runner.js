@@ -137,7 +137,7 @@ export async function runWriter({
       const article = JSON.stringify({
         dateKey: easternDateKey(new Date()),
         capturedAt: capture.capturedAt,
-        png: capture.buffer.toString('base64'),
+        data: capture.data,
       });
       fs.writeFileSync(articlePath, article, { mode: 0o600 });
       trace.finishedAt = new Date().toISOString();
