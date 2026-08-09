@@ -4,7 +4,10 @@ import { chromium } from 'playwright-core';
 const MIN_IMAGE_BYTES = 20 * 1024;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 4096;
-const PREFERRED_DEVICE_SCALES = [4, 3, 2, 1];
+// 3.4x keeps the current 20-row table just below Customer.io's 4096px edge
+// limit while materially improving on the former 2x capture. Lower scales are
+// retained only as a stability fallback if the provider changes its layout.
+const PREFERRED_DEVICE_SCALES = [3.4, 3, 2, 1];
 
 export class OptionsAuthenticationError extends Error {
   constructor(message = 'OIC 登录会话已失效') {
