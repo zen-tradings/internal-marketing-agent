@@ -8,7 +8,7 @@ import { uploadCustomerIoAsset } from '../lib/customerio-assets.js';
 import { renderOpeningDigestCover } from '../lib/opening-digest-cover.js';
 import { captureTrendingOptionsTable } from '../lib/options-volume.js';
 import { collectOpeningMetrics, renderMetricsHtml } from '../lib/opening-digest-metrics.js';
-import { easternDateKey, isUsEquitySession } from '../lib/us-equity-calendar.js';
+import { easternDateKey } from '../lib/us-equity-calendar.js';
 
 const SENDER = 'support@zentradings.com';
 const CUSTOMERIO_MIN_SCHEDULE_LEAD_MS = 5 * 60 * 1000;
@@ -99,24 +99,20 @@ async function loadOrCollectMetrics({ articlePath, dateKey, collectMetrics, fetc
 }
 
 async function resolveOptions({ digest, common, source, dateKey, current, captureOptions, uploadAsset }) {
-  if (source !== 'cron' && !isUsEquitySession(current)) {
-    try {
-      const cached = JSON.parse(await fs.readFile(digest.eodCachePath, 'utf8'));
-      if (cached?.url && cached?.dateKey) return { url: cached.url, dateKey: cached.dateKey, capturedAt: cached.capturedAt, kind: 'EOD' };
-    } catch {}
-    return { unavailable: true, reason: 'No verified EOD options snapshot is available.' };
-  }
   try {
     const screenshot = await captureOptions({
       url: digest.optionsUrl, storageStatePath: digest.storageStatePath,
       executablePath: digest.browserExecutablePath, timeoutMs: digest.captureTimeoutMs,
       automationAuthorized: digest.automationAuthorized,
     });
+    const manual = source !== 'cron';
+    const captureKind = manual ? 'Latest available' : 'Opening';
+    const filenameKind = manual ? 'latest' : 'open';
     const asset = await uploadAsset({
-      ...common, buffer: screenshot.buffer, filename: `opening-digest-options-${dateKey}-open.png`,
+      ...common, buffer: screenshot.buffer, filename: `opening-digest-options-${dateKey}-${filenameKind}.png`,
       name: `OIC Trending Options Volume ${dateKey}`,
     });
-    return { url: asset.path, dateKey, capturedAt: screenshot.capturedAt, kind: 'Opening' };
+    return { url: asset.path, dateKey, capturedAt: screenshot.capturedAt, kind: captureKind };
   } catch (error) {
     if (error?.code === 'OIC_AUTH_EXPIRED') throw error;
     return { unavailable: true, reason: 'The options table could not be captured for this edition.' };

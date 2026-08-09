@@ -111,6 +111,33 @@ test('opening digest accepts any current audience size when the segment is test2
   assert.ok(requests.some((url) => url.endsWith('/v1/newsletters/100/send')));
 });
 
+test('manual Slack digest always captures the live page and labels off-session data latest available', async () => {
+  const requests = [];
+  const uploads = [];
+  let captures = 0;
+  const channel = makeChannel({
+    readArticle: async () => ARTICLE,
+    now: () => new Date('2026-08-08T15:30:00.000Z'),
+    renderCover: async () => Buffer.from('cover'),
+    captureOptions: async () => { captures += 1; return { buffer: Buffer.from('options'), capturedAt: '2026-08-08T15:29:00.000Z', rows: 20 }; },
+    uploadAsset: async (args) => { uploads.push(args.filename); return { id: uploads.length, path: `https://assets.example/${args.filename}` }; },
+    collectMetrics: async () => [],
+    fetchFn: async (url, options = {}) => {
+      requests.push({ url, body: options.body ? JSON.parse(options.body) : undefined });
+      if (url.includes('/customer_count')) return response({ count: 2 });
+      if (url.endsWith('/v1/segments/42')) return response({ segment: { id: 42, name: 'test2' } });
+      if (url.endsWith('/v1/newsletters')) return response({ newsletter: { id: 101 } });
+      if (url.endsWith('/send')) return response({});
+      throw new Error(`Unexpected URL ${url}`);
+    },
+  });
+  await channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: {}, source: 'manual' });
+  assert.equal(captures, 1);
+  assert.ok(uploads.includes('opening-digest-options-2026-08-08-latest.png'));
+  const create = requests.find((item) => item.url.endsWith('/v1/newsletters'));
+  assert.match(create.body.body, /Latest available capture/);
+});
+
 test('opening digest rejects a configured segment whose name is not test2', async () => {
   const channel = makeChannel({
     readArticle: async () => ARTICLE,
