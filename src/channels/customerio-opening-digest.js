@@ -34,8 +34,8 @@ export function makeChannel({
         baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, segmentId: digest.segmentId,
         fetchFn, timeoutMs: cio.timeoutMs,
       });
-      if (normalizedSegmentName(audienceName) !== 'test1') {
-        throw publishError(`Opening Digest 第一版只能发送到 Customer.io segment test1，当前为 ${audienceName || '(unnamed)'}`);
+      if (normalizedSegmentName(audienceName) !== 'test2') {
+        throw publishError(`Opening Digest 测试版只能发送到 Customer.io segment test2，当前为 ${audienceName || '(unnamed)'}`);
       }
 
       const common = { baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, fetchFn, timeoutMs: cio.timeoutMs, parentFolderId: digest.assetFolderId };
@@ -82,7 +82,7 @@ export function makeChannel({
       } else {
         await customerIoJson({ baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, path: `/v1/newsletters/${newsletterId}/send`, method: 'POST', body: {}, fetchFn, timeoutMs: cio.timeoutMs });
       }
-      return { mediaId: `customerio-newsletter:${newsletterId}`, title: name, audienceStage: 'test1', audienceSegmentId: digest.segmentId, audienceRecipientCount: audienceCount };
+      return { mediaId: `customerio-newsletter:${newsletterId}`, title: name, audienceStage: 'test2', audienceSegmentId: digest.segmentId, audienceRecipientCount: audienceCount };
     },
   };
 }
