@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import { chromium } from 'playwright-core';
 
 const MIN_IMAGE_BYTES = 20 * 1024;
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const PREFERRED_DEVICE_SCALES = [4, 3, 2, 1];
 
 export class OptionsAuthenticationError extends Error {
   constructor(message = 'OIC 登录会话已失效') {
@@ -18,11 +20,13 @@ export async function captureTrendingOptionsTable({
   if (!automationAuthorized) throw optionsError('未设置 OIC_AUTOMATION_AUTHORIZED=true，拒绝自动访问 OIC');
   if (!storageStatePath || !fs.existsSync(storageStatePath)) throw new OptionsAuthenticationError('OIC 会话文件不存在，请通过 DO 临时 VNC 更新登录状态');
   if (!executablePath || !fs.existsSync(executablePath)) throw optionsError(`找不到 OIC 截图浏览器:${executablePath}`);
-  const first = await captureAtScale({ url, storageStatePath, executablePath, timeoutMs, deviceScaleFactor: 2 });
-  if (first.buffer.length <= 1024 * 1024) return first;
-  const second = await captureAtScale({ url, storageStatePath, executablePath, timeoutMs, deviceScaleFactor: 1 });
-  if (second.buffer.length > 2 * 1024 * 1024) throw optionsError(`期权表截图超过 Customer.io 2MB 限制:${second.buffer.length}`);
-  return second;
+  let smallestBytes = Infinity;
+  for (const deviceScaleFactor of PREFERRED_DEVICE_SCALES) {
+    const capture = await captureAtScale({ url, storageStatePath, executablePath, timeoutMs, deviceScaleFactor });
+    smallestBytes = Math.min(smallestBytes, capture.buffer.length);
+    if (capture.buffer.length <= MAX_IMAGE_BYTES) return capture;
+  }
+  throw optionsError(`期权表截图超过 Customer.io 2MB 限制:${smallestBytes}`);
 }
 
 async function captureAtScale({ url, storageStatePath, executablePath, timeoutMs, deviceScaleFactor }) {
