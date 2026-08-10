@@ -1,4 +1,5 @@
 import { easternDateKey, isUsEquitySession } from './us-equity-calendar.js';
+import { OPENING_DIGEST_UNIVERSE, OPENING_DIGEST_UNIVERSE_GROUPS } from './opening-digest-universe.js';
 
 const FRONTMATTER_RE = /^---\n[\s\S]*?\n---\n?/;
 const REQUIRED_HEADINGS = ["Today's catalysts", 'Market read'];
@@ -71,6 +72,7 @@ export function auditOpeningDigestArticle({
   if (requireFreshSources) {
     const sources = new Map(research.filter((source) => source?.url).map((source) => [normalizedUrl(source.url), source]));
     const cutoff = previousRegularClose(asOf);
+    let macroLinks = 0;
     for (const [index, link] of links.entries()) {
       const source = sources.get(normalizedUrl(link));
       if (!source) {
@@ -82,10 +84,14 @@ export function auditOpeningDigestArticle({
         warnings.push(`Opening Digest 第 ${index + 1} 个 catalyst 链接缺少可验证的发布日期`);
         continue;
       }
-      if (published.getTime() < cutoff.getTime() || published.getTime() > asOf.getTime() + 5 * 60_000) {
+      const earningsScheduleException = source.openingDigestKind === 'earnings-schedule';
+      if (source.openingDigestKind === 'macro') macroLinks += 1;
+      if ((!earningsScheduleException && published.getTime() < cutoff.getTime())
+        || published.getTime() > asOf.getTime() + 5 * 60_000) {
         warnings.push(`Opening Digest 第 ${index + 1} 个 catalyst 链接不在上一交易日收盘至当前的时间窗口内`);
       }
     }
+    if (macroLinks > 1) warnings.push(`Opening Digest Today's catalysts 建议最多包含一条宏观项，当前为 ${macroLinks} 条`);
   }
 
   return {
@@ -101,25 +107,45 @@ export function openingDigestResearchQueries(asOf = new Date()) {
   const date = easternDateKey(asOf);
   const startPublishedDate = previousRegularClose(asOf).toISOString();
   const endPublishedDate = asOf.toISOString();
-  const common = { type: 'deep', numResults: 8, startPublishedDate, endPublishedDate };
+  const common = { type: 'deep', numResults: 6, startPublishedDate, endPublishedDate };
+  const groupQueries = OPENING_DIGEST_UNIVERSE_GROUPS.map((group) => {
+    const entities = uniqueIssuers(group.members)
+      .map((item) => `${item.company} (${item.ticker})`).join(', ');
+    return {
+      ...common,
+      numResults: 5,
+      kind: `opening-digest-universe-${group.id}`,
+      openingDigestKind: 'universe-news',
+      query: `Material company news since the prior US close for: ${entities}. Date ${date}.`,
+      systemPrompt: 'Return only exact-company, current-window developments with plausible material market impact: filings, earnings or guidance, M&A, financing, major orders or customers, products, supply constraints, outages or cybersecurity, management, legal or regulatory actions, and explicit analyst upgrades or downgrades. Exclude unconfirmed rumors, price-target-only notes, maintained ratings, routine commentary, similarly named entities, and stale background.',
+    };
+  });
+  const earnings = remainingEarningsWindow(asOf);
+  const earningsTickers = OPENING_DIGEST_UNIVERSE.map((item) => item.ticker).join(', ');
   return [
     {
       ...common,
       kind: 'opening-digest-market-news',
+      openingDigestKind: 'market-news',
       query: `US stock market premarket and opening market-moving news ${date} earnings guidance large-cap catalysts`,
       systemPrompt: 'Return reporting published after the prior US regular close that can materially affect the current US equity opening. Exclude evergreen explainers, unrelated entities named Zen, and stale background.',
     },
     {
       ...common,
       kind: 'opening-digest-macro',
+      openingDigestKind: 'macro',
       query: `US markets macro data Federal Reserve Treasury yields oil dollar economic releases ${date} market open`,
       systemPrompt: 'Return current-window macro, rates, currency, commodity, and policy catalysts for the US equity open. Prefer primary releases and independently reported market-moving developments.',
     },
+    ...groupQueries,
     {
-      ...common,
-      kind: 'opening-digest-corporate',
-      query: `S&P 500 Nasdaq premarket earnings corporate news upgrades downgrades M&A ${date}`,
-      systemPrompt: 'Return company-specific developments published after the prior US regular close with a plausible material effect on US index or sector trading today.',
+      type: 'deep',
+      numResults: 12,
+      endPublishedDate,
+      kind: 'opening-digest-universe-earnings',
+      openingDigestKind: 'earnings-schedule',
+      query: `Verified earnings dates from ${earnings.startDate} through ${earnings.endDate} for these tickers only: ${earningsTickers}`,
+      systemPrompt: 'Return verifiable schedules only for earnings events that have not yet occurred in the stated ET date window. Prefer issuer investor-relations announcements, exchange calendars, and reliable financial calendars. Each result must identify the exact issuer or ticker and explicit event date; older schedule announcements are allowed. Exclude estimates without a scheduled event, already-reported results, similarly named entities, and dates outside the window.',
     },
   ];
 }
@@ -157,4 +183,23 @@ function normalizedUrl(value) {
     url.pathname = url.pathname.replace(/\/+$/, '') || '/';
     return url.toString();
   } catch { return String(value || '').trim(); }
+}
+
+function uniqueIssuers(members) {
+  const seen = new Set();
+  return members.filter((item) => {
+    if (seen.has(item.issuerKey)) return false;
+    seen.add(item.issuerKey);
+    return true;
+  });
+}
+
+function remainingEarningsWindow(asOf) {
+  const startDate = easternDateKey(asOf);
+  const cursor = new Date(`${startDate}T12:00:00Z`);
+  const day = cursor.getUTCDay();
+  if (day === 6) return { startDate, endDate: startDate };
+  const daysToFriday = day === 0 ? 5 : Math.max(0, 5 - day);
+  cursor.setUTCDate(cursor.getUTCDate() + daysToFriday);
+  return { startDate, endDate: cursor.toISOString().slice(0, 10) };
 }

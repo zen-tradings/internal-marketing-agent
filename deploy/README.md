@@ -200,8 +200,10 @@ sudo systemd-run --wait --pipe --collect \
 The command immediately sends one clearly named `[TEST]` newsletter to the
 configured `test2` segment, then ensures the formal newsletter for the current
 ET date exists and is scheduled for 10:30 ET or sent immediately when late. An
-existing matching formal newsletter is reused and never duplicated. The final
-JSON line reports the deployed commit, content mode, source count, both
+existing matching formal newsletter is reused and never duplicated. The same
+run also exercises the 72-ticker universe quote scan, grouped Exa research and
+the reusable OIC artifact. The final JSON line reports the deployed commit,
+content mode, source count, quote coverage, price-mover/OIC/IV counts, both
 Customer.io IDs, trace path, and any soft diagnostics. Soft diagnostics do not
 produce Slack warnings; a hard gate or execution failure exits non-zero and is
 handled as a release failure.

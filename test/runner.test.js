@@ -922,6 +922,70 @@ test('company 专项调研:基础查询之外并行执行 extraQueries', async (
   assert.deepEqual(queries, ['AMAT', 'AMAT 历史季度', 'AMAT 竞争产业链']);
 });
 
+test('Opening Digest alone may run ten extra queries and persists collected universe context', async () => {
+  const workflow = openingWorkflow({
+    factReview: false,
+    research: {
+      prioritySources: [],
+      extraQueryLimit: 10,
+      extraQueries: () => Array.from({ length: 12 }, (_, index) => ({
+        query: `universe-${index + 1}`,
+        kind: `universe-${index + 1}`,
+        openingDigestKind: index === 9 ? 'earnings-schedule' : 'universe-news',
+      })),
+    },
+    collectContext: async () => ({
+      artifact: { schemaVersion: 1, dateKey: '2026-08-10', quotes: { coverage: { requested: 72, available: 72 } } },
+      trace: { universeSize: 72, quoteCoverage: { requested: 72, available: 72 } },
+      promptText: 'TRACKED-CONTEXT META +6.00%',
+      sources: [{
+        title: 'META quote', url: 'https://finance.yahoo.com/quote/META',
+        publishedDate: '2026-08-10T14:15:00Z', text: 'META +6%', openingDigestKind: 'universe-price',
+      }],
+      diagnostics: [],
+    }),
+  });
+  const searchQueries = [];
+  let completionPrompt = '';
+  const result = await runWriter({
+    workflow,
+    input: 'opening',
+    config: baseConfig(),
+    fetchFn: async (url, options) => {
+      if (String(url).endsWith('/search')) {
+        const body = JSON.parse(options.body);
+        searchQueries.push(body.query);
+        return jsonResponse({ results: [{
+          title: body.query, url: `https://example.com/${searchQueries.length}`,
+          publishedDate: '2026-08-10T14:00:00Z', text: 'Supported market fact.',
+        }] });
+      }
+      completionPrompt = JSON.parse(options.body).messages.at(-1).content;
+      return jsonResponse({ choices: [{ message: { content: `---
+title: Zen Opening Digest
+subject: Zen Opening Digest
+preheader: Test
+edition: 2026-08-10
+---
+## Today's catalysts
+- [META quote](https://finance.yahoo.com/quote/META) moved materially at the captured time without an asserted cause.
+- [Source](https://example.com/1) supports a second current and material opening catalyst for the session.
+- [Source two](https://example.com/2) supports a third current and material opening catalyst for the session.
+
+## Market read
+The opening interpretation remains conditional on whether the initial breadth persists through the first hour.` } }] });
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(searchQueries.length, 11, 'one base search plus ten Opening Digest extras');
+  assert.deepEqual(searchQueries.slice(1), Array.from({ length: 10 }, (_, index) => `universe-${index + 1}`));
+  assert.match(completionPrompt, /TRACKED-CONTEXT META \+6\.00%/);
+  const artifact = JSON.parse(fs.readFileSync(path.join(workflow.workDir, 'opening-digest-universe.json'), 'utf8'));
+  assert.equal(artifact.quotes.coverage.available, 72);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.openingDigestUniverse.universeSize, 72);
+});
+
 test('company 财报深搜:传递 deep/financial report 参数,展开 subpages 并写调研轨迹', async () => {
   const workflow = tempWorkflow({
     id: 'company',

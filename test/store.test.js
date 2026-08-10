@@ -151,6 +151,44 @@ test('Slack 事件持久化 claim 防止跨进程重复消费,失败前可释放
   assert.equal(s.claimSlackEvent('Ev1'), true);
 });
 
+test('Opening Digest OIC 历史同日幂等并只保留最近 60 个成功交易日', () => {
+  const store = openStore(':memory:');
+  const start = new Date('2026-01-01T12:00:00Z');
+  for (let index = 0; index < 61; index++) {
+    const date = new Date(start);
+    date.setUTCDate(date.getUTCDate() + index);
+    const sessionDate = date.toISOString().slice(0, 10);
+    store.recordOpeningDigestOicCapture({
+      sessionDate, capturedAt: date.toISOString(), status: 'success',
+      rows: [{
+        ticker: 'NVDA', rank: 1, ivx30: 55 + index, ivxChangePct: 2,
+        ivxPointChange: 1, totalVolume: '1,000,000',
+      }],
+    });
+  }
+  const history = store.listOpeningDigestIvHistory();
+  assert.equal(history.sessions.length, 60);
+  assert.equal(history.rows.length, 60);
+  assert.equal(history.sessions.includes('2026-01-01'), false);
+
+  const latest = history.sessions[0];
+  store.recordOpeningDigestOicCapture({
+    sessionDate: latest, capturedAt: '2026-03-03T14:15:00Z', status: 'success',
+    rows: [{
+      ticker: 'META', rank: 2, ivx30: 61, ivxChangePct: 10,
+      ivxPointChange: 5.55, totalVolume: '900,000',
+    }],
+  });
+  const replaced = store.listOpeningDigestIvHistory();
+  assert.equal(replaced.rows.some((row) => row.session_date === latest && row.ticker === 'NVDA'), false);
+  assert.equal(replaced.rows.some((row) => row.session_date === latest && row.ticker === 'META'), true);
+
+  store.recordOpeningDigestOicCapture({
+    sessionDate: latest, capturedAt: '2026-03-03T15:00:00Z', status: 'failed', error: 'temporary', rows: [],
+  });
+  assert.equal(store.listOpeningDigestIvHistory().rows.some((row) => row.session_date === latest && row.ticker === 'META'), true);
+});
+
 test('过期任务只选择终态记录并和数据库清理保持一致', () => {
   const store = openStore(':memory:');
   store.createRun({ id: 'done-old', workflowId: 'wechat', source: 'test', input: 'x', notify: {} });

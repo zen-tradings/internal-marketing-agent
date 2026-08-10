@@ -41,6 +41,7 @@ const formalResult = await channel.publish({
   contentMode: generated.contentMode || 'editorial',
 });
 const trace = JSON.parse(fs.readFileSync(generated.researchTracePath, 'utf8'));
+const universe = trace.openingDigestUniverse || {};
 console.log(JSON.stringify({
   ok: true,
   dateKey: easternDateKey(new Date()),
@@ -50,6 +51,12 @@ console.log(JSON.stringify({
   sourceCount: generated.sources?.length || 0,
   testMediaId: testResult.mediaId,
   formalMediaId: formalResult.mediaId,
+  universeSize: universe.universeSize || 0,
+  quoteCoverage: universe.quoteCoverage || null,
+  priceMoverCount: universe.priceMovers?.length || 0,
+  oicUniverseMatchCount: universe.oicUniverseMatches?.length || 0,
+  ivTriggerCount: universe.ivTriggers?.length || 0,
+  universeResearchLanes: (trace.researchLanes || []).filter((lane) => /opening-digest-universe/.test(lane)),
   tracePath: generated.researchTracePath,
   diagnostics: trace.openingDigestDelivery?.diagnostics || [],
 }));

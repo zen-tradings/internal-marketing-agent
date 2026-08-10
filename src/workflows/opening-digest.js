@@ -5,6 +5,7 @@ import {
   openingDigestSearchInput,
   validateOpeningDigestArticle,
 } from '../lib/opening-digest-content.js';
+import { collectOpeningDigestUniverseContext } from '../lib/opening-digest-universe.js';
 
 const MARKET_PRIORITY_SOURCES = [
   'reuters.com', 'apnews.com', 'ft.com', 'wsj.com', 'bloomberg.com', 'cnbc.com',
@@ -17,8 +18,8 @@ function promptTemplate() {
   return `You are writing the editorial section of Zen Opening Digest for ${date}.
 
 Write in English. This is a short US market opening digest, not investment advice.
-Use 3 to 5 sourced market-moving news items from the prior regular close through the current opening window. For each item include a direct source link and one concise reason it matters. Then write one restrained, falsifiable “Market read” paragraph. Do not invent price levels, options activity, or macro values: those are rendered separately by the system.
-Do not use evergreen background, previously disclosed items, or sources without a verifiable publication date as today's catalysts. Never pad the digest with stale material; use only the number of supported current-window items available.
+Use 3 to 5 sourced market-moving items. Prioritize the supplied tracked-universe signals and current-window company developments; use at most one macro item, only when it materially affects the broad market or several tracked names. For each item include one direct source link and one concise reason it matters. A supplied price move may be reported as a timestamped price fact without asserting a cause. Combine standalone supplied IV signals into at most one item and state that coverage is limited to tracked names appearing in the OIC Top 20. Then write one restrained, falsifiable “Market read” paragraph. Do not invent price levels, options activity, causes, or macro values.
+Do not use evergreen background, previously disclosed items, unconfirmed rumors, price-target-only notes, or sources without a verifiable publication date as today's catalysts. Explicit upgrades or downgrades are allowed. A still-upcoming earnings event in the current ET week may use an older verifiable schedule source; this exception does not apply to ordinary news. Never pad the digest with stale material; use only the number of supported items available.
 
 Return Markdown only with this frontmatter:
 ---
@@ -55,8 +56,16 @@ export default {
       minOfficialSources: 0,
       prioritySources: [...new Set([...MARKET_PRIORITY_SOURCES, ...shared.prioritySources])],
       extraQueries: () => openingDigestResearchQueries(new Date()),
+      extraQueryLimit: 10,
     };
   },
+  collectContext: ({ config, fetchFn, asOf, taskContext, signal }) => collectOpeningDigestUniverseContext({
+    config,
+    fetchFn,
+    asOf,
+    signal,
+    history: taskContext?.openingDigestHistory,
+  }),
   validateArticle: ({ article, research, asOf }) => validateOpeningDigestArticle({
     article, research, asOf, requireFreshSources: true,
   }),
