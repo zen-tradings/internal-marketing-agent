@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import {
   NEWSLETTER_COMPANY_ADDRESS, NEWSLETTER_TEMPLATE_ID, parseNewsletterArticle, renderMarkdown, renderNewsletterEmail,
 } from '../lib/newsletter-email.js';
@@ -110,7 +111,7 @@ export function makeChannel({
         diagnostics.push(...metricResult.warnings);
         let options;
         try {
-          options = await resolveOptions({ digest, source, current, captureOptions });
+          options = await resolveOptions({ articlePath, digest, source, current, captureOptions });
         } catch (error) {
           diagnostics.push(`Opening Digest 期权区块已省略:${error.message}`);
         }
@@ -213,7 +214,15 @@ async function loadOrCollectMetrics({ articlePath, dateKey, collectMetrics, fetc
   return normalized;
 }
 
-async function resolveOptions({ digest, source, current, captureOptions }) {
+async function resolveOptions({ articlePath, digest, source, current, captureOptions }) {
+  const prepared = await readPreparedOptions(articlePath, current);
+  if (prepared) {
+    return {
+      data: prepared.data,
+      capturedAt: prepared.capturedAt,
+      kind: source === 'cron' ? 'Opening' : 'Latest available',
+    };
+  }
   const screenshot = await captureOptions({
     url: digest.optionsUrl, storageStatePath: digest.storageStatePath,
     executablePath: digest.browserExecutablePath, timeoutMs: digest.captureTimeoutMs,
@@ -225,6 +234,19 @@ async function resolveOptions({ digest, source, current, captureOptions }) {
     capturedAt: screenshot.capturedAt || current.toISOString(),
     kind: manual ? 'Latest available' : 'Opening',
   };
+}
+
+async function readPreparedOptions(articlePath, current) {
+  const artifactPath = path.join(path.dirname(articlePath), 'opening-digest-universe.json');
+  try {
+    const artifact = JSON.parse(await fs.readFile(artifactPath, 'utf8'));
+    if (artifact?.schemaVersion !== 1 || artifact?.dateKey !== easternDateKey(current)
+      || !artifact?.options?.data || !artifact?.options?.capturedAt) return null;
+    return {
+      data: validateTrendingOptionsData(artifact.options.data),
+      capturedAt: artifact.options.capturedAt,
+    };
+  } catch { return null; }
 }
 
 export function renderOptionsHtml(options) {

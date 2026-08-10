@@ -44,6 +44,27 @@ CREATE TABLE IF NOT EXISTS slack_events (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_slack_events_created ON slack_events(created_at);
+
+CREATE TABLE IF NOT EXISTS opening_digest_oic_captures (
+  session_date TEXT PRIMARY KEY,
+  captured_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  error TEXT
+);
+
+CREATE TABLE IF NOT EXISTS opening_digest_iv_history (
+  session_date TEXT NOT NULL,
+  ticker TEXT NOT NULL,
+  rank INTEGER NOT NULL,
+  ivx30 REAL NOT NULL,
+  ivx_change_pct REAL NOT NULL,
+  ivx_point_change REAL,
+  total_option_volume INTEGER NOT NULL,
+  PRIMARY KEY (session_date, ticker),
+  FOREIGN KEY (session_date) REFERENCES opening_digest_oic_captures(session_date) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_opening_digest_iv_ticker_date
+  ON opening_digest_iv_history(ticker, session_date DESC);
 `;
 
 export function openStore(dbPath) {
@@ -151,6 +172,70 @@ export function openStore(dbPath) {
     releaseSlackEvent(eventKey) {
       if (!eventKey) return 0;
       return db.prepare('DELETE FROM slack_events WHERE event_key = ?').run(eventKey).changes;
+    },
+    recordOpeningDigestOicCapture({ sessionDate, capturedAt, status, error, rows = [] }) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(sessionDate || ''))) throw new Error('Opening Digest OIC session date 无效');
+      if (!['success', 'failed'].includes(status)) throw new Error('Opening Digest OIC capture status 无效');
+      const record = db.transaction(() => {
+        db.prepare(`
+          INSERT INTO opening_digest_oic_captures (session_date, captured_at, status, error)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(session_date) DO UPDATE SET
+            captured_at = excluded.captured_at,
+            status = CASE WHEN opening_digest_oic_captures.status = 'success' THEN 'success' ELSE excluded.status END,
+            error = CASE WHEN opening_digest_oic_captures.status = 'success' THEN NULL ELSE excluded.error END
+        `).run(sessionDate, String(capturedAt || new Date().toISOString()), status, error ? String(error).slice(0, 600) : null);
+        if (status === 'success') {
+          db.prepare('DELETE FROM opening_digest_iv_history WHERE session_date = ?').run(sessionDate);
+          const insert = db.prepare(`
+            INSERT INTO opening_digest_iv_history
+              (session_date, ticker, rank, ivx30, ivx_change_pct, ivx_point_change, total_option_volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+          `);
+          for (const row of rows) {
+            const volume = Number(String(row.totalVolume || '').replaceAll(',', ''));
+            if (!/^[A-Z0-9.-]{1,20}$/.test(String(row.ticker || ''))
+              || !Number.isInteger(row.rank) || !Number.isFinite(row.ivx30)
+              || !Number.isFinite(row.ivxChangePct) || !Number.isSafeInteger(volume)) continue;
+            insert.run(
+              sessionDate, row.ticker, row.rank, row.ivx30, row.ivxChangePct,
+              Number.isFinite(row.ivxPointChange) ? row.ivxPointChange : null,
+              volume,
+            );
+          }
+        }
+        const cutoff = db.prepare(`
+          SELECT session_date
+          FROM opening_digest_oic_captures
+          WHERE status = 'success'
+          ORDER BY session_date DESC
+          LIMIT 1 OFFSET 59
+        `).get()?.session_date;
+        if (cutoff) {
+          db.prepare('DELETE FROM opening_digest_iv_history WHERE session_date < ?').run(cutoff);
+          db.prepare('DELETE FROM opening_digest_oic_captures WHERE session_date < ?').run(cutoff);
+        }
+      });
+      record();
+    },
+    listOpeningDigestIvHistory({ limitSessions = 60 } = {}) {
+      const limit = Math.max(1, Math.min(60, Math.floor(Number(limitSessions) || 60)));
+      const sessions = db.prepare(`
+        SELECT session_date
+        FROM opening_digest_oic_captures
+        WHERE status = 'success'
+        ORDER BY session_date DESC
+        LIMIT ?
+      `).all(limit).map((row) => row.session_date);
+      if (!sessions.length) return { sessions: [], rows: [] };
+      const placeholders = sessions.map(() => '?').join(',');
+      const rows = db.prepare(`
+        SELECT session_date, ticker, rank, ivx30, ivx_change_pct, ivx_point_change, total_option_volume
+        FROM opening_digest_iv_history
+        WHERE session_date IN (${placeholders})
+        ORDER BY session_date DESC, rank ASC
+      `).all(...sessions);
+      return { sessions, rows };
     },
     listPrunableRuns(before) {
       if (!Number.isFinite(before)) return [];

@@ -179,6 +179,12 @@ export function makeHandler(deps) {
               attachments: notify.attachments,
               resolvedClarification: notify.resolvedClarification,
               routeReason: notify.routeReason,
+              ...(runtimeWorkflow.id === 'opening-digest' ? {
+                openingDigestHistory: {
+                  recordCapture: (entry) => store.recordOpeningDigestOicCapture?.(entry),
+                  listHistory: (options) => store.listOpeningDigestIvHistory?.(options),
+                },
+              } : {}),
               ...(qdiiPayload ? {
                 qdiiPayload,
                 qdiiSources: qdiiSourcesForWriter(qdiiPayload),

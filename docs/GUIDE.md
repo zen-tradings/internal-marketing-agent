@@ -108,7 +108,7 @@
 | 草稿固定模板总门禁 | `src/lib/draft-template.js` | 所有真实渠道必须登记模板 ID 并锁定；任务不得覆盖，改版必须升版本和更新测试 |
 | 微信渲染主题 | `zen-wechat/zen-trading@4`、`assets/zen-trading.css` 与 `RENDER_OPTS` | 主题文件随仓库部署；引用块归一为正文字号，最终 HTML 在发布前执行字体、重复来源与固定尾图顺序检查 |
 | Customer.io 邮件草稿 | `src/workflows/email.js` + `src/channels/customerio-draft.js` | 固定 `zen-customerio/zen-research@3`，页脚地址固定为 `700 Leahy St, Redwood City, CA 94061`，只创建草稿；受众由 internal/pilot/full 三阶段配置控制 |
-| Opening Digest 开市日报 | `src/workflows/opening-digest.js` + `src/channels/customerio-opening-digest.js` | 美东 10:15 生成、目标 10:30；开盘窗口、标准区块、3-5 条 catalyst 与来源规则均为软审计，只有带具体证据的高置信度核心事实错误在两轮局部修复后仍失败才停发；九格行情固定归一化，OIC 或封面失败可省略。受众预检失败或人数为零只写 trace，明确读到非 `test2` 才停发；正文退订标签本地移除，不再读回 `/contents`，所有可继续的降级均不发 Slack warning |
+| Opening Digest 开市日报 | `src/workflows/opening-digest.js` + `src/channels/customerio-opening-digest.js` | 美东 10:15 生成、目标 10:30；固定跟踪 72 个 ticker，报价相对昨收绝对涨跌幅达 5% 生成候选，并用七组 Exa 查询覆盖重大新闻、明确升降级和剩余本周财报。OIC IV 仅覆盖进入 Top 20 的池内标的，以 `IVX30 >= 60%` 或单日增加 5 个波动率点触发，SQLite 保留 60 个成功交易日。标准区块、3-5 条 catalyst 与来源规则仍为软审计；池内优先、宏观最多一条。九格行情固定，OIC、封面、universe 报价或搜索失败均可降级且不发 Slack warning；受众、Customer.io 和严重事实门禁保持不变 |
 | 新发布渠道 | 新建 `src/channels/<name>.js` 实现 publish() + 注册模板和渠道 | 见 README「扩展」一节；未登记模板时 fail closed |
 
 ## 四、日常运维

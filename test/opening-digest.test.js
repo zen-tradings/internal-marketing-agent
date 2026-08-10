@@ -18,6 +18,13 @@ import { makeChannel, renderOptionsHtml } from '../src/channels/customerio-openi
 import { countTrendingRows, validateTrendingOptionsData } from '../src/lib/options-volume.js';
 import { collectOpeningMetrics, normalizeOpeningMetrics, validateOpeningMetrics } from '../src/lib/opening-digest-metrics.js';
 import {
+  analyzeUniverseOptions,
+  collectOpeningDigestUniverseContext,
+  collectUniverseQuotes,
+  OPENING_DIGEST_UNIVERSE,
+  OPENING_DIGEST_UNIVERSE_GROUPS,
+} from '../src/lib/opening-digest-universe.js';
+import {
   openingDigestResearchQueries,
   openingDigestSearchInput,
   previousRegularClose,
@@ -142,9 +149,101 @@ test('opening digest research uses the prior regular close window', () => {
   assert.equal(previousRegularClose(new Date('2026-07-06T14:15:00.000Z')).toISOString(), '2026-07-02T20:00:00.000Z');
   assert.match(openingDigestSearchInput(now), /US equity opening digest for 2026-08-10/);
   const queries = openingDigestResearchQueries(now);
-  assert.equal(queries.length, 3);
-  assert.ok(queries.every((query) => query.startPublishedDate === '2026-08-07T20:00:00.000Z'));
+  assert.equal(queries.length, 10);
+  assert.equal(queries.filter((query) => query.openingDigestKind === 'universe-news').length, 7);
+  assert.equal(queries.filter((query) => query.openingDigestKind === 'earnings-schedule').length, 1);
+  assert.ok(queries.slice(0, -1).every((query) => query.startPublishedDate === '2026-08-07T20:00:00.000Z'));
+  assert.equal(queries.at(-1).startPublishedDate, undefined);
+  assert.match(queries.at(-1).query, /2026-08-10 through 2026-08-14/);
   assert.ok(queries.every((query) => query.endPublishedDate === now.toISOString()));
+});
+
+test('opening universe locks 72 unique tickers in seven groups and keeps Alphabet quote classes distinct', () => {
+  assert.equal(OPENING_DIGEST_UNIVERSE.length, 72);
+  assert.equal(OPENING_DIGEST_UNIVERSE_GROUPS.length, 7);
+  assert.equal(new Set(OPENING_DIGEST_UNIVERSE.map((item) => item.ticker)).size, 72);
+  assert.equal(OPENING_DIGEST_UNIVERSE.find((item) => item.ticker === 'GOOG').issuerKey, 'alphabet');
+  assert.equal(OPENING_DIGEST_UNIVERSE.find((item) => item.ticker === 'GOOGL').issuerKey, 'alphabet');
+  assert.equal(OPENING_DIGEST_UNIVERSE.some((item) => item.ticker === 'SKHY' && /SK hynix/.test(item.company)), true);
+});
+
+test('universe quotes detect 5% moves, dedupe share classes and degrade individual failures', async () => {
+  const attempts = new Map();
+  const asOf = new Date('2026-08-10T14:15:00.000Z');
+  const result = await collectUniverseQuotes({
+    asOf,
+    concurrency: 6,
+    fetchFn: async (url) => {
+      const ticker = decodeURIComponent(new URL(url).pathname.split('/').at(-1));
+      attempts.set(ticker, (attempts.get(ticker) || 0) + 1);
+      if (ticker === 'BABA') return { ok: false, status: 404 };
+      if (ticker === 'NVDA' && attempts.get(ticker) === 1) return { ok: false, status: 429 };
+      const prices = ticker === 'GOOG' ? [100, 106]
+        : ticker === 'GOOGL' ? [100, 105]
+          : ticker === 'NVDA' ? [100, 95]
+            : [100, 101];
+      return {
+        ok: true,
+        async json() { return { chart: { result: [{ meta: {
+          chartPreviousClose: prices[0], regularMarketPrice: prices[1], regularMarketTime: asOf.getTime() / 1000,
+        } }] } }; },
+      };
+    },
+  });
+  assert.equal(result.coverage.requested, 72);
+  assert.equal(result.coverage.available, 71);
+  assert.equal(result.coverage.failed, 1);
+  assert.deepEqual(result.movers.map((item) => item.ticker), ['GOOG', 'NVDA']);
+  assert.equal(attempts.get('NVDA'), 2);
+});
+
+test('universe OIC analysis applies absolute and derived point thresholds with sparse history', () => {
+  const data = structuredClone(OPTIONS_DATA);
+  data.rows[0].splice(1, 7, 'NVDA', 'NVIDIA', '60.00 %', '40.00 %', '1,000,000', '65.00', '1.00');
+  data.rows[1].splice(1, 7, 'IREN', 'IREN', '55.00 %', '45.00 %', '990,000', '55.00', '12.00');
+  data.rows[2].splice(1, 7, 'META', 'Meta', '50.00 %', '50.00 %', '980,000', '40.00', '2.00');
+  const analyzed = analyzeUniverseOptions(data, {
+    sessions: ['2026-08-10', '2026-08-07'],
+    rows: [
+      { session_date: '2026-08-10', ticker: 'NVDA' },
+      { session_date: '2026-08-07', ticker: 'NVDA' },
+      { session_date: '2026-08-10', ticker: 'IREN' },
+    ],
+  });
+  assert.deepEqual(analyzed.matches.map((item) => item.ticker), ['NVDA', 'IREN', 'META']);
+  assert.deepEqual(analyzed.triggers.map((item) => item.ticker), ['NVDA', 'IREN']);
+  assert.ok(analyzed.triggers.find((item) => item.ticker === 'IREN').ivxPointChange >= 5);
+  assert.equal(analyzed.history.NVDA.consecutiveAppearances, 2);
+  assert.equal(analyzed.history.IREN.firstAppearanceInWindow, true);
+});
+
+test('universe context emits prompt sources and a reusable OIC artifact without making IV coverage claims', async () => {
+  const asOf = new Date('2026-08-10T14:15:00.000Z');
+  const data = structuredClone(OPTIONS_DATA);
+  data.rows[0].splice(1, 7, 'NVDA', 'NVIDIA', '60.00 %', '40.00 %', '1,000,000', '65.00', '1.00');
+  const recorded = [];
+  const context = await collectOpeningDigestUniverseContext({
+    config: config(), asOf, quoteConcurrency: 12,
+    fetchFn: async (url) => {
+      const ticker = decodeURIComponent(new URL(url).pathname.split('/').at(-1));
+      const moved = ticker === 'META';
+      return { ok: true, async json() { return { chart: { result: [{ meta: {
+        chartPreviousClose: 100, regularMarketPrice: moved ? 106 : 101,
+        regularMarketTime: asOf.getTime() / 1000,
+      } }] } }; } };
+    },
+    captureOptions: async () => capturedOptions({ data }),
+    history: {
+      recordCapture: (entry) => recorded.push(entry),
+      listHistory: () => ({ sessions: ['2026-08-10'], rows: [{ session_date: '2026-08-10', ticker: 'NVDA' }] }),
+    },
+  });
+  assert.equal(context.artifact.schemaVersion, 1);
+  assert.equal(context.artifact.quotes.coverage.available, 72);
+  assert.equal(context.artifact.options.data.rows.length, 20);
+  assert.deepEqual(context.sources.map((source) => source.openingDigestKind), ['universe-price', 'universe-iv']);
+  assert.match(context.promptText, /not a full-universe IV scan/);
+  assert.equal(recorded[0].status, 'success');
 });
 
 test('opening content rules are diagnostics rather than hard gates', () => {
@@ -168,6 +267,17 @@ test('opening content rules are diagnostics rather than hard gates', () => {
   assert.ok(invalid.warnings.some((warning) => /旧闻或背景/.test(warning)));
   const malformed = validateOpeningDigestArticle({ article: 'No standard headings or links.' });
   assert.ok(malformed.warnings.length >= 3);
+
+  const scheduled = validateOpeningDigestArticle({
+    article: ARTICLE.replace('https://example.com/a', 'https://example.com/earnings'),
+    research: [
+      { url: 'https://example.com/earnings', publishedDate: '2026-07-20T12:00:00Z', openingDigestKind: 'earnings-schedule' },
+      ...research.slice(1),
+    ],
+    asOf: now,
+    requireFreshSources: true,
+  });
+  assert.equal(scheduled.warnings.some((warning) => /时间窗口/.test(warning)), false);
 });
 
 test('opening metrics keeps nine fixed slots and replaces invalid or missing data with placeholders', async () => {
@@ -231,6 +341,31 @@ test('complete digest renders template, address, options and schedules without c
   assert.equal(requests.some((item) => item.path.endsWith('/contents')), false);
   const schedule = requests.find((item) => item.path.endsWith('/schedule'));
   assert.equal(schedule.body.scheduled_at, Date.parse('2026-08-10T14:30:00.000Z') / 1000);
+});
+
+test('prepared universe artifact is reused for acceptance and formal rendering without another OIC capture', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'zen-opening-universe-artifact-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const articlePath = path.join(directory, 'article.md');
+  await fs.writeFile(path.join(directory, 'opening-digest-universe.json'), JSON.stringify({
+    schemaVersion: 1,
+    dateKey: '2026-08-10',
+    options: { data: OPTIONS_DATA, capturedAt: '2026-08-10T14:15:00.000Z' },
+  }));
+  let captures = 0;
+  const requests = [];
+  const { channel } = standardChannel({
+    requests,
+    channel: { captureOptions: async () => { captures += 1; return capturedOptions(); } },
+  });
+  await channel.publish({
+    articlePath, config: config(), source: 'acceptance', acceptanceId: 'artifact-1015et',
+  });
+  await channel.publish({ articlePath, config: config(), source: 'cron' });
+  assert.equal(captures, 0);
+  const creates = requests.filter((item) => item.path === '/v1/newsletters' && item.method === 'POST');
+  assert.equal(creates.length, 2);
+  assert.ok(creates.every((item) => /OIC Trending Options Volume top twenty/.test(item.body.body)));
 });
 
 test('cover and OIC failures degrade silently and persist diagnostics to trace', async (t) => {
