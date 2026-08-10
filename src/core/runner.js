@@ -279,11 +279,37 @@ export async function runWriter({
     };
     trace.researchLanes = [...new Set(trace.requests.map((request) => request.kind).filter(Boolean))];
     writeResearchTrace(researchTracePath, trace);
-    const prompt = buildUserPrompt({
+    const maxPromptChars = positiveNumber(writer.maxPromptChars, 160000);
+    const configuredExcerptChars = sourceExcerptLimitFor(workflow);
+    let appliedExcerptChars = configuredExcerptChars;
+    let prompt = buildUserPrompt({
       workflow, input, research, writer, sourcePolicy, asOf: researchAsOf,
       editorialContext: editorialContext?.promptText || '',
+      sourceExcerptMaxChars: appliedExcerptChars,
     });
-    const maxPromptChars = positiveNumber(writer.maxPromptChars, 160000);
+    if (workflow.id === 'opening-digest' && prompt.length > maxPromptChars) {
+      for (const fallbackLimit of [900, 600, 300, 0]) {
+        if (fallbackLimit >= appliedExcerptChars) continue;
+        appliedExcerptChars = fallbackLimit;
+        prompt = buildUserPrompt({
+          workflow, input, research, writer, sourcePolicy, asOf: researchAsOf,
+          editorialContext: editorialContext?.promptText || '',
+          sourceExcerptMaxChars: appliedExcerptChars,
+        });
+        if (prompt.length <= maxPromptChars) break;
+      }
+    }
+    if (workflow.id === 'opening-digest') {
+      trace.openingDigestResearchBudget = {
+        sourceCount: research.length,
+        configuredExcerptChars,
+        appliedExcerptChars,
+        promptChars: prompt.length,
+        maxPromptChars,
+        withinLimit: prompt.length <= maxPromptChars,
+      };
+      writeResearchTrace(researchTracePath, trace);
+    }
     if (prompt.length > maxPromptChars) {
       throw new Error(`生成输入超过全局上限:${prompt.length}/${maxPromptChars} 字符;请减少链接或缩短素材`);
     }
@@ -1761,7 +1787,16 @@ function truncateLog(value) {
   return text.length > 180 ? `${text.slice(0, 177)}...` : text;
 }
 
-function buildUserPrompt({ workflow, input, research, writer, sourcePolicy, asOf, editorialContext = '' }) {
+function buildUserPrompt({
+  workflow,
+  input,
+  research,
+  writer,
+  sourcePolicy,
+  asOf,
+  editorialContext = '',
+  sourceExcerptMaxChars,
+}) {
   const workflowPrompt = typeof workflow.promptTemplate === 'function'
     ? workflow.promptTemplate(input)
     : `写作任务:${input}`;
@@ -1806,9 +1841,9 @@ ${legalContract}
 `;
   const researchMaterial = sourcePolicy.skipResearch
     ? (research.length
-        ? formatResearch(research, writer)
+        ? formatResearch(research, writer, { sourceExcerptMaxChars })
         : '这是关系/通知型 Newsletter，不需要外部市场检索。只依据用户任务撰写，不要虚构用户未提供的产品、服务或承诺。')
-    : formatResearch(research, writer);
+    : formatResearch(research, writer, { sourceExcerptMaxChars });
   return `【原始工作流写作要求】
 ${workflowPrompt}
 ${editorialGuidance ? `\n【编辑方法】\n${editorialGuidance}\n` : ''}${macroGuidance ? `\n【宏观策略方法】\n${macroGuidance}\n` : ''}
@@ -1828,12 +1863,14 @@ ${outputInstruction}`;
 // 用户手工贴的 URL(userSpecified)是一级优先研究素材,需要保留(接近)全文,
 // 上限用 writer.exaUserContentMaxChars(EXA_USER_CONTENT_MAX_CHARS,默认 24000 字符);
 // 其余(优先信源/开放搜索)只是背景参考,维持原先的 2400 字符上限。
-// 注意:这里只对"单条素材"做截断,不对"多条用户指定素材拼起来的 prompt 总长"做全局上限
-// (一次任务最多 5 个用户 URL,每条最多到 24000 字符,理论上可累加到 12 万字符左右);
-// 目标模型上下文足够大,暂不需要额外的总量控制,后续如遇模型上下文不够可在此加总量裁剪。
-function formatResearch(results, writer = {}) {
+// 用户指定素材仍由既有 5 条 URL 与全局 prompt 上限共同约束。Opening Digest 会传入更小的
+// 普通来源摘录上限；若组合后的 prompt 仍超限，调用方按固定档位重建，同时保留来源元数据和 URL。
+function formatResearch(results, writer = {}, { sourceExcerptMaxChars } = {}) {
   if (!results.length) return '未检索到可用素材。请明确说明信息不足,不要编造事实。';
   const userMaxChars = writer.exaUserContentMaxChars || 24000;
+  const regularMaxChars = Number.isFinite(sourceExcerptMaxChars) && sourceExcerptMaxChars >= 0
+    ? Math.floor(sourceExcerptMaxChars)
+    : 2400;
   return results.map((r, i) => {
     const label = r.userSpecified
       ? '【一级优先·用户指定素材】'
@@ -1848,7 +1885,7 @@ function formatResearch(results, writer = {}) {
             : r.deepPage
               ? '【二级·深层子页面】'
               : '【三级·开放检索】';
-    const maxChars = r.userSpecified ? userMaxChars : 2400;
+    const maxChars = r.userSpecified ? userMaxChars : regularMaxChars;
     const full = [
       ...(Array.isArray(r.highlights) ? r.highlights : []),
       r.summary,
@@ -1947,11 +1984,15 @@ const OPENING_SEVERE_CATEGORIES = new Set([
 ]);
 
 async function reviewAndRepairOpeningDigest({ article, input, research, workflow, writer, fetchFn }) {
+  const excerptLimit = sourceExcerptLimitFor(workflow);
   const allowed = research.filter((source) => source?.url).map((source) => ({
     title: source.title || '',
     url: source.url,
     publishedDate: source.publishedDate || '',
-    excerpt: [source.summary, source.text, ...(source.highlights || [])].filter(Boolean).join('\n').slice(0, 3200),
+    excerpt: [source.summary, source.text, ...(source.highlights || [])]
+      .filter(Boolean)
+      .join('\n')
+      .slice(0, excerptLimit),
   }));
   const auditPrompt = `Audit this Zen Opening Digest only against the supplied sources. Report ordinary weaknesses, but reserve a severe issue for a high-confidence error that changes a core conclusion and has specific source evidence. Severe categories are only core_fact_contradiction, fabricated_number_or_date, and wrong_link. Do not treat structure, catalyst count, freshness, duplicate links, missing publication dates, style, or weak sourcing as severe.\n\nReturn strict JSON:\n{"issues":[{"category":"...","confidence":"high|medium|low","core":true|false,"claim":"exact problematic text","evidence":"specific source evidence","source_url":"allowed source URL","message":"short explanation"}],"revised_markdown":"complete repaired Markdown when severe issues exist, otherwise empty"}\n\nTask:${input}\n\nAllowed sources:${JSON.stringify(allowed)}\n\nDraft:\n${article}`;
   let initial;
@@ -2512,6 +2553,12 @@ function extraQueryLimitFor(workflow) {
   const configured = Number(workflow?.research?.extraQueryLimit);
   if (!Number.isFinite(configured)) return 3;
   return Math.max(0, Math.min(10, Math.floor(configured)));
+}
+
+function sourceExcerptLimitFor(workflow) {
+  const configured = Number(workflow?.research?.maxSourceExcerptChars);
+  if (!Number.isFinite(configured)) return 2400;
+  return Math.max(0, Math.min(24000, Math.floor(configured)));
 }
 
 function normalizeArticle(content) {
