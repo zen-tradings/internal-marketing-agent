@@ -6,13 +6,17 @@
 
 - 命名格式：`Zen Research from Zen Trading · Vol. N`
 - Slack 入口：私聊自然语言或频道 `@Bot`；`邮件：<本期主题>`、`email: <topic>` 继续兼容。
-- 本地工作流只在 Customer.io 创建草稿，不会自动发送或排期。
+- 常规 `email:` 工作流只在 Customer.io 创建草稿，不会自动发送或排期；`opening-digest` 是独立的受控发送/排期例外。
 - Customer.io 内部测试分组：`Newsletter · Internal Beta`，segment ID `17`。
 - Customer.io Pilot 分组：`Newsletter · Pilot`，segment ID `18`。这是第二批扩容名单，当前为空，加入人员前不能创建 Pilot 草稿。
 - 全量候选分组：`Valid Email Address`，segment ID `6`。切换前仍要在 Review 页核对订阅偏好与预计人数。
 - 新生成草稿的主题和邮件内品牌统一为 `Zen Research from Zen Trading · Vol. N`；不自动改写历史草稿或已发送邮件。
 - Design Studio 模板已发布版号标题、内部体验内容、官网链接、反馈入口、退订链接和 Customer.io 账户中登记的公司地址；原始 demo 文案、`[Address]` 与错误链接已移除。
 - `Vol. 1` 已向内部 segment `17` 发送体验版：修正版 newsletter ID `5` 的 3 条消息全部 delivered，failed/suppressed 均为 0。
+
+### Opening Digest 当前实现
+
+生产环境在 DigitalOcean 的 Chrome 会从 OIC/iVolatility iframe 提取 20 行、8 个字段，截图仅用于同会话前后数据一致性校验并立即丢弃；邮件正文渲染为移动端可读的 HTML 表格。校验失败会 fail closed，不创建 Newsletter；EOD cache 只保存结构化 JSON。测试阶段代码硬锁受众名称为 `test2`，且必须具备书面自动化授权。
 - newsletter ID `1` 的首次尝试因退订链接误用变量语法，在 Customer.io 渲染阶段 3 条全部失败；没有错误邮件离开平台。保留该记录用于审计，不复用或扩容。
 - 内部分组目前只包含 Customer.io 中已经存在的 3 位内部人员。扩充体验名单时，先把人员加入该手工 segment，再回到 Review 页核对人数。
 

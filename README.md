@@ -13,7 +13,7 @@ Slack 私聊自然语言 / 频道 @Bot / PDF/文本附件 / cron
   → 通用任务用 LatePost 方法；macro 由 Global Macro 主导并组合 LatePost 证据纪律
   → Qwen3.8-Max 写作 → GLM 5.2 逐句事实审计 → 系统确定性引用
   → 中央模板门禁 → 微信固定版式 / Customer.io Newsletter 固定模板
-  → 只创建草稿，不发送、不排期
+  → 常规渠道只创建草稿；`opening-digest` 为受控发送/排期例外
   → Slack best-effort 回报；通知失败不改变草稿结果
 ```
 
@@ -137,7 +137,7 @@ npm run trace:research -- company
 
 用户链接和 Slack 附件会先全文读取，再默认用最新官方/一手来源和既定优先来源交叉验证；只有原始 Prompt 明确写“仅依据此链接”时才关闭扩展搜索，规划模型不能自行升级成排他性来源约束。Slack 转义后的 URL 会在入队和提取时还原；若 Exa 对单个用户页面返回 crawl error 或空结果，系统会用域名、路径、campaign 语义和任务要求执行一次定向恢复检索，并把逐 URL 状态与恢复结果写入 `research-trace.json`。PDF、Notion、Google Docs 和 GitHub 仓库/文件会直接进入用户一级来源，和普通链接一样不会仅因用户提供就自动被认定为官方事实。Slack 私有文件下载使用 Bot token；分析型 PDF 有 Datalab 时走结构化解析，没有时由 Poppler 提取可搜索文字，扫描件在没有 OCR 服务时明确失败。若用户材料与一手材料各自有明确证据，并且对核心前提形成无法用时间或口径解释的冲突，任务才转为 `needs_input`，Bot 在原线程只问一个明确问题；用户回答后同一冲突不再重复询问。缺资料、型号未验证和事实审计问题不再循环提问；系统按风险、影响、来源和置信度决定局部修复或保留待复核。
 
-在原任务线程或同一频道发送 `@ZenBot 停止当前任务`、`停止进程`、`取消任务`、`stop the current task`、`cancel task` 或 `abort this job`，会停止当前生成任务。排队任务会直接移出队列；运行中任务会中断网络请求、标记为 `cancelled` 并删除自己的 `runs/<run-id>/` 目录，ZenBot 服务本身保持在线。任务一旦进入微信或 Customer.io 草稿创建阶段便不再强杀，避免外部草稿已经创建而本地丢失 `media_id`；Bot 会明确回复该状态。任何路径都只创建草稿，不发送或排期。
+在原任务线程或同一频道发送 `@ZenBot 停止当前任务`、`停止进程`、`取消任务`、`stop the current task`、`cancel task` 或 `abort this job`，会停止当前生成任务。排队任务会直接移出队列；运行中任务会中断网络请求、标记为 `cancelled` 并删除自己的 `runs/<run-id>/` 目录，ZenBot 服务本身保持在线。任务一旦进入微信或 Customer.io 草稿创建阶段便不再强杀，避免外部草稿已经创建而本地丢失 `media_id`；Bot 会明确回复该状态。常规路径只创建草稿，不发送或排期；`opening-digest` 遵循独立的受众与发送门禁。
 
 ## 工作流
 

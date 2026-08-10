@@ -137,6 +137,12 @@ authorized browser session. The current public iVolatility embed does not
 require an account login, so a protected empty Playwright storage-state file is
 sufficient. Keep it owned by `root:zenbot` with mode `0640`.
 
+The production flow extracts the iframe table as structured DOM data and uses a
+same-session screenshot only as a consistency checkpoint; the screenshot is
+discarded and never uploaded to Customer.io. The newsletter contains a
+responsive HTML table, and the end-of-day cache stores JSON data only. During
+the test phase the code requires the configured segment name to be `test2`.
+
 If the provider later requires login, do not put an OIC password in the
 environment. Install the optional GUI helpers only on the Droplet, bind them to
 loopback, and use an SSH tunnel from an operator workstation:

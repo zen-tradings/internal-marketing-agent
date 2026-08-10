@@ -107,6 +107,7 @@
 | 草稿固定模板总门禁 | `src/lib/draft-template.js` | 所有真实渠道必须登记模板 ID 并锁定；任务不得覆盖，改版必须升版本和更新测试 |
 | 微信渲染主题 | `zen-wechat/zen-trading@4`、`assets/zen-trading.css` 与 `RENDER_OPTS` | 主题文件随仓库部署；引用块归一为正文字号，最终 HTML 在发布前执行字体、重复来源与固定尾图顺序检查 |
 | Customer.io 邮件草稿 | `src/workflows/email.js` + `src/channels/customerio-draft.js` | 固定 `zen-customerio/zen-research@1`，只创建草稿；受众由 internal/pilot/full 三阶段配置控制 |
+| Opening Digest 开市日报 | `src/workflows/opening-digest.js` + `src/channels/customerio-opening-digest.js` | DigitalOcean Chrome 提取 OIC 表格 DOM，渲染响应式 HTML；工作日定时或 Slack 手工触发，测试阶段仅允许 `test2` |
 | 新发布渠道 | 新建 `src/channels/<name>.js` 实现 publish() + 注册模板和渠道 | 见 README「扩展」一节；未登记模板时 fail closed |
 
 ## 四、日常运维
