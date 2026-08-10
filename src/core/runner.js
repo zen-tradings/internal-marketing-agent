@@ -52,6 +52,7 @@ import {
   referenceUrlKey,
   selectFinalReferenceIds,
 } from './analysis-v2.js';
+import { easternDateKey } from '../lib/us-equity-calendar.js';
 
 const DEFAULT_SYSTEM_PROMPT = `你是 Zen Trading 公众号分析师。你会基于系统提供的调研素材写中文金融分析文章。
 
@@ -123,6 +124,14 @@ export async function runWriter({
   try {
     throwIfTaskCancelled(signal);
     fs.mkdirSync(workflow.workDir, { recursive: true });
+    if (Array.isArray(taskContext?.qdiiSources) && taskContext.qdiiSources.length) {
+      trace.qdii = {
+        artifactPath: taskContext.qdiiPayload?.artifactPath || null,
+        fundCodes: taskContext.qdiiPayload?.query?.fundCodes || [],
+        failures: taskContext.qdiiPayload?.failures || [],
+        sourceCount: taskContext.qdiiSources.length,
+      };
+    }
     const writer = config.writer || {};
     const model = workflow.model || writer.model;
     trace.models = {
@@ -221,7 +230,11 @@ export async function runWriter({
     const sourcePolicy = sourcePolicyFor({ input, workflow });
     if (!writer.exaApiKey && !sourcePolicy.skipResearch) throw new Error('原创研究工作流缺少 Exa API key');
     trace.sourcePolicy = sourcePolicy;
-    const research = await searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy });
+    const externalResearch = await searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy });
+    const research = mergeInjectedSources(taskContext.qdiiSources, externalResearch);
+    if (workflow.id === 'opening-digest' && research.length === 0) {
+      throw new Error('Opening Digest 未检索到可用研究来源');
+    }
     throwIfTaskCancelled(signal);
     trace.selectedSources = research.map(sourceForTrace);
     trace.officialSourceCount = research.filter((source) => source.official).length;
@@ -251,7 +264,9 @@ export async function runWriter({
       throw new Error('OpenRouter 输出缺少 title frontmatter');
     }
     if (workflow.factReview && !sourcePolicy.skipResearch) {
-      const reviewed = await reviewAndRepairArticle({ article, input, research, workflow, writer, fetchFn, sourcePolicy });
+      const reviewed = workflow.factReviewPolicy === 'severe-only'
+        ? await reviewAndRepairOpeningDigest({ article, input, research, workflow, writer, fetchFn })
+        : await reviewAndRepairArticle({ article, input, research, workflow, writer, fetchFn, sourcePolicy });
       article = reviewed.article;
       trace.factReview = reviewed.review;
     } else if (sourcePolicy.skipResearch) {
@@ -262,8 +277,13 @@ export async function runWriter({
       article = canonicalizeTerminalReferences(article, research, sourcePolicy);
     }
     validateArticleSourceContract(article, research, sourcePolicy);
+    if (typeof workflow.validateArticle === 'function') {
+      const validation = workflow.validateArticle({ article, research, asOf: new Date() });
+      if (workflow.id === 'opening-digest') trace.openingDigestAudit = validation;
+    }
 
     throwIfTaskCancelled(signal);
+    if (workflow.id === 'opening-digest') trace.contentMode = 'editorial';
     trace.finishedAt = new Date().toISOString();
     trace.citationValidation = citationValidationSummary(article, research, sourcePolicy);
     writeResearchTrace(researchTracePath, trace);
@@ -274,10 +294,35 @@ export async function runWriter({
       model,
       researchTracePath,
       sources: research.map((r) => r.url).filter(Boolean),
+      ...(workflow.id === 'opening-digest' ? { contentMode: 'editorial' } : {}),
       contentPolicy: contentPolicyForPrompt(input),
     };
   } catch (e) {
     if (isTaskCancelled(e, signal)) throw cancellationErrorFromSignal(signal);
+    if (workflow.id === 'opening-digest' && e?.openingDigestFactReview) {
+      trace.factReview = e.openingDigestFactReview;
+    }
+    if (workflow.id === 'opening-digest' && !e?.openingDigestHardFailure) {
+      const fallback = openingDigestFallbackArticle(new Date());
+      trace.finishedAt = new Date().toISOString();
+      trace.contentMode = 'data-only';
+      trace.fallbackReason = describeFetchError(e).slice(0, 600);
+      trace.diagnostics = [...(trace.diagnostics || []), trace.fallbackReason];
+      try {
+        fs.writeFileSync(articlePath, fallback);
+        writeResearchTrace(researchTracePath, trace);
+        return {
+          ok: true,
+          articlePath,
+          model: 'fallback',
+          researchTracePath,
+          sources: (trace.selectedSources || []).map((source) => source.url).filter(Boolean),
+          contentMode: 'data-only',
+        };
+      } catch (fallbackError) {
+        trace.error = describeFetchError(fallbackError).slice(0, 600);
+      }
+    }
     trace.finishedAt = new Date().toISOString();
     if (e instanceof AnalysisNeedsInputError) {
       trace.needsInput = e.details;
@@ -298,6 +343,11 @@ export async function runWriter({
     try { fs.rmSync(articlePath, { force: true }); } catch {}
     return { ok: false, articlePath, researchTracePath, exitCode: 1, stderr: describeFetchError(e).slice(0, 600) };
   }
+}
+
+function openingDigestFallbackArticle(asOf) {
+  const date = easternDateKey(asOf);
+  return `---\ntitle: Zen Opening Digest\nsubject: Zen Opening Digest · ${date}\npreheader: Market signals and available opening data.\nedition: ${date}\n---\nEditorial update unavailable for this edition.\n`;
 }
 
 async function runAnalysisV2({
@@ -367,7 +417,7 @@ async function runAnalysisV2({
     );
   }
 
-  const sources = await searchExaV2({
+  const searchedSources = await searchExaV2({
     taskContract,
     searchPlan,
     workflow,
@@ -379,6 +429,7 @@ async function runAnalysisV2({
     recentWindowDays,
     asOf: new Date(),
   });
+  const sources = mergeInjectedSources(taskContext.qdiiSources, searchedSources);
   throwIfTaskCancelled(signal);
   if (!sources.length) {
     throw new Error(
@@ -549,6 +600,18 @@ async function runAnalysisV2({
     warnings: audit.warnings,
     contentPolicy: taskContract.content_policy,
   };
+}
+
+function mergeInjectedSources(injected, searched) {
+  const output = [];
+  const seen = new Set();
+  for (const source of [...(Array.isArray(injected) ? injected : []), ...(Array.isArray(searched) ? searched : [])]) {
+    const key = String(source?.url || source?.id || `${source?.title}\u0000${source?.text}`).trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(source);
+  }
+  return output;
 }
 
 async function searchExaV2({
@@ -1806,6 +1869,173 @@ function citationValidationSummary(article, research, policy) {
     passed: !policy.requireCitations
       || matched.length >= (policy.minReferences || 0),
   };
+}
+
+const OPENING_SEVERE_CATEGORIES = new Set([
+  'core_fact_contradiction', 'fabricated_number_or_date', 'wrong_link',
+]);
+
+async function reviewAndRepairOpeningDigest({ article, input, research, workflow, writer, fetchFn }) {
+  const allowed = research.filter((source) => source?.url).map((source) => ({
+    title: source.title || '',
+    url: source.url,
+    publishedDate: source.publishedDate || '',
+    excerpt: [source.summary, source.text, ...(source.highlights || [])].filter(Boolean).join('\n').slice(0, 3200),
+  }));
+  const auditPrompt = `Audit this Zen Opening Digest only against the supplied sources. Report ordinary weaknesses, but reserve a severe issue for a high-confidence error that changes a core conclusion and has specific source evidence. Severe categories are only core_fact_contradiction, fabricated_number_or_date, and wrong_link. Do not treat structure, catalyst count, freshness, duplicate links, missing publication dates, style, or weak sourcing as severe.\n\nReturn strict JSON:\n{"issues":[{"category":"...","confidence":"high|medium|low","core":true|false,"claim":"exact problematic text","evidence":"specific source evidence","source_url":"allowed source URL","message":"short explanation"}],"revised_markdown":"complete repaired Markdown when severe issues exist, otherwise empty"}\n\nTask:${input}\n\nAllowed sources:${JSON.stringify(allowed)}\n\nDraft:\n${article}`;
+  let initial;
+  try {
+    initial = await completeReviewJson({
+      prompt: auditPrompt,
+      model: writer.reviewModel || writer.model,
+      writer: { ...writer, temperature: 0 },
+      fetchFn,
+      timeoutMs: workflow.timeoutMs,
+      systemPrompt: 'You are a financial fact auditor. Use only supplied evidence and return valid JSON.',
+    });
+  } catch (error) {
+    return {
+      article,
+      review: { approved: true, policy: 'severe-only', skipped: true, diagnostic: error.message },
+    };
+  }
+
+  let issues = normalizeOpeningReviewIssues(initial.issues);
+  let severe = severeOpeningIssues(issues, allowed);
+  if (!severe.length) {
+    return { article, review: { approved: true, policy: 'severe-only', issues, severeIssues: [] } };
+  }
+
+  const initialIssues = issues;
+  const initialSevere = severe;
+  let current = normalizeArticle(initial.revised_markdown || '');
+  const verificationHistory = [];
+  const hardFailure = (errorOrMessage) => {
+    const error = errorOrMessage?.openingDigestHardFailure
+      ? errorOrMessage
+      : openingDigestHardError(String(errorOrMessage?.message || errorOrMessage));
+    error.openingDigestFactReview = {
+      approved: false,
+      policy: 'severe-only',
+      issues: initialIssues,
+      severeIssues: initialSevere,
+      repaired: current !== article,
+      verificationHistory,
+      unresolvedSevereIssues: severe,
+    };
+    return error;
+  };
+  for (let round = 0; round < 2; round++) {
+    if (!hasTitleFrontmatter(current)) {
+      try {
+        current = await repairOpeningDigestSevereIssues({
+          article: round === 0 ? article : current,
+          severe,
+          allowed,
+          workflow,
+          writer,
+          fetchFn,
+        });
+      } catch (error) {
+        throw hardFailure(error);
+      }
+    }
+    if (!hasTitleFrontmatter(current)) {
+      throw hardFailure('严重事实修复稿缺少 title frontmatter');
+    }
+    let verification;
+    try {
+      verification = await completeReviewJson({
+        prompt: `Verify whether every previously severe issue is fixed. Only report an issue as severe when it remains high-confidence, affects a core conclusion, quotes the problematic claim, and cites specific evidence from an allowed source. Return strict JSON {"issues":[{"category":"core_fact_contradiction|fabricated_number_or_date|wrong_link","confidence":"high|medium|low","core":true|false,"claim":"...","evidence":"...","source_url":"...","message":"..."}]}.\n\nPrevious severe issues:${JSON.stringify(severe)}\n\nAllowed sources:${JSON.stringify(allowed)}\n\nRevised draft:\n${current}`,
+        model: writer.reviewModel || writer.model,
+        writer: { ...writer, temperature: 0 },
+        fetchFn,
+        timeoutMs: workflow.timeoutMs,
+        systemPrompt: 'You are a financial fact verifier. Use only supplied evidence and return valid JSON.',
+      });
+    } catch (error) {
+      throw hardFailure(`已发现严重事实问题，但修复复核失败:${error.message}`);
+    }
+    issues = normalizeOpeningReviewIssues(verification.issues);
+    severe = severeOpeningIssues(issues, allowed);
+    verificationHistory.push({ round: round + 1, issues, severeIssues: severe });
+    if (!severe.length) {
+      return {
+        article: current,
+        review: {
+          approved: true,
+          policy: 'severe-only',
+          issues: initialIssues,
+          severeIssues: initialSevere,
+          repaired: true,
+          verificationHistory,
+        },
+      };
+    }
+    if (round === 0) {
+      try {
+        current = await repairOpeningDigestSevereIssues({
+          article: current,
+          severe,
+          allowed,
+          workflow,
+          writer,
+          fetchFn,
+        });
+      } catch (error) {
+        throw hardFailure(error);
+      }
+    }
+  }
+  throw hardFailure(`Opening Digest 严重事实问题修复后仍未通过:${severe.map((issue) => issue.message || issue.claim).join('; ')}`);
+}
+
+async function repairOpeningDigestSevereIssues({ article, severe, allowed, workflow, writer, fetchFn }) {
+  let repair;
+  try {
+    repair = await completeReviewJson({
+      prompt: `Repair only the listed severe issues. Do not change unrelated structure or viewpoints and do not add facts. Return strict JSON {"revised_markdown":"complete Markdown with the original frontmatter"}.\n\nSevere issues:${JSON.stringify(severe)}\n\nAllowed sources:${JSON.stringify(allowed)}\n\nDraft:\n${article}`,
+      model: writer.reviewModel || writer.model,
+      writer: { ...writer, temperature: 0 },
+      fetchFn,
+      timeoutMs: workflow.timeoutMs,
+      systemPrompt: 'You are a financial fact repair editor. Use only supplied evidence and return valid JSON.',
+    });
+  } catch (error) {
+    throw openingDigestHardError(`已发现严重事实问题，但自动修复失败:${error.message}`);
+  }
+  return normalizeArticle(repair.revised_markdown || '');
+}
+
+function normalizeOpeningReviewIssues(value) {
+  return (Array.isArray(value) ? value : []).map((issue) => typeof issue === 'object' && issue
+    ? {
+        category: String(issue.category || '').trim().toLowerCase(),
+        confidence: String(issue.confidence || '').trim().toLowerCase(),
+        core: issue.core === true,
+        claim: String(issue.claim || '').trim(),
+        evidence: String(issue.evidence || '').trim(),
+        sourceUrl: String(issue.source_url || issue.sourceUrl || '').trim(),
+        message: String(issue.message || '').trim(),
+      }
+    : { category: '', confidence: '', core: false, claim: '', evidence: '', sourceUrl: '', message: String(issue || '') });
+}
+
+function severeOpeningIssues(issues, allowed) {
+  const allowedUrls = new Set(allowed.map((source) => referenceUrlKey(source.url)));
+  return issues.filter((issue) => OPENING_SEVERE_CATEGORIES.has(issue.category)
+    && issue.confidence === 'high'
+    && issue.core === true
+    && issue.claim.length >= 4
+    && issue.evidence.length >= 4
+    && allowedUrls.has(referenceUrlKey(issue.sourceUrl)));
+}
+
+function openingDigestHardError(message) {
+  const error = new Error(message);
+  error.stage = 'gate';
+  error.openingDigestHardFailure = true;
+  return error;
 }
 
 async function reviewAndRepairArticle({ article, input, research, workflow, writer, fetchFn, sourcePolicy }) {

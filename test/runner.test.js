@@ -149,6 +149,38 @@ test('成功:Exa 调研 + OpenRouter 写作后写出带 title frontmatter 的 ar
   assert.match(calls[1].body.messages[1].content, /写作任务:英伟达业绩/);
 });
 
+test('工作流确定性内容门禁在 article.md 落盘前执行并可 fail closed', async () => {
+  let validationCalls = 0;
+  const workflow = tempWorkflow({
+    mode: 'newsletter',
+    validateArticle: ({ article, research, asOf }) => {
+      validationCalls += 1;
+      assert.match(article, /待拦截正文/);
+      assert.equal(research.length, 1);
+      assert.ok(asOf instanceof Date);
+      const error = new Error('专用内容门禁未通过');
+      error.stage = 'gate';
+      throw error;
+    },
+  });
+  const fetchFn = async (url) => String(url).endsWith('/search')
+    ? jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/source', text: 'Evidence' }] })
+    : jsonResponse({ choices: [{ message: { content: '---\ntitle: Test\n---\n待拦截正文' } }] });
+  const result = await runWriter({
+    workflow,
+    input: 'test gate',
+    config: { writer: {
+      openrouterApiKey: 'or-key', model: 'model', baseUrl: 'https://openrouter.test/api/v1',
+      exaApiKey: 'exa-key', exaBaseUrl: 'https://exa.test',
+    } },
+    fetchFn,
+  });
+  assert.equal(validationCalls, 1);
+  assert.equal(result.ok, false);
+  assert.match(result.stderr, /专用内容门禁未通过/);
+  assert.equal(fs.existsSync(path.join(workflow.workDir, 'article.md')), false);
+});
+
 test('V1 应急链路为四个中文原创工作流注入确定性编辑方法并记录 trace', async () => {
   const workflow = tempWorkflow({
     id: 'wechat',
@@ -450,6 +482,127 @@ function baseConfig() {
 function completionResponse() {
   return jsonResponse({ choices: [{ message: { content: '---\ntitle: 标题\n---\n正文。' } }] });
 }
+
+function openingWorkflow(overrides = {}) {
+  return tempWorkflow({
+    id: 'opening-digest',
+    mode: 'newsletter',
+    model: 'm',
+    factReview: true,
+    factReviewPolicy: 'severe-only',
+    sourcePolicy: { requireCitations: true, officialFirst: false, minOfficialSources: 0 },
+    validateArticle: () => ({ warnings: [], stats: {} }),
+    ...overrides,
+  });
+}
+
+test('Opening Digest 零研究结果时写出确定性数据版并记录 trace', async () => {
+  const workflow = openingWorkflow();
+  const result = await runWriter({
+    workflow,
+    input: 'opening',
+    config: baseConfig(),
+    fetchFn: async (url) => {
+      if (String(url).endsWith('/search')) return jsonResponse({ results: [] });
+      throw new Error(`unexpected ${url}`);
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.contentMode, 'data-only');
+  assert.match(fs.readFileSync(result.articlePath, 'utf8'), /Editorial update unavailable for this edition/);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.contentMode, 'data-only');
+  assert.match(trace.fallbackReason, /未检索到可用研究来源/);
+});
+
+test('Opening Digest OpenRouter 失败时降级为数据版而不返回 generate 失败', async () => {
+  const workflow = openingWorkflow();
+  const result = await runWriter({
+    workflow,
+    input: 'opening',
+    config: baseConfig(),
+    fetchFn: async (url) => String(url).endsWith('/search')
+      ? jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/a', text: 'Supported market fact.' }] })
+      : jsonResponse({ error: 'down' }, { ok: false, status: 503, statusText: 'Unavailable' }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.contentMode, 'data-only');
+  assert.match(fs.readFileSync(result.articlePath, 'utf8'), /title: Zen Opening Digest/);
+});
+
+test('Opening Digest 普通审查问题只记录 trace，不修改或阻断稿件', async () => {
+  const workflow = openingWorkflow();
+  const draft = '---\ntitle: Zen Opening Digest\n---\n## Today\nOne item.';
+  let completion = 0;
+  const result = await runWriter({
+    workflow,
+    input: 'opening',
+    config: baseConfig(),
+    fetchFn: async (url) => {
+      if (String(url).endsWith('/search')) return jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/a', text: 'Supported market fact.' }] });
+      completion += 1;
+      return completion === 1
+        ? jsonResponse({ choices: [{ message: { content: draft } }] })
+        : jsonResponse({ choices: [{ message: { content: JSON.stringify({ issues: [{ category: 'freshness', confidence: 'high', core: false, message: 'old source' }], revised_markdown: '' }) } }] });
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.contentMode, 'editorial');
+  assert.equal(fs.readFileSync(result.articlePath, 'utf8'), draft);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.factReview.policy, 'severe-only');
+  assert.equal(trace.factReview.severeIssues.length, 0);
+});
+
+test('Opening Digest 严重事实问题修复并复核通过后可继续', async () => {
+  const workflow = openingWorkflow();
+  const bad = '---\ntitle: Zen Opening Digest\n---\nRevenue was 900 billion.';
+  const fixed = '---\ntitle: Zen Opening Digest\n---\nRevenue was 90 billion.';
+  const severe = { category: 'fabricated_number_or_date', confidence: 'high', core: true, claim: 'Revenue was 900 billion.', evidence: 'Source reports revenue of 90 billion.', source_url: 'https://example.com/a', message: 'wrong revenue' };
+  let completion = 0;
+  const result = await runWriter({
+    workflow,
+    input: 'opening',
+    config: baseConfig(),
+    fetchFn: async (url) => {
+      if (String(url).endsWith('/search')) return jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/a', text: 'Source reports revenue of 90 billion.' }] });
+      completion += 1;
+      if (completion === 1) return jsonResponse({ choices: [{ message: { content: bad } }] });
+      if (completion === 2) return jsonResponse({ choices: [{ message: { content: JSON.stringify({ issues: [severe], revised_markdown: fixed }) } }] });
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({ issues: [] }) } }] });
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(fs.readFileSync(result.articlePath, 'utf8'), fixed);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.factReview.repaired, true);
+});
+
+test('Opening Digest 严重事实问题两轮修复仍失败时硬停，不降级为数据版', async () => {
+  const workflow = openingWorkflow();
+  const bad = '---\ntitle: Zen Opening Digest\n---\nRevenue was 900 billion.';
+  const severe = { category: 'fabricated_number_or_date', confidence: 'high', core: true, claim: 'Revenue was 900 billion.', evidence: 'Source reports revenue of 90 billion.', source_url: 'https://example.com/a', message: 'wrong revenue' };
+  let completion = 0;
+  const result = await runWriter({
+    workflow,
+    input: 'opening',
+    config: baseConfig(),
+    fetchFn: async (url) => {
+      if (String(url).endsWith('/search')) return jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/a', text: 'Source reports revenue of 90 billion.' }] });
+      completion += 1;
+      if (completion === 1) return jsonResponse({ choices: [{ message: { content: bad } }] });
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({ issues: [severe], revised_markdown: bad }) } }] });
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.stderr, /严重事实问题/);
+  assert.equal(fs.existsSync(result.articlePath), false);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.factReview.approved, false);
+  assert.equal(trace.factReview.policy, 'severe-only');
+  assert.equal(trace.factReview.verificationHistory.length, 2);
+  assert.equal(trace.factReview.unresolvedSevereIssues.length, 1);
+});
 
 test('双路调研:优先路带 includeDomains,开放路不带,结果按优先在前合并去重', async () => {
   const workflow = tempWorkflow({ research: { prioritySources: ['trendforce.com'] } });

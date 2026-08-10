@@ -9,7 +9,7 @@ export function injectFixedImages(markdown, { headerPath, footerPath, existsFn =
   let out = markdown;
 
   if (headerPath) {
-    if (!existsFn(headerPath)) {
+    if (!pathExists(headerPath, existsFn)) {
       skipped.push(headerPath);
     } else if (!out.includes(headerPath)) {
       const headerLine = `![Zen Trading](${headerPath})`;
@@ -25,7 +25,7 @@ export function injectFixedImages(markdown, { headerPath, footerPath, existsFn =
   }
 
   if (footerPath) {
-    if (!existsFn(footerPath)) {
+    if (!pathExists(footerPath, existsFn)) {
       skipped.push(footerPath);
     } else if (!out.includes(footerPath)) {
       const footerLine = `![Zen Trading 社群](${footerPath})`;
@@ -34,4 +34,15 @@ export function injectFixedImages(markdown, { headerPath, footerPath, existsFn =
   }
 
   return { markdown: out, skipped };
+}
+
+function pathExists(value, existsFn) {
+  if (existsFn(value)) return true;
+  // URL.pathname encodes non-ASCII characters. Keep the original text in
+  // Markdown, but probe the decoded filesystem form for local fixtures and
+  // real paths copied from file URLs.
+  try {
+    const decoded = decodeURIComponent(value);
+    return decoded !== value && existsFn(decoded);
+  } catch { return false; }
 }

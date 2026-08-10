@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeChannel } from '../src/channels/customerio-draft.js';
 import {
+  NEWSLETTER_COMPANY_ADDRESS,
   NEWSLETTER_TEMPLATE_ID,
   parseNewsletterArticle,
   renderNewsletterEmail,
@@ -31,7 +32,6 @@ function config(overrides = {}) {
       allowFullAudience: false,
       newsletterSegmentId: 17,
       from: 'Zen Trading <support@zentradings.com>',
-      companyAddress: '123 Market Street, San Francisco, CA',
       siteUrl: 'https://zentradings.com',
       feedbackUrl: 'https://example.com/feedback',
       ...overrides,
@@ -45,6 +45,9 @@ test('newsletter article:规范化 Vol. 版号并渲染品牌/退订/反馈结�
   const html = renderNewsletterEmail(parsed, config().customerio);
   assert.match(html, new RegExp(`data-zen-draft-template="${NEWSLETTER_TEMPLATE_ID}"`));
   assert.match(html, /ZEN RESEARCH FROM ZEN TRADING/);
+  assert.equal(NEWSLETTER_COMPANY_ADDRESS, '700 Leahy St, Redwood City, CA 94061');
+  assert.match(html, /Zen Trading · 700 Leahy St, Redwood City, CA 94061/);
+  assert.doesNotMatch(renderNewsletterEmail(parsed, { companyAddress: 'Old address' }), /Old address/);
   assert.match(html, /HBM supply is the bottleneck/);
   assert.match(html, /\{% unsubscribe_url %\}/);
   assert.doesNotMatch(html, /\{\{ unsubscribe_url \}\}/);
@@ -152,7 +155,7 @@ test('Customer.io channel:未验证发件域名时返回可操作提示且不切
   assert.equal(requests[1].payload.from, 'Zen Trading <support@zentradings.com>');
 });
 
-test('Customer.io channel:缺 segment 或公司地址时在网络请求前拦截', async () => {
+test('Customer.io channel:缺 segment 时在网络请求前拦截', async () => {
   let calls = 0;
   const channel = makeChannel({ readArticle: async () => ARTICLE, fetchFn: async () => { calls++; } });
   await assert.rejects(
@@ -161,10 +164,6 @@ test('Customer.io channel:缺 segment 或公司地址时在网络请求前拦截
       audienceSegmentIds: { internal: undefined, pilot: 18, full: 6 },
     }) }),
     /CUSTOMERIO_INTERNAL_SEGMENT_ID/,
-  );
-  await assert.rejects(
-    channel.publish({ articlePath: '/tmp/article.md', config: config({ companyAddress: '' }) }),
-    /CUSTOMERIO_COMPANY_ADDRESS/,
   );
   assert.equal(calls, 0);
 });
@@ -221,7 +220,7 @@ test('Customer.io channel:Pilot/full 不能回退到旧的单一 segment ID', as
 
 test('Newsletter 查询参数链接不会被双重转义', () => {
   const article = parseNewsletterArticle('---\ntitle: T\n---\n[Link](https://example.com/a?x=1&y=2)');
-  const html = renderNewsletterEmail(article, { companyAddress: 'A' });
+  const html = renderNewsletterEmail(article);
   assert.match(html, /href="https:\/\/example\.com\/a\?x=1&amp;y=2"/);
   assert.doesNotMatch(html, /amp;amp/);
 });

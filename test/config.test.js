@@ -32,6 +32,11 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal(c.analysis.pipelineVersion, 'v2');
   assert.equal(c.analysis.searchMaxQueries, 8);
   assert.equal(c.analysis.recentWindowDays, 60);
+  assert.equal(c.qdii.enabled, false);
+  assert.equal(c.qdii.maxFundsSlack, 20);
+  assert.equal(c.qdii.maxFundsDraft, 8);
+  assert.equal(c.qdii.staleMaxDays, 366);
+  assert.match(c.qdii.workerPath, /python\/qdii_worker\.py$/);
   assert.equal(c.documents.googleDocsAccessToken, '');
   assert.equal(c.documents.googleDocsRefreshToken, '');
   assert.equal(c.documents.githubToken, '');

@@ -12,11 +12,16 @@ CREATE TABLE IF NOT EXISTS runs (
   stage TEXT,
   title TEXT,
   media_id TEXT,
+  remote_id TEXT,
+  output_kind TEXT,
+  slack_response_ts TEXT,
   error TEXT,
   notify_json TEXT,
   created_at INTEGER NOT NULL,
   started_at INTEGER,
-  finished_at INTEGER
+  finished_at INTEGER,
+  next_retry_at INTEGER,
+  last_reminded_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
 CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at);
@@ -49,6 +54,11 @@ export function openStore(dbPath) {
   db.exec(SCHEMA);
   ensureColumn(db, 'slack_threads', 'prompt_revision', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn(db, 'slack_threads', 'clarification_json', 'TEXT');
+  ensureColumn(db, 'runs', 'next_retry_at', 'INTEGER');
+  ensureColumn(db, 'runs', 'last_reminded_at', 'INTEGER');
+  ensureColumn(db, 'runs', 'remote_id', 'TEXT');
+  ensureColumn(db, 'runs', 'output_kind', 'TEXT');
+  ensureColumn(db, 'runs', 'slack_response_ts', 'TEXT');
   return {
     createRun({ id, workflowId, source, input, notify }) {
       db.prepare(
@@ -59,7 +69,8 @@ export function openStore(dbPath) {
     setStatus(id, status, patch = {}) {
       const cols = { status, stage: patch.stage, title: patch.title,
         media_id: patch.mediaId, error: patch.error,
-        started_at: patch.startedAt, finished_at: patch.finishedAt };
+        started_at: patch.startedAt, finished_at: patch.finishedAt,
+        next_retry_at: patch.nextRetryAt, last_reminded_at: patch.lastRemindedAt };
       const sets = [], vals = [];
       for (const [k, v] of Object.entries(cols)) {
         if (v !== undefined) { sets.push(`${k} = ?`); vals.push(v); }
@@ -72,6 +83,15 @@ export function openStore(dbPath) {
       // 早写:发布成功后立刻落库 media_id(不等整条 run 收尾),供重试/重启幂等判断
       db.prepare(`UPDATE runs SET media_id = ?, title = COALESCE(?, title) WHERE id = ?`)
         .run(mediaId, title ?? null, id);
+    },
+    setRemoteId(id, remoteId) {
+      db.prepare('UPDATE runs SET remote_id = ? WHERE id = ?').run(remoteId, id);
+    },
+    setOutputKind(id, outputKind) {
+      db.prepare('UPDATE runs SET output_kind = ? WHERE id = ?').run(outputKind || null, id);
+    },
+    setSlackResponseTs(id, responseTs) {
+      db.prepare('UPDATE runs SET slack_response_ts = ? WHERE id = ?').run(responseTs || null, id);
     },
     listByStatus(status) { return db.prepare('SELECT * FROM runs WHERE status = ? ORDER BY created_at').all(status); },
     getSlackThread(threadKey) {

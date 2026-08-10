@@ -49,7 +49,7 @@ publishing or public-IP gate.
 /var/lib/zen-content-hub/      SQLite database and per-run artifacts
 ```
 
-Install Node.js 22+, Chrome/Chromium, Poppler, and a Simplified Chinese font
+Install Node.js 22+, Python 3.11+ with `venv`, Chrome/Chromium, Poppler, and a Simplified Chinese font
 package such as Ubuntu's `fonts-noto-cjk`. Without the CJK font, headless Chrome
 renders Chinese cover titles as empty boxes. The cover generator is versioned
 in `tools/cover-generator`; run `npm ci` in `/opt/zen-content-hub` and set these
@@ -60,6 +60,10 @@ host):
 WORK_DIR=/var/lib/zen-content-hub/work
 DB_PATH=/var/lib/zen-content-hub/runs.db
 TRANSLATION_BROWSER_EXECUTABLE=/usr/bin/google-chrome
+# Opening Digest reuses the same Chrome binary. OIC storage state must live
+# outside immutable releases and be readable by zenbot (root:zenbot, 0640).
+OPENING_DIGEST_BROWSER_EXECUTABLE=/usr/bin/google-chrome
+OIC_STORAGE_STATE_PATH=/etc/zen-content-hub/oic-storage-state.json
 DATALAB_API_KEY=replace-with-datalab-api-key
 DATALAB_MODE=balanced
 CRON_TIMEZONE=America/Los_Angeles
@@ -67,6 +71,9 @@ HEALTH_HOST=127.0.0.1
 HEALTH_PORT=8080
 MAX_CONCURRENCY=1
 MAX_QUEUE_SIZE=100
+QDII_ENABLED=true
+QDII_PYTHON_PATH=.venv/bin/python
+QDII_WORKER_PATH=/opt/zen-content-hub/python/qdii_worker.py
 OPENROUTER_MODEL=qwen/qwen3.8-max
 OPENROUTER_ROUTER_MODEL=z-ai/glm-5.2
 OPENROUTER_PLANNER_MODEL=moonshotai/kimi-k3
@@ -92,6 +99,13 @@ SLACK_EDIT_DEBOUNCE_MS=5000
 SLACK_ALLOWED_USER_IDS=U0123456789
 SLACK_ALLOWED_CHANNEL_IDS=C0123456789
 ```
+
+The immutable deploy command creates a release-local `.venv`, installs
+`python/requirements-qdii.lock`, and runs the worker self-test before the normal
+Node checks. The host must provide `python3`, `python3-venv`, Poppler, and the
+native libraries required by OpenCV/Camelot. The Python worker only accepts
+validated six-digit fund codes or local PDFs already downloaded through the
+Node safety gate; it never accepts arbitrary URLs.
 
 The Slack app's Bot Token Scopes must include `files:read` before it can
 download private PDF or text attachments from `files.slack.com`. After adding
@@ -125,6 +139,72 @@ The application does not enforce a public-IP allowlist and does not reject
 proxy environment variables. Outbound routing follows the host and Node.js
 runtime configuration. The health endpoint exposes queue counts only and
 should remain on loopback or behind an authenticated monitoring agent.
+
+## Opening Digest OIC browser state
+
+The Opening Digest reads the OIC Trending Options Volume table through an
+authorized browser session. The current public iVolatility embed does not
+require an account login, so a protected empty Playwright storage-state file is
+sufficient. Keep it owned by `root:zenbot` with mode `0640`.
+
+The production flow extracts the iframe table as structured DOM data and uses a
+same-session screenshot only as a consistency checkpoint; the screenshot is
+discarded and never uploaded to Customer.io. The newsletter contains a
+responsive HTML table. Any OIC authorization, session, browser, page, or data
+validation failure omits the entire options section and records the diagnostic
+in the run trace; it does not pause or block the newsletter. During the test
+phase the code still fails closed when a successfully-read configured segment
+name is not `test2`.
+
+If the provider later requires login, do not put an OIC password in the
+environment. Install the optional GUI helpers only on the Droplet, bind them to
+loopback, and use an SSH tunnel from an operator workstation:
+
+```bash
+sudo apt-get install -y xvfb x11vnc novnc
+sudo -u zenbot Xvfb :99 -screen 0 1440x1200x24 &
+sudo -u zenbot x11vnc -display :99 -localhost -nopw &
+ssh -L 5900:127.0.0.1:5900 your-user@your-droplet
+```
+
+Open `vnc://127.0.0.1:5900` locally, then run this in a second SSH session with
+`DISPLAY=:99` and the protected service environment. Complete OIC login/MFA in
+the temporary browser and press Enter only after the full table is visible:
+
+```bash
+sudo systemd-run --wait --pipe --collect --uid=zenbot \
+  --property=EnvironmentFile=/etc/zen-content-hub/zen-content-hub.env \
+  --setenv=DISPLAY=:99 \
+  /usr/bin/node /opt/zen-content-hub/scripts/auth-oic-session.mjs
+```
+
+Set `/etc/zen-content-hub/oic-storage-state.json` to `root:zenbot` and `0640`,
+then stop Xvfb/x11vnc. Never expose VNC/noVNC on a public interface.
+
+## Opening Digest release acceptance
+
+After an Opening Digest release is active, require `/ready` to show an idle
+queue before running the acceptance command. It starts no Slack socket-mode
+consumer and uses an isolated run directory, but exercises live research,
+market metrics, optional OIC/cover rendering, and Customer.io:
+
+```bash
+sudo systemd-run --wait --pipe --collect \
+  --unit=zen-content-hub-opening-acceptance \
+  --uid=zenbot \
+  --property=WorkingDirectory=/opt/zen-content-hub \
+  --property=EnvironmentFile=/etc/zen-content-hub/zen-content-hub.env \
+  /usr/bin/npm run acceptance:opening-digest
+```
+
+The command immediately sends one clearly named `[TEST]` newsletter to the
+configured `test2` segment, then ensures the formal newsletter for the current
+ET date exists and is scheduled for 10:30 ET or sent immediately when late. An
+existing matching formal newsletter is reused and never duplicated. The final
+JSON line reports the deployed commit, content mode, source count, both
+Customer.io IDs, trace path, and any soft diagnostics. Soft diagnostics do not
+produce Slack warnings; a hard gate or execution failure exits non-zero and is
+handled as a release failure.
 
 Create the service account and data/configuration directories. Copy `.env.example`
 to `/etc/zen-content-hub/zen-content-hub.env`, fill it without committing

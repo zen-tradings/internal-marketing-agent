@@ -25,8 +25,6 @@ export function makeChannel({ readArticle = defaultReadArticle, fetchFn = global
       if (senderEmail(cio.from) !== NEWSLETTER_SENDER_EMAIL) {
         throw publishError(`Customer.io 发件邮箱必须统一为 ${NEWSLETTER_SENDER_EMAIL}`);
       }
-      if (!cio.companyAddress) throw publishError('缺少 CUSTOMERIO_COMPANY_ADDRESS');
-
       const baseUrl = String(cio.baseUrl || 'https://api.customer.io').replace(/\/+$/, '');
       const audienceCount = await fetchAudienceCount({
         baseUrl,

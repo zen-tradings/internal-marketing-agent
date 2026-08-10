@@ -1,0 +1,439 @@
+import fs from 'node:fs/promises';
+import {
+  NEWSLETTER_COMPANY_ADDRESS, NEWSLETTER_TEMPLATE_ID, parseNewsletterArticle, renderMarkdown, renderNewsletterEmail,
+} from '../lib/newsletter-email.js';
+import { assertRenderedTemplateMarker } from '../lib/draft-template.js';
+import { uploadCustomerIoAsset } from '../lib/customerio-assets.js';
+import { renderOpeningDigestCover } from '../lib/opening-digest-cover.js';
+import { captureTrendingOptionsTable, validateTrendingOptionsData } from '../lib/options-volume.js';
+import { collectOpeningMetrics, normalizeOpeningMetrics, renderMetricsHtml } from '../lib/opening-digest-metrics.js';
+import { easternDateKey } from '../lib/us-equity-calendar.js';
+import { auditOpeningDigestArticle } from '../lib/opening-digest-content.js';
+
+const SENDER = 'support@zentradings.com';
+const CUSTOMERIO_MIN_SCHEDULE_LEAD_MS = 5 * 60 * 1000;
+
+export function makeChannel({
+  readArticle = (file) => fs.readFile(file, 'utf8'), fetchFn = globalThis.fetch,
+  now = () => new Date(), captureOptions = captureTrendingOptionsTable,
+  renderCover = renderOpeningDigestCover, uploadAsset = uploadCustomerIoAsset,
+  collectMetrics = collectOpeningMetrics,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  return {
+    id: 'customerio-opening-digest',
+    templateId: NEWSLETTER_TEMPLATE_ID,
+    templateLocked: true,
+    async publish({ articlePath, config, workflow, source = 'manual', existingRemoteId = '', onCreated, contentMode = 'editorial', acceptanceId = '' }) {
+      const cio = config.customerio || {};
+      const digest = config.openingDigest || {};
+      assertDigestConfig(cio, digest);
+      const current = now();
+      const dateKey = easternDateKey(current);
+      const diagnostics = [];
+      try {
+        const articleSource = await readArticle(articlePath);
+        const articleAudit = auditOpeningDigestArticle({ article: articleSource, asOf: current });
+        diagnostics.push(...articleAudit.warnings);
+        const parsed = parseNewsletterArticle(articleSource, dateKey);
+        if (parsed.title !== 'Zen Opening Digest' || parsed.edition !== dateKey) {
+          throw publishError(`Opening Digest 标题或 edition 与当前美东日期不一致:${parsed.title} / ${parsed.edition}`);
+        }
+        const sanitized = sanitizeUnsubscribeTags(parsed.body);
+        if (sanitized.removed) diagnostics.push(`Opening Digest 正文已移除 ${sanitized.removed} 个退订 Liquid 标签`);
+        const article = { ...parsed, body: sanitized.body };
+
+        const audience = await audiencePreflightFor({
+          baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, segmentId: digest.segmentId,
+          fetchFn, timeoutMs: cio.timeoutMs, sleep,
+        });
+        diagnostics.push(...audience.diagnostics);
+        if (audience.name && normalizedSegmentName(audience.name) !== 'test2') {
+          throw publishError(`Opening Digest 测试版只能发送到 Customer.io segment test2，当前为 ${audience.name}`);
+        }
+        const acceptance = source === 'acceptance';
+        if (acceptance && !/^[a-z0-9-]{8,80}$/i.test(acceptanceId)) {
+          throw publishError('Opening Digest 验收邮件缺少安全的 acceptance ID');
+        }
+        const name = acceptance
+          ? `[TEST] Zen Opening Digest · ${dateKey} · ${acceptanceId}`
+          : `Zen Opening Digest · ${dateKey}`;
+        let newsletterId = Number(existingRemoteId) || 0;
+        let remote;
+        if (newsletterId) {
+          const remoteData = await customerIoRequestWithRetry({
+            baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, path: `/v1/newsletters/${newsletterId}`,
+            method: 'GET', fetchFn, timeoutMs: cio.timeoutMs, sleep,
+          });
+          remote = remoteData?.newsletter || remoteData;
+          assertExistingNewsletter(remote, {
+            newsletterId, name, segmentId: digest.segmentId, subscriptionTopicId: digest.subscriptionTopicId,
+          });
+        } else {
+          remote = await findExistingNewsletter({ cio, digest, name, fetchFn, sleep, diagnostics });
+          newsletterId = Number(remote?.id) || 0;
+          if (newsletterId) await onCreated?.({ remoteId: String(newsletterId), title: name });
+        }
+        if (remote?.sent_at != null) {
+          return publishResult({ newsletterId, name, digest, audience });
+        }
+
+        let headerImageUrl = '';
+        try {
+          const coverKey = acceptance ? `${dateKey}-${acceptanceId}` : dateKey;
+          const cover = await renderCover({
+            dateLabel: displayDate(dateKey),
+            executablePath: digest.browserExecutablePath,
+            timeoutMs: digest.captureTimeoutMs,
+          });
+          const asset = await uploadAsset({
+            baseUrl: cio.baseUrl,
+            appApiKey: cio.appApiKey,
+            fetchFn,
+            timeoutMs: cio.timeoutMs,
+            parentFolderId: digest.assetFolderId,
+            buffer: cover,
+            filename: `opening-digest-cover-${coverKey}.png`,
+            name: `Zen Opening Digest cover ${coverKey}`,
+          });
+          const candidate = String(asset?.path || '').trim();
+          if (/^https:\/\//i.test(candidate)) headerImageUrl = candidate;
+          else diagnostics.push('Customer.io 未返回 Opening Digest 封面 HTTPS URL，已使用无封面版');
+        } catch (error) {
+          diagnostics.push(`Opening Digest 封面已省略:${error.message}`);
+        }
+
+        const metricResult = await loadOrCollectMetrics({
+          articlePath, dateKey, collectMetrics, fetchFn,
+          timeoutMs: Math.min(cio.timeoutMs, 15000), diagnostics,
+        });
+        diagnostics.push(...metricResult.warnings);
+        let options;
+        try {
+          options = await resolveOptions({ digest, source, current, captureOptions });
+        } catch (error) {
+          diagnostics.push(`Opening Digest 期权区块已省略:${error.message}`);
+        }
+        if (contentMode === 'data-only' && metricResult.availableCount === 0 && !options) {
+          throw publishError('Opening Digest 数据版无可用正文、行情或期权数据，拒绝发送空邮件');
+        }
+
+        const contentHtml = [
+          renderMetricsHtml(metricResult.metrics),
+          renderMarkdown(article.body),
+          options ? renderOptionsHtml(options) : '',
+        ].filter(Boolean).join('\n');
+        const body = renderNewsletterEmail({ ...article, edition: dateKey }, {
+          ...cio, headerImageUrl, contentHtml, includeUnsubscribe: false,
+        });
+        assertRenderedTemplateMarker(body, NEWSLETTER_TEMPLATE_ID);
+        if (!body.includes(`Zen Trading · ${NEWSLETTER_COMPANY_ADDRESS}`)) {
+          throw publishError(`Opening Digest 固定地址缺失:${NEWSLETTER_COMPANY_ADDRESS}`);
+        }
+        if (/\{%\s*unsubscribe_url\s*%\}/i.test(body)) {
+          throw publishError('Opening Digest 本地渲染后仍含退订 Liquid 标签');
+        }
+        const payload = {
+          name,
+          type: 'email',
+          recipients: { and: [{ or: [{ segment: { id: digest.segmentId } }] }] },
+          subject: acceptance
+            ? `[TEST] Zen Opening Digest · ${displayDate(dateKey)} · ${acceptanceId}`
+            : `Zen Opening Digest · ${displayDate(dateKey)}`,
+          preheader_text: article.preheader,
+          body,
+          from: cio.from,
+          subscription_topic_id: digest.subscriptionTopicId,
+        };
+        if (!newsletterId) {
+          try {
+            const newsletter = await customerIoRequestWithRetry({
+              baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, path: '/v1/newsletters',
+              method: 'POST', body: payload, fetchFn, timeoutMs: cio.timeoutMs,
+              sleep, retryCreateOn429: true,
+            });
+            newsletterId = Number(newsletter?.newsletter?.id) || 0;
+          } catch (error) {
+            if (!isAmbiguousCustomerIoFailure(error)) throw error;
+            diagnostics.push(`Customer.io 创建结果不明，已进入远端恢复:${error.message}`);
+          }
+          if (!newsletterId) {
+            const recovered = await recoverExistingNewsletter({ cio, digest, name, fetchFn, sleep, diagnostics });
+            newsletterId = Number(recovered?.id) || 0;
+          }
+          if (!newsletterId) throw publishError('Customer.io 创建 Opening Digest 后无法恢复 newsletter.id');
+          await onCreated?.({ remoteId: String(newsletterId), title: name });
+        }
+
+        const target = openingSendTarget(current, digest.timezone || 'America/New_York');
+        if (source === 'cron' && target.getTime() > current.getTime() + CUSTOMERIO_MIN_SCHEDULE_LEAD_MS) {
+          await customerIoRequestWithRetry({
+            baseUrl: cio.baseUrl, appApiKey: cio.appApiKey,
+            path: `/v1/newsletters/${newsletterId}/schedule`, method: 'POST',
+            body: { scheduled_at: Math.floor(target.getTime() / 1000), timezone: digest.timezone || 'America/New_York', tz_match_enabled: false },
+            fetchFn, timeoutMs: cio.timeoutMs, sleep, idempotent: true,
+          });
+        } else {
+          await sendNewsletterSafely({ cio, newsletterId, fetchFn, sleep, diagnostics });
+        }
+        return publishResult({ newsletterId, name, digest, audience });
+      } finally {
+        await appendOpeningDiagnostics(articlePath, diagnostics, { contentMode });
+      }
+    },
+  };
+}
+
+function assertExistingNewsletter(remote, { newsletterId, name, segmentId, subscriptionTopicId }) {
+  const segments = Array.isArray(remote?.recipient_segment_ids) ? remote.recipient_segment_ids.map(Number) : [];
+  if (Number(remote?.id) !== newsletterId || remote?.name !== name
+    || segments.length !== 1 || segments[0] !== Number(segmentId)
+    || Number(remote?.subscription_topic_id) !== Number(subscriptionTopicId)) {
+    throw publishError('Customer.io 已有 Opening Digest 与当前日期、受众或订阅主题不一致，拒绝复用');
+  }
+}
+
+async function loadOrCollectMetrics({ articlePath, dateKey, collectMetrics, fetchFn, timeoutMs, diagnostics }) {
+  const statePath = `${articlePath}.opening-digest-state.json`;
+  try {
+    const prior = JSON.parse(await fs.readFile(statePath, 'utf8'));
+    if (prior?.dateKey === dateKey && Array.isArray(prior.metrics)) return normalizeOpeningMetrics(prior.metrics);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') diagnostics.push(`Opening Digest 行情缓存读取失败:${error.message}`);
+  }
+  let collected = [];
+  try { collected = await collectMetrics({ fetchFn, timeoutMs }); }
+  catch (error) { diagnostics.push(`Opening Digest 行情采集失败:${error.message}`); }
+  const normalized = normalizeOpeningMetrics(collected);
+  try {
+    await fs.writeFile(statePath, JSON.stringify({ dateKey, metrics: normalized.metrics, capturedAt: new Date().toISOString() }), { mode: 0o600 });
+  } catch (error) {
+    diagnostics.push(`Opening Digest 行情缓存写入失败:${error.message}`);
+  }
+  return normalized;
+}
+
+async function resolveOptions({ digest, source, current, captureOptions }) {
+  const screenshot = await captureOptions({
+    url: digest.optionsUrl, storageStatePath: digest.storageStatePath,
+    executablePath: digest.browserExecutablePath, timeoutMs: digest.captureTimeoutMs,
+    automationAuthorized: digest.automationAuthorized,
+  });
+  const manual = source !== 'cron';
+  return {
+    data: validateTrendingOptionsData(screenshot.data),
+    capturedAt: screenshot.capturedAt || current.toISOString(),
+    kind: manual ? 'Latest available' : 'Opening',
+  };
+}
+
+export function renderOptionsHtml(options) {
+  const heading = '<h2 style="margin:24px 0 10px;font-size:17px;line-height:1.35;font-weight:500;color:#08272b">Trending options volume</h2>';
+  const data = validateTrendingOptionsData(options.data);
+  const captured = formatCapturedAt(options.capturedAt);
+  const rows = data.rows.map((cells, index) => renderOptionRows(cells, index)).join('');
+  return `${heading}<p style="margin:0 0 10px;font-size:11px;line-height:150%;color:#66787a">${escapeHtml(data.asOf)}</p><table role="table" aria-label="OIC Trending Options Volume top twenty" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;border:1px solid #dcd8d5;background:#fffdf8;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif"><caption style="text-align:left;padding:0;font-size:0;line-height:0;height:0;overflow:hidden">OIC Trending Options Volume top twenty</caption>${rows}</table><p style="margin:8px 0 18px;font-size:11px;line-height:155%;color:#66787a">Source: OCC/OIC · ${escapeHtml(data.attribution)} · Data delayed 20 minutes · ${escapeHtml(options.kind || 'Opening')} capture: ${escapeHtml(captured)} · <a href="https://www.optionseducation.org/toolsoptionquotes/trending-options-volume" style="color:#0b6d75">View source</a></p>`;
+}
+
+function renderOptionRows(cells, index) {
+  const [rank, ticker, name, callVolume, putVolume, totalVolume, ivx30, ivxChange] = cells;
+  const background = index % 2 === 0 ? '#f7f4ec' : '#fffdf8';
+  const change = Number(String(ivxChange).replace('%', ''));
+  const changeColor = change < 0 ? '#b42318' : change > 0 ? '#167a45' : '#435c5f';
+  const label = 'display:block;margin:0 0 2px;font-size:9px;line-height:120%;letter-spacing:.04em;font-weight:600;color:#66787a;text-transform:uppercase';
+  const value = 'display:block;font-size:11px;line-height:135%;font-weight:500;color:#173f43;white-space:nowrap';
+  return `<tbody><tr style="background:${background}"><th scope="rowgroup" rowspan="2" width="8%" valign="top" align="center" style="width:8%;padding:10px 4px;border-top:1px solid #dcd8d5;font-size:11px;line-height:135%;font-weight:600;color:#66787a">${escapeHtml(rank)}</th><th scope="row" colspan="2" width="46%" valign="top" align="left" style="width:46%;padding:10px 6px;border-top:1px solid #dcd8d5;font-size:12px;line-height:140%;font-weight:600;color:#08272b">${escapeHtml(ticker)}<span style="display:block;margin-top:2px;font-size:10px;line-height:135%;font-weight:300;color:#435c5f;word-break:break-word">${escapeHtml(name)}</span></th><td colspan="2" width="46%" valign="top" align="right" style="width:46%;padding:10px 6px;border-top:1px solid #dcd8d5"><span style="${label}">Total option volume</span><span style="${value};font-size:12px;color:#08272b">${escapeHtml(totalVolume)}</span></td></tr><tr style="background:${background}"><td width="23%" valign="top" align="left" style="width:23%;padding:7px 3px 10px;border-top:1px solid #e7e3df"><span style="${label}">Call</span><span style="${value}">${escapeHtml(callVolume)}</span></td><td width="23%" valign="top" align="left" style="width:23%;padding:7px 3px 10px;border-top:1px solid #e7e3df"><span style="${label}">Put</span><span style="${value}">${escapeHtml(putVolume)}</span></td><td width="23%" valign="top" align="left" style="width:23%;padding:7px 3px 10px;border-top:1px solid #e7e3df"><span style="${label}">IVX 30</span><span style="${value}">${escapeHtml(ivx30)}</span></td><td width="23%" valign="top" align="left" style="width:23%;padding:7px 3px 10px;border-top:1px solid #e7e3df"><span style="${label}">IVX change %</span><span style="${value};color:${changeColor}">${escapeHtml(ivxChange)}</span></td></tr></tbody>`;
+}
+
+function assertDigestConfig(cio, digest) {
+  if (!digest.enabled) throw publishError('OPENING_DIGEST_ENABLED=true 才能发送');
+  if (!cio.appApiKey || !cio.from) throw publishError('Opening Digest 缺少 Customer.io 发件配置');
+  if (senderEmail(cio.from) !== SENDER) throw publishError(`Customer.io 发件邮箱必须统一为 ${SENDER}`);
+  if (!digest.segmentId || !digest.subscriptionTopicId) throw publishError('缺少 Opening Digest segment 或 subscription topic ID');
+}
+async function audiencePreflightFor({ baseUrl, appApiKey, segmentId, fetchFn, timeoutMs, sleep }) {
+  const diagnostics = [];
+  const [segmentResult, countResult] = await Promise.allSettled([
+    customerIoRequestWithRetry({ baseUrl, appApiKey, path: `/v1/segments/${segmentId}`, method: 'GET', fetchFn, timeoutMs, sleep }),
+    customerIoRequestWithRetry({ baseUrl, appApiKey, path: `/v1/segments/${segmentId}/customer_count`, method: 'GET', fetchFn, timeoutMs, sleep }),
+  ]);
+  const segmentData = segmentResult.status === 'fulfilled' ? segmentResult.value : undefined;
+  const countData = countResult.status === 'fulfilled' ? countResult.value : undefined;
+  if (segmentResult.status === 'rejected') diagnostics.push(`Customer.io segment 名称预检失败:${segmentResult.reason?.message || segmentResult.reason}`);
+  if (countResult.status === 'rejected') diagnostics.push(`Customer.io 受众人数预检失败:${countResult.reason?.message || countResult.reason}`);
+  const segment = segmentData?.segment || segmentData;
+  const name = segment?.name ? String(segment.name) : '';
+  const count = Number.isInteger(countData?.count) ? countData.count : undefined;
+  if (!name && segmentResult.status === 'fulfilled') diagnostics.push('Customer.io segment 预检未返回名称');
+  if (count === undefined && countResult.status === 'fulfilled') diagnostics.push('Customer.io 受众预检返回无效人数');
+  if (count === 0) diagnostics.push('Customer.io test2 受众预检人数为 0');
+  return { name, count, diagnostics };
+}
+
+async function customerIoOnce({ baseUrl = 'https://api.customer.io', appApiKey, path: apiPath, method, body, fetchFn, timeoutMs }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Number(timeoutMs) || 30000);
+  try {
+    let response;
+    try {
+      response = await fetchFn(`${String(baseUrl).replace(/\/+$/, '')}${apiPath}`, { method, headers: { Authorization: `Bearer ${appApiKey}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}), signal: controller.signal });
+    } catch (cause) {
+      throw customerIoError(`Customer.io ${method} ${apiPath} 网络失败:${cause.message || cause}`, { cause, method, apiPath });
+    }
+    const raw = await response.text();
+    let data; try { data = raw ? JSON.parse(raw) : {}; } catch { data = {}; }
+    if (!response.ok) throw customerIoError(`Customer.io 请求失败:${response.status} ${raw.slice(0, 500)}`, {
+      status: response.status,
+      retryAfter: response.headers?.get?.('retry-after') || '',
+      method,
+      apiPath,
+    });
+    return data;
+  } finally { clearTimeout(timer); }
+}
+
+async function customerIoRequestWithRetry(args) {
+  const attempts = 3;
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try { return await customerIoOnce(args); }
+    catch (error) {
+      lastError = error;
+      const retryableStatus = !Number.isInteger(error.status)
+        || [408, 425, 429, 500, 502, 503, 504].includes(error.status);
+      const safe = args.method === 'GET' || args.idempotent === true
+        || (args.retryCreateOn429 === true && error.status === 429);
+      if (!safe || !retryableStatus || attempt === attempts - 1) break;
+      await args.sleep(retryDelay(error, attempt));
+    }
+  }
+  throw lastError;
+}
+
+async function findExistingNewsletter({ cio, digest, name, fetchFn, sleep, diagnostics }) {
+  let start = '';
+  const matches = [];
+  for (let page = 0; page < 5; page++) {
+    const query = new URLSearchParams({ limit: '100', sort: 'desc', ...(start ? { start } : {}) });
+    const data = await customerIoRequestWithRetry({
+      baseUrl: cio.baseUrl, appApiKey: cio.appApiKey,
+      path: `/v1/newsletters?${query}`, method: 'GET', fetchFn, timeoutMs: cio.timeoutMs, sleep,
+    });
+    matches.push(...(Array.isArray(data?.newsletters) ? data.newsletters.filter((item) => item?.name === name) : []));
+    if (matches.length > 1 || !data?.next) break;
+    start = String(data.next);
+  }
+  if (matches.length > 1) throw publishError(`Customer.io 存在 ${matches.length} 个同名 Opening Digest，拒绝自动选择`);
+  if (!matches.length) return undefined;
+  const remote = matches[0];
+  assertExistingNewsletter(remote, {
+    newsletterId: Number(remote.id), name,
+    segmentId: digest.segmentId, subscriptionTopicId: digest.subscriptionTopicId,
+  });
+  diagnostics.push(`Customer.io 已恢复当日 Opening Digest:${remote.id}`);
+  return remote;
+}
+
+async function recoverExistingNewsletter(args) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await args.sleep([250, 750][attempt - 1]);
+    const remote = await findExistingNewsletter(args);
+    if (remote) return remote;
+  }
+  return undefined;
+}
+
+async function sendNewsletterSafely({ cio, newsletterId, fetchFn, sleep, diagnostics }) {
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await customerIoOnce({
+        baseUrl: cio.baseUrl, appApiKey: cio.appApiKey,
+        path: `/v1/newsletters/${newsletterId}/send`, method: 'POST', body: {},
+        fetchFn, timeoutMs: cio.timeoutMs,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (error.status === 429) {
+        await sleep(retryDelay(error, attempt));
+        continue;
+      }
+      if (!isAmbiguousCustomerIoFailure(error) && error.status !== 400) throw error;
+      const data = await customerIoRequestWithRetry({
+        baseUrl: cio.baseUrl, appApiKey: cio.appApiKey,
+        path: `/v1/newsletters/${newsletterId}`, method: 'GET', fetchFn, timeoutMs: cio.timeoutMs, sleep,
+      });
+      const remote = data?.newsletter || data;
+      if (remote?.sent_at != null) {
+        diagnostics.push(`Customer.io 发送结果已通过远端 sent_at 恢复:${newsletterId}`);
+        return;
+      }
+      if (attempt < 2) await sleep([250, 750][attempt]);
+    }
+  }
+  throw lastError || publishError('Customer.io 发送重试耗尽');
+}
+
+function sanitizeUnsubscribeTags(value) {
+  let removed = 0;
+  const body = String(value || '').replace(/\{%\s*unsubscribe_url\s*%\}/gi, () => { removed += 1; return ''; });
+  return { body, removed };
+}
+
+async function appendOpeningDiagnostics(articlePath, diagnostics, metadata = {}) {
+  if (!articlePath || !diagnostics.length) return;
+  const tracePath = `${articlePath.slice(0, articlePath.lastIndexOf('/') + 1)}research-trace.json`;
+  try {
+    let trace = {};
+    try { trace = JSON.parse(await fs.readFile(tracePath, 'utf8')); } catch {}
+    trace.openingDigestDelivery = {
+      ...(trace.openingDigestDelivery || {}),
+      ...metadata,
+      diagnostics: [...new Set([...(trace.openingDigestDelivery?.diagnostics || []), ...diagnostics])],
+      updatedAt: new Date().toISOString(),
+    };
+    await fs.writeFile(tracePath, `${JSON.stringify(trace, null, 2)}\n`, { mode: 0o600 });
+  } catch {}
+}
+
+function publishResult({ newsletterId, name, digest, audience }) {
+  return {
+    mediaId: `customerio-newsletter:${newsletterId}`,
+    title: name,
+    audienceStage: 'test2',
+    audienceSegmentId: digest.segmentId,
+    audienceRecipientCount: audience.count,
+  };
+}
+
+function isAmbiguousCustomerIoFailure(error) {
+  return !Number.isInteger(error?.status) || error.status >= 500 || [408, 425].includes(error.status);
+}
+
+function retryDelay(error, attempt) {
+  const seconds = Number(error?.retryAfter);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 30000);
+  return [250, 750, 1500][Math.min(attempt, 2)];
+}
+
+function customerIoError(message, details = {}) {
+  const error = publishError(message);
+  Object.assign(error, details);
+  return error;
+}
+function openingSendTarget(now, timezone) {
+  const date = easternDateKey(now);
+  const rough = new Date(`${date}T10:30:00Z`);
+  const offset = new Intl.DateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'shortOffset' }).formatToParts(rough).find((part) => part.type === 'timeZoneName')?.value || 'GMT-5';
+  const match = offset.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/);
+  const minutes = match ? (Number(match[2]) * 60 + Number(match[3] || 0)) * (match[1] === '+' ? 1 : -1) : -300;
+  return new Date(rough.getTime() - minutes * 60_000);
+}
+function displayDate(dateKey) { return new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(`${dateKey}T12:00:00Z`)); }
+function formatCapturedAt(value) { try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)); } catch { return String(value || ''); } }
+function normalizedSegmentName(value) { return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ''); }
+function senderEmail(value) { const text = String(value || '').trim(); return String(text.match(/<([^<>]+)>\s*$/)?.[1] || text).trim().toLowerCase(); }
+function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char])); }
+function escapeAttr(value) { return escapeHtml(value); }
+function publishError(message) { const error = new Error(message); error.stage = 'publish'; return error; }

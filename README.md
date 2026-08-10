@@ -1,6 +1,6 @@
 # Zen Content Hub
 
-单实例常驻的双渠道内容编排服务：在 Slack 中用自然语言布置任务，自动路由到微信公众号草稿箱或 Customer.io Newsletter 草稿。支持 macOS 本机开发，也支持在 Linux/DigitalOcean 上由 systemd 7×24 小时管理。
+单实例常驻的内容编排服务：在 Slack 中用自然语言布置任务，自动路由到 QDII 数据线程回复、微信公众号草稿箱或 Customer.io Newsletter 草稿。支持 macOS 本机开发，也支持在 Linux/DigitalOcean 上由 systemd 7×24 小时管理。
 
 ## Pipeline
 
@@ -13,8 +13,8 @@ Slack 私聊自然语言 / 频道 @Bot / PDF/文本附件 / cron
   → 通用任务用 LatePost 方法；macro 由 Global Macro 主导并组合 LatePost 证据纪律
   → Qwen3.8-Max 写作 → GLM 5.2 逐句事实审计 → 系统确定性引用
   → 中央模板门禁 → 微信固定版式 / Customer.io Newsletter 固定模板
-  → 只创建草稿，不发送、不排期
-  → Slack best-effort 回报；通知失败不改变草稿结果
+  → 常规渠道只创建草稿；`opening-digest` 为受控发送/排期例外
+  → QDII 查询以 Slack 回复为核心结果；草稿任务的状态通知仍为 best-effort
 ```
 
 Node.js 负责流程控制；正文模型由 `.env` 的 `OPENROUTER_MODEL` 指定，生产默认 `qwen/qwen3.8-max`。`OPENROUTER_ROUTER_MODEL`、`OPENROUTER_PLANNER_MODEL` 与 `OPENROUTER_REVIEW_MODEL` 分别控制路由、顶层任务规划/证据编排和逐句事实审计；生产由 `moonshotai/kimi-k3` 负责规划与方向把握，Qwen3.8-Max 负责正文，GLM 5.2 负责路由和审计。未单独设置角色模型时会继承正文模型。`OPENROUTER_REASONING_EFFORT` 与各角色的 `*_REASONING_EFFORT` 独立配置：Kimi 规划和 Qwen 正文使用 `high`，GLM 路由与审计使用 `none`。`OPENROUTER_MAX_TOKENS` 控制每次请求中 reasoning 与最终输出共享的预算。仓库内版本化的写作 skill 在运行时加载并注入提示词，不与特定模型绑定。Exa 只负责检索与正文抓取；`alphaxiv.org` 是内置优先检索域名之一，项目不连接 AlphaXiv MCP。
@@ -42,11 +42,16 @@ scripts/
 ├── research-trace.mjs       查看 Exa 查询与命中来源
 ├── check-openrouter.mjs     检查 OpenRouter 配置
 ├── check-egress.mjs         只读检查各外部 API 的网络可达性
+├── check-customerio.mjs     只读检查 Newsletter 受众与远端状态
 ├── check-translation.mjs    生成结构化直译本地验收稿
 ├── requeue-translation.mjs  受限恢复有 checkpoint 的失败直译
 ├── requeue-analysis-gate.mjs 受限恢复旧版代码门禁误拦截的 V2 分析
 ├── check-documents.mjs      只读验收私有 Notion / Google Docs
 ├── google-docs-oauth.mjs    本机生成 Google Docs refresh token
+├── auth-oic-session.mjs     刷新 Opening Digest 的 OIC 浏览器会话
+├── run-opening-digest-acceptance.mjs 运行隔离的 Opening Digest 生产验收
+├── run-macro-acceptance.mjs 运行 macro 本地验收
+├── deploy-digitalocean.mjs  执行 DigitalOcean 预检与不可变部署
 ├── preview-newsletter.mjs   生成 Newsletter 本地 HTML 预览
 └── update-render-golden.mjs 更新渲染基准
 
@@ -59,12 +64,13 @@ deploy/
 
 ## 安装与配置
 
-要求 Node.js 22 或更高版本，并准备 OpenRouter、Slack 和微信公众号凭据。原创分析需要 Exa；直译不依赖 Exa。分析型 PDF 的本地文字提取需要 Poppler 的 `pdfinfo` 与 `pdftotext`，扫描件 OCR 和保留原始结构的 PDF 直译需要 Datalab。Newsletter 还需要 Customer.io App API key。
+要求 Node.js 22 或更高版本，并准备 OpenRouter、Slack 和微信公众号凭据。QDII 查询还需要 Python 3.11+；原创分析需要 Exa，直译不依赖 Exa。分析型 PDF 的本地文字提取需要 Poppler 的 `pdfinfo` 与 `pdftotext`，扫描件 OCR 和保留原始结构的 PDF 直译需要 Datalab。Newsletter 还需要 Customer.io App API key。
 
 Slack App 的 Bot Token Scopes 必须包含 `files:read`，否则消息事件虽然会带 PDF 文件名和私有 URL，下载时仍只会返回 Slack 登录页。新增该权限后必须重新安装 App 到工作区，再更新生产 `SLACK_BOT_TOKEN`。程序会在 PDF 进入 Poppler 或 Datalab 前验证真实文件签名，遇到登录页会直接给出权限提示，不再把 HTML 误报成 PDF 损坏。
 
 ```bash
 npm ci
+npm run setup:qdii
 cp .env.example .env
 ```
 
@@ -135,9 +141,11 @@ npm run trace:research -- company
 
 中文和英文指令使用同一套路由。Slack 中未经截断的原始 Prompt 是微信分析内容要求的最高权威；主题、比较对象、观点、结构、篇幅和禁止项不能被工作流默认框架覆盖。英文只是指令语言，不改变产物默认语言：公众号与直译结果仍为简体中文，Newsletter 保持自身的语言规则。模型能力比较即使写了 `deep dive` 也走通用 Prompt 驱动分析，不触发公司财务、SEC 或价值链查询。链接只表示用户指定的最高优先研究素材，不自动触发直译；只有明确要求翻译才走完整直译。裸链接和未明确类型的任务默认微信公众号分析。
 
+QDII 股票持仓支持 `QDII:`、`Fund:`、`Holdings:`、`基金查询：`，或“六位基金代码 + QDII/fund/holdings/持仓”等自然语言。未指定渠道时直接在原 Slack 线程用英文回复；`微信：`默认生成中文微信草稿，`Newsletter:`/`Email:`/`邮件：`默认生成英文 Customer.io 草稿。用户明确指定语言时覆盖默认值。只有明确同时要求 reply 与 draft 才双输出；常规 Newsletter 仍只建草稿，不发送或排期。
+
 用户链接和 Slack 附件会先全文读取，再默认用最新官方/一手来源和既定优先来源交叉验证；只有原始 Prompt 明确写“仅依据此链接”时才关闭扩展搜索，规划模型不能自行升级成排他性来源约束。Slack 转义后的 URL 会在入队和提取时还原；若 Exa 对单个用户页面返回 crawl error 或空结果，系统会用域名、路径、campaign 语义和任务要求执行一次定向恢复检索，并把逐 URL 状态与恢复结果写入 `research-trace.json`。PDF、Notion、Google Docs 和 GitHub 仓库/文件会直接进入用户一级来源，和普通链接一样不会仅因用户提供就自动被认定为官方事实。Slack 私有文件下载使用 Bot token；分析型 PDF 有 Datalab 时走结构化解析，没有时由 Poppler 提取可搜索文字，扫描件在没有 OCR 服务时明确失败。若用户材料与一手材料各自有明确证据，并且对核心前提形成无法用时间或口径解释的冲突，任务才转为 `needs_input`，Bot 在原线程只问一个明确问题；用户回答后同一冲突不再重复询问。缺资料、型号未验证和事实审计问题不再循环提问；系统按风险、影响、来源和置信度决定局部修复或保留待复核。
 
-在原任务线程或同一频道发送 `@ZenBot 停止当前任务`、`停止进程`、`取消任务`、`stop the current task`、`cancel task` 或 `abort this job`，会停止当前生成任务。排队任务会直接移出队列；运行中任务会中断网络请求、标记为 `cancelled` 并删除自己的 `runs/<run-id>/` 目录，ZenBot 服务本身保持在线。任务一旦进入微信或 Customer.io 草稿创建阶段便不再强杀，避免外部草稿已经创建而本地丢失 `media_id`；Bot 会明确回复该状态。任何路径都只创建草稿，不发送或排期。
+在原任务线程或同一频道发送 `@ZenBot 停止当前任务`、`停止进程`、`取消任务`、`stop the current task`、`cancel task` 或 `abort this job`，会停止当前生成任务。排队任务会直接移出队列；运行中任务会中断网络请求、标记为 `cancelled` 并删除自己的 `runs/<run-id>/` 目录，ZenBot 服务本身保持在线。任务一旦进入微信或 Customer.io 草稿创建阶段便不再强杀，避免外部草稿已经创建而本地丢失 `media_id`；Bot 会明确回复该状态。常规路径只创建草稿，不发送或排期；`opening-digest` 遵循独立的受众与发送门禁。
 
 ## 工作流
 
@@ -151,6 +159,7 @@ npm run trace:research -- company
 | `translate` | `translate:`、`直译：`、`翻译：` | 按用户指定范围忠实翻译第一个链接的结构化内容 |
 | `company` | `company:`、`公司：`、`个股：`、`深度：` | 明确要求公司财务、竞争或价值链时使用；不接管模型产品比较 |
 | `email` | `email:`、`邮件：` | 生成带 Vol. 版号的 newsletter，并在 Customer.io 创建待审核草稿 |
+| `qdii` | `qdii:`、`fund:`、`holdings:`、`基金查询：`、自然语言 | 查询境内公募 QDII 股票持仓并直接回复 Slack；可作为微信/Newsletter Evidence |
 
 这些内部工作流由规则优先、模型兜底的自然语言路由隐藏。`macro` 只有同时命中宏观/跨资产主题与分析意图才会自动进入，覆盖政策、经济数据、利率、汇率、流动性、股票、商品、信用、风险偏好、波动率与数字资产；单公司、财报和行业请求仍由更具体的既有流程优先处理，混合请求只选最终问题对应的一个完整流程。微信分析 V2 先把原始 Prompt 固化为 `TaskContract`，抽取中文实体的英文名、法定名称、ticker 或监管别名，再生成最多 `ANALYSIS_SEARCH_MAX_QUERIES` 个定向查询，默认 8 个。每个任务都确定性包含至少一条中文查询和一条英文查询，优先各两条；中文公司任务还会补英文法定名称的官方与行业查询，公司工作流并行补跑季度财务、监管披露和价值链三路深搜。“最新/newly released/current”类动态查询默认使用最近 `ANALYSIS_RECENT_WINDOW_DAYS` 天，默认 60 天，官方产品页和历史材料不受该硬窗口限制。静态官方域名只用于发现候选来源，来源必须同时匹配发布主体、页面类型和目标实体才能进入一手证据；同一证据层级优先英文来源，以及任何语言的独立第三方报道或研究。政府资助、国家所有和公共广播媒体会在检索结果层剔除，但监管机构、交易所和统计部门的原始文件仍可作为一手证据；用户主动贴出的受限媒体链接只保留为上下文，不能充当交叉验证或最终引用。内置名单可用 `EXA_EXCLUDED_MEDIA_DOMAINS` 和 `EXA_INDEPENDENT_MEDIA_DOMAINS` 扩展。Exa 不支持的 `x.com`/`twitter.com` 域名同样会在请求前剔除，避免整路检索因 4xx 失败。搜索结果按用户来源、官方一手、专业优先源、开放来源、语言/独立性和发布日期排序并设分路配额，再按用户要求逐项形成 `EvidenceMatrix`。
 
@@ -200,7 +209,7 @@ npm run requeue:analysis-gate -- <run-id>
 
 ### 固定模板契约
 
-所有由 Bot 创建的真实草稿都必须沿用中央登记的固定模板。`src/lib/draft-template.js` 是唯一模板注册表：微信公众号草稿固定为 `zen-wechat/zen-trading@4`，Customer.io Newsletter 草稿固定为 `zen-customerio/zen-research@1`。真实渠道未登记模板、模板 ID 不匹配或未声明锁定时，会在调用发布接口前失败；任务文字、工作流和单次运行都不能指定另一套模板。`mock` 只用于 dry-run，不属于真实草稿渠道。
+所有由 Bot 创建的真实草稿都必须沿用中央登记的固定模板。`src/lib/draft-template.js` 是唯一模板注册表：微信公众号草稿固定为 `zen-wechat/zen-trading@4`，Customer.io Newsletter 草稿固定为 `zen-customerio/zen-research@3`。真实渠道未登记模板、模板 ID 不匹配或未声明锁定时，会在调用发布接口前失败；任务文字、工作流和单次运行都不能指定另一套模板。`mock` 只用于 dry-run，不属于真实草稿渠道。
 
 需要改版时，必须集中修改模板实现、升级注册表中的版本号，并同步渠道测试、渲染 golden 与本文档；不能在单个任务里绕过。标题、正文、链接、期号和受众等内容进入模板预留槽位，不改变模板本身。
 
@@ -238,7 +247,7 @@ npm run test:update-golden
 
 ### Customer.io newsletter
 
-Newsletter 工作流使用 Customer.io App API 和固定模板 `zen-customerio/zen-research@1` 创建名为 `Zen Research from Zen Trading · Vol. N` 的 Newsletter Broadcast 草稿，不设置 `send_now` 或 `scheduled_at`。渲染后的 HTML 必须带有该模板标识，否则不会调用 Customer.io。受众通过 `NEWSLETTER_AUDIENCE_STAGE=internal|pilot|full` 分阶段扩容：内部组是 `Newsletter · Internal Beta`（ID `17`），Pilot 组是 `Newsletter · Pilot`（ID `18`），全量候选组是 `Valid Email Address`（ID `6`）。Bot 会先读取 segment 实时人数并执行阶段人数门禁；`full` 还必须显式设置 `CUSTOMERIO_ALLOW_FULL_AUDIENCE=true`。
+Newsletter 工作流使用 Customer.io App API 和固定模板 `zen-customerio/zen-research@3` 创建名为 `Zen Research from Zen Trading · Vol. N` 的 Newsletter Broadcast 草稿，不设置 `send_now` 或 `scheduled_at`。渲染后的 HTML 必须带有该模板标识，否则不会调用 Customer.io。模板页脚的实体地址固定为 `700 Leahy St, Redwood City, CA 94061`，不允许环境变量或单次任务覆盖。受众通过 `NEWSLETTER_AUDIENCE_STAGE=internal|pilot|full` 分阶段扩容：内部组是 `Newsletter · Internal Beta`（ID `17`），Pilot 组是 `Newsletter · Pilot`（ID `18`），全量候选组是 `Valid Email Address`（ID `6`）。Bot 会先读取 segment 实时人数并执行阶段人数门禁；`full` 还必须显式设置 `CUSTOMERIO_ALLOW_FULL_AUDIENCE=true`。
 
 所有后续 Customer.io Newsletter 的可见发件人统一为 `Zen Trading <support@zentradings.com>`。渠道和只读检查脚本都会拒绝其他 From 地址，避免配置漂移。
 

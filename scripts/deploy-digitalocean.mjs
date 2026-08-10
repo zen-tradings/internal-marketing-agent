@@ -178,12 +178,19 @@ sudo tar -xzf "$archive" -C "$stage"
 printf '%s\n' "$sha" | sudo tee "$stage/.deploy-commit" >/dev/null
 sudo chown -R zenbot:zenbot "$stage"
 sudo -u zenbot npm --prefix "$stage" ci
+python3 -c 'import sys; assert sys.version_info >= (3, 11), sys.version'
+sudo -u zenbot python3 -m venv "$stage/.venv"
+sudo -u zenbot "$stage/.venv/bin/python" -m pip install --disable-pip-version-check -r "$stage/python/requirements-qdii.lock"
+sudo -u zenbot env \
+  QDII_PYTHON_PATH="$stage/.venv/bin/python" \
+  QDII_WORKER_PATH="$stage/python/qdii_worker.py" \
+  node "$stage/scripts/check-qdii-python.mjs"
 sudo -u zenbot npm --prefix "$stage" run check
 
-before_backup=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 -type f -name 'runs-*.db' 2>/dev/null | wc -l | tr -d ' ')
+before_backup_manifest=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 -type f -name 'runs-*.db' -printf '%f\n' 2>/dev/null | sort | sha256sum | awk '{ print $1 }')
 sudo systemctl start zen-content-hub-backup.service
-after_backup=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 -type f -name 'runs-*.db' | wc -l | tr -d ' ')
-test "$after_backup" -gt "$before_backup"
+after_backup_manifest=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 -type f -name 'runs-*.db' -printf '%f\n' | sort | sha256sum | awk '{ print $1 }')
+test "$after_backup_manifest" != "$before_backup_manifest"
 
 port=$(sudo awk -F= '$1 == "HEALTH_PORT" { print $2 }' "$env_file" | tail -n 1)
 ready=$(curl -fsS --max-time 5 "http://127.0.0.1:$port/ready")
@@ -219,6 +226,16 @@ update_env OPENROUTER_REASONING_EFFORT "$reasoning"
 update_env OPENROUTER_PLANNER_REASONING_EFFORT "$planner_reasoning"
 update_env OPENROUTER_REVIEW_REASONING_EFFORT none
 update_env OPENROUTER_ROUTER_REASONING_EFFORT none
+update_env QDII_ENABLED true
+update_env QDII_PYTHON_PATH /opt/zen-content-hub/.venv/bin/python
+update_env QDII_WORKER_PATH /opt/zen-content-hub/python/qdii_worker.py
+update_env QDII_WORKER_TIMEOUT_MS 120000
+update_env QDII_MAX_FUNDS_SLACK 20
+update_env QDII_MAX_FUNDS_DRAFT 8
+update_env QDII_STALE_MAX_DAYS 366
+update_env QDII_MAX_REPORT_BYTES 31457280
+update_env QDII_MAX_TASK_DOWNLOAD_BYTES 157286400
+update_env QDII_MAX_REPORT_CANDIDATES 3
 
 switch_started=1
 sudo systemctl stop zen-content-hub
@@ -249,6 +266,10 @@ test "$(sudo awk -F= '$1 == "OPENROUTER_MODEL" { print $2 }' "$env_file" | tail 
 test "$(sudo awk -F= '$1 == "OPENROUTER_REASONING_EFFORT" { print $2 }' "$env_file" | tail -n 1)" = "$reasoning"
 test "$(sudo awk -F= '$1 == "OPENROUTER_PLANNER_MODEL" { print $2 }' "$env_file" | tail -n 1)" = "$planner_model"
 test "$(sudo awk -F= '$1 == "OPENROUTER_PLANNER_REASONING_EFFORT" { print $2 }' "$env_file" | tail -n 1)" = "$planner_reasoning"
+test "$(sudo awk -F= '$1 == "QDII_ENABLED" { print $2 }' "$env_file" | tail -n 1)" = true
+test "$(sudo awk -F= '$1 == "QDII_PYTHON_PATH" { print $2 }' "$env_file" | tail -n 1)" = /opt/zen-content-hub/.venv/bin/python
+test "$(sudo awk -F= '$1 == "QDII_WORKER_PATH" { print $2 }' "$env_file" | tail -n 1)" = /opt/zen-content-hub/python/qdii_worker.py
+test -x /opt/zen-content-hub/.venv/bin/python
 
 trap - ERR
 rm -f "$archive"

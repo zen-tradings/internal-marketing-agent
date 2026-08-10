@@ -85,6 +85,7 @@
 | 中文原创写作方法、稿型与质量检查 | `skills/latepost-ai-writer/` + `src/lib/editorial-skill.js` | EvidenceMatrix 后路由；trace 记录摘要、稿型与角度；不得覆盖用户结构 |
 | 全资产宏观方法、三类稿型与样本索引 | `skills/global-macro-strategy-writer/` + `src/workflows/macro.js` | 宏观主导、LatePost 约束证据；只创建微信草稿，无 cron |
 | 用户附件与直接文档 | `src/core/user-sources.js` | Slack 私有文件、PDF、Notion、Google Docs、GitHub；并行读取并保留一级来源身份；受阻文档的官方镜像必须验证机构、文号和主题 |
+| QDII 股票持仓数据 | `src/core/qdii.js` + `python/qdii_worker.py` | AKShare 合格即用；过期/空数据依次回退证监会、交易所和可验证基金公司，PDF 下载仍走安全网络门禁 |
 | 备用文章结构 | `src/workflows/<id>.js` 的 `defaultMethodology` | 只在用户未规定结构时补空白 |
 | 新增一种文章类型 | 新建 `src/workflows/<name>.js` + `src/index.js` WORKFLOWS 注册 | 照抄 earnings.js 的结构 |
 | 公司深度备用框架 | `src/workflows/company.js` | 只有 Prompt 确实要求公司财务/竞争/价值链时使用 |
@@ -106,7 +107,8 @@
 | 分析模型与预算 | `.env` 的 `OPENROUTER_MODEL` / `OPENROUTER_ROUTER_MODEL` / `OPENROUTER_PLANNER_MODEL` / `OPENROUTER_REVIEW_MODEL` / `ANALYSIS_*` | 正文、路由、规划、审计分离；生产默认 V2 |
 | 草稿固定模板总门禁 | `src/lib/draft-template.js` | 所有真实渠道必须登记模板 ID 并锁定；任务不得覆盖，改版必须升版本和更新测试 |
 | 微信渲染主题 | `zen-wechat/zen-trading@4`、`assets/zen-trading.css` 与 `RENDER_OPTS` | 主题文件随仓库部署；引用块归一为正文字号，最终 HTML 在发布前执行字体、重复来源与固定尾图顺序检查 |
-| Customer.io 邮件草稿 | `src/workflows/email.js` + `src/channels/customerio-draft.js` | 固定 `zen-customerio/zen-research@1`，只创建草稿；受众由 internal/pilot/full 三阶段配置控制 |
+| Customer.io 邮件草稿 | `src/workflows/email.js` + `src/channels/customerio-draft.js` | 固定 `zen-customerio/zen-research@3`，页脚地址固定为 `700 Leahy St, Redwood City, CA 94061`，只创建草稿；受众由 internal/pilot/full 三阶段配置控制 |
+| Opening Digest 开市日报 | `src/workflows/opening-digest.js` + `src/channels/customerio-opening-digest.js` | 美东 10:15 生成、目标 10:30；开盘窗口、标准区块、3-5 条 catalyst 与来源规则均为软审计，只有带具体证据的高置信度核心事实错误在两轮局部修复后仍失败才停发；九格行情固定归一化，OIC 或封面失败可省略。受众预检失败或人数为零只写 trace，明确读到非 `test2` 才停发；正文退订标签本地移除，不再读回 `/contents`，所有可继续的降级均不发 Slack warning |
 | 新发布渠道 | 新建 `src/channels/<name>.js` 实现 publish() + 注册模板和渠道 | 见 README「扩展」一节；未登记模板时 fail closed |
 
 ## 四、日常运维
@@ -129,7 +131,7 @@ scripts/install-launchd.sh
 
 ### Linux / DigitalOcean systemd
 
-目录布局、首次安装、不可变发布包、数据库备份、安全更新和健康检查见 [`../deploy/README.md`](../deploy/README.md)。更新时先在独立 release 目录执行 `npm ci && npm run check`，再切换并重启唯一的 systemd 实例；现役目录用 `.deploy-commit` 标记，不依赖在线 `git pull`。
+目录布局、首次安装、不可变发布包、数据库备份、安全更新和健康检查见 [`../deploy/README.md`](../deploy/README.md)。QDII 开发环境先运行 `npm run setup:qdii` 建立 Python 3.11+ 虚拟环境。更新时在独立 release 目录安装 Node/Python 锁定依赖并执行检查，再切换并重启唯一的 systemd 实例；现役目录用 `.deploy-commit` 标记，不依赖在线 `git pull`。
 
 改任何 `src/` 代码后的验收顺序：`npm run check`（测试不使用真实业务凭据；依赖审计会访问 npm registry）→ 按需执行真实连接检查 → 备份 SQLite → 明确重启对应服务。不要从 Git 拉取后未经检查直接重启。
 

@@ -102,6 +102,29 @@ test('自然语言路由:用户链接加财务、竞品和上下游要求进入�
   assert.equal(route.reason, 'natural-rule');
 });
 
+test('QDII 中英文路由区分 Slack 直答、微信草稿和 Newsletter 草稿', async () => {
+  const ids = ['wechat', 'email', 'qdii'];
+  const direct = await resolveNaturalWorkflowTask(
+    'What are the latest holdings of QDII fund 513100?',
+    { workflowIds: ids },
+  );
+  assert.equal(direct.workflowId, 'qdii');
+  assert.equal(direct.reason, 'qdii-data-intent');
+  assert.equal((await resolveNaturalWorkflowTask(
+    '微信：查询 513100 QDII 持仓并写公众号',
+    { workflowIds: ids },
+  )).workflowId, 'wechat');
+  assert.equal((await resolveNaturalWorkflowTask(
+    'Newsletter: use QDII fund 513100 holdings to create a draft',
+    { workflowIds: ids },
+  )).workflowId, 'email');
+  assert.deepEqual(
+    resolveWorkflowTask('Fund: 513100 latest holdings', ids, 'wechat'),
+    { workflowId: 'qdii', task: '513100 latest holdings' },
+  );
+  assert.equal((await resolveNaturalWorkflowTask('分析股票 600519', { workflowIds: ids })).workflowId, 'wechat');
+});
+
 test('模型能力比较即使写 deep dive 也走 prompt 驱动 wechat，不误入公司财务链路', async () => {
   const ids = ['wechat', 'email', 'translate', 'company', 'earnings', 'sector', 'morning'];
   const route = await resolveNaturalWorkflowTask(
