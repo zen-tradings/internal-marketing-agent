@@ -37,6 +37,9 @@ test('embedded remote preflight and activation scripts are valid Bash', () => {
   assert.match(ACTIVATE_SCRIPT, /python3 -m venv "\$stage\/\.venv"/);
   assert.match(ACTIVATE_SCRIPT, /requirements-qdii\.lock/);
   assert.match(ACTIVATE_SCRIPT, /check-qdii-python\.mjs/);
+  assert.match(ACTIVATE_SCRIPT, /update_env QDII_ENABLED true/);
+  assert.match(ACTIVATE_SCRIPT, /QDII_PYTHON_PATH \/opt\/zen-content-hub\/\.venv\/bin\/python/);
+  assert.match(ACTIVATE_SCRIPT, /QDII_WORKER_PATH \/opt\/zen-content-hub\/python\/qdii_worker\.py/);
 });
 
 test('deploy target must come from an explicit DigitalOcean target file', () => {

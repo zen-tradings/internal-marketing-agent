@@ -226,6 +226,16 @@ update_env OPENROUTER_REASONING_EFFORT "$reasoning"
 update_env OPENROUTER_PLANNER_REASONING_EFFORT "$planner_reasoning"
 update_env OPENROUTER_REVIEW_REASONING_EFFORT none
 update_env OPENROUTER_ROUTER_REASONING_EFFORT none
+update_env QDII_ENABLED true
+update_env QDII_PYTHON_PATH /opt/zen-content-hub/.venv/bin/python
+update_env QDII_WORKER_PATH /opt/zen-content-hub/python/qdii_worker.py
+update_env QDII_WORKER_TIMEOUT_MS 120000
+update_env QDII_MAX_FUNDS_SLACK 20
+update_env QDII_MAX_FUNDS_DRAFT 8
+update_env QDII_STALE_MAX_DAYS 366
+update_env QDII_MAX_REPORT_BYTES 31457280
+update_env QDII_MAX_TASK_DOWNLOAD_BYTES 157286400
+update_env QDII_MAX_REPORT_CANDIDATES 3
 
 switch_started=1
 sudo systemctl stop zen-content-hub
@@ -256,6 +266,10 @@ test "$(sudo awk -F= '$1 == "OPENROUTER_MODEL" { print $2 }' "$env_file" | tail 
 test "$(sudo awk -F= '$1 == "OPENROUTER_REASONING_EFFORT" { print $2 }' "$env_file" | tail -n 1)" = "$reasoning"
 test "$(sudo awk -F= '$1 == "OPENROUTER_PLANNER_MODEL" { print $2 }' "$env_file" | tail -n 1)" = "$planner_model"
 test "$(sudo awk -F= '$1 == "OPENROUTER_PLANNER_REASONING_EFFORT" { print $2 }' "$env_file" | tail -n 1)" = "$planner_reasoning"
+test "$(sudo awk -F= '$1 == "QDII_ENABLED" { print $2 }' "$env_file" | tail -n 1)" = true
+test "$(sudo awk -F= '$1 == "QDII_PYTHON_PATH" { print $2 }' "$env_file" | tail -n 1)" = /opt/zen-content-hub/.venv/bin/python
+test "$(sudo awk -F= '$1 == "QDII_WORKER_PATH" { print $2 }' "$env_file" | tail -n 1)" = /opt/zen-content-hub/python/qdii_worker.py
+test -x /opt/zen-content-hub/.venv/bin/python
 
 trap - ERR
 rm -f "$archive"
