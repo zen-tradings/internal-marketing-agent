@@ -1,6 +1,7 @@
 import boltPkg from '@slack/bolt';
 import { extractExplicitEntityVersions, extractUserUrls } from '../core/analysis-v2.js';
 import { attachmentsFromSlackMessages, normalizeSlackAttachments } from '../core/user-sources.js';
+import { detectQdiiTaskPlan } from '../core/qdii.js';
 import { decodeBasicHtmlEntities } from '../lib/html-entities.js';
 const { App } = boltPkg;
 
@@ -35,7 +36,18 @@ export function parseSlackTask(raw, botUserId, { channelType, channel } = {}) {
 }
 
 // 中文别名 → 工作流 id。别名同样必须命中 workflowIds 才会真正路由。
-const WORKFLOW_ALIASES = { 微信: 'wechat', 宏观: 'macro', 公司: 'company', 个股: 'company', 深度: 'company', 邮件: 'email', 财报: 'earnings', 行业: 'sector', 晨报: 'morning', 开市日报: 'opening-digest', 开市简报: 'opening-digest', 直译: 'translate', 翻译: 'translate' };
+const WORKFLOW_ALIASES = { 微信: 'wechat', 宏观: 'macro', 公司: 'company', 个股: 'company', 深度: 'company', 邮件: 'email', 财报: 'earnings', 行业: 'sector', 晨报: 'morning', 开市日报: 'opening-digest', 开市简报: 'opening-digest', 直译: 'translate', 翻译: 'translate', 基金查询: 'qdii' };
+
+const ENGLISH_ROUTE_ALIASES = Object.freeze({ fund: 'qdii', holding: 'qdii', holdings: 'qdii', newsletter: 'email' });
+
+function englishAliasTask(task, workflowIds) {
+  const match = String(task || '').match(/^([A-Za-z-]+)\s*[:：]\s*([\s\S]*)$/);
+  if (!match) return null;
+  const candidate = ENGLISH_ROUTE_ALIASES[match[1].toLowerCase()];
+  if (!candidate) return null;
+  const workflowId = workflowIds.find((id) => id.toLowerCase() === candidate);
+  return workflowId ? { workflowId, task: match[2].trim() } : null;
+}
 
 // 中文别名按长度从长到短排序,支持多个别名互为前缀时优先取最长匹配。
 const SORTED_ALIAS_KEYS = Object.keys(WORKFLOW_ALIASES).sort((a, b) => b.length - a.length);
@@ -48,6 +60,8 @@ const SORTED_ALIAS_KEYS = Object.keys(WORKFLOW_ALIASES).sort((a, b) => b.length 
 // 命中已注册的 workflowIds(或其中文别名映射到的 workflowIds)才路由,否则整段文本走
 // defaultWorkflowId,不报错。剥离别名/前缀后任务文本为空也照常路由,交给工作流兜底处理。
 export function resolveWorkflowTask(task, workflowIds = [], defaultWorkflowId = 'wechat') {
+  const englishAlias = englishAliasTask(task, workflowIds);
+  if (englishAlias) return englishAlias;
   for (const alias of SORTED_ALIAS_KEYS) {
     if (!task.startsWith(alias)) continue;
     const candidate = WORKFLOW_ALIASES[alias];
@@ -91,6 +105,8 @@ const NATURAL_RULES = [
 ];
 
 function explicitWorkflowTask(task, workflowIds = []) {
+  const englishAlias = englishAliasTask(task, workflowIds);
+  if (englishAlias) return { ...englishAlias, explicit: true };
   for (const alias of SORTED_ALIAS_KEYS) {
     if (!task.startsWith(alias)) continue;
     const candidate = WORKFLOW_ALIASES[alias];
@@ -112,6 +128,15 @@ export async function resolveNaturalWorkflowTask(task, {
 } = {}) {
   const explicit = explicitWorkflowTask(task, workflowIds);
   if (explicit) return { ...explicit, reason: 'explicit-prefix' };
+
+  const qdiiPlan = detectQdiiTaskPlan(task);
+  if (qdiiPlan.qdii) {
+    const target = qdiiPlan.destination === 'newsletter' ? 'email'
+      : qdiiPlan.destination === 'wechat' ? 'wechat'
+        : 'qdii';
+    const matched = workflowIds.find((id) => id.toLowerCase() === target);
+    if (matched) return { workflowId: matched, task, reason: 'qdii-data-intent', qdiiPlan };
+  }
 
   // Slack 中最常见的直译用法是自然语言里出现“翻译/直译”并附链接，不一定把
   // 关键词放在句首。URL + 明确翻译词构成稳定的强意图，优先于其它主题词路由。
@@ -176,7 +201,7 @@ export function createSlackIntentClassifier(config, fetchFn = globalThis.fetch) 
           max_tokens: 256,
           reasoning: { effort: writer.routerReasoningEffort || 'none', exclude: true },
           messages: [
-            { role: 'system', content: `Classify a Slack writing request. Return JSON only: {"workflowId":"..."}. Allowed: ${workflowIds.join(', ')}. A URL is research material, not translation intent. Never choose translate for a URL alone; choose translate only when the user explicitly asks for faithful/full translation. email=newsletter/Customer.io; earnings=quarterly earnings; sector=industry; morning=daily brief; company=single-company deep dive including financials, competitors, or value chain; macro=cross-asset macro analysis that combines a macro/market theme with analytical intent, including policy, economic data, rates, FX, liquidity, equities, commodities, credit, risk appetite, volatility, or digital assets; sector=single-industry research; wechat=other public-account analysis and bare URLs. For mixed requests, choose the one workflow that answers the user's final question.` },
+            { role: 'system', content: `Classify a Slack request. Return JSON only: {"workflowId":"..."}. Allowed: ${workflowIds.join(', ')}. A URL is research material, not translation intent. Never choose translate for a URL alone; choose translate only when the user explicitly asks for faithful/full translation. qdii=direct Slack lookup of disclosed equity holdings for one or more six-digit public QDII fund codes; email=newsletter/Customer.io draft; earnings=quarterly earnings; sector=industry; morning=daily brief; company=single-company deep dive including financials, competitors, or value chain; macro=cross-asset macro analysis; wechat=other public-account analysis and bare URLs. A WeChat or Newsletter request that uses QDII holdings keeps its destination workflow rather than qdii. For mixed requests, choose the workflow that answers the user's final requested destination.` },
             { role: 'user', content: String(task).slice(0, 4000) },
           ],
         }),
@@ -201,6 +226,7 @@ export function workflowRouteLabel(workflowId) {
     morning: '原创晨报 → 微信草稿箱',
     company: '原创公司深度 → 微信草稿箱',
     macro: '原创全球宏观策略 → 微信草稿箱',
+    qdii: 'QDII 股票持仓 → Slack 回复',
     wechat: '原创分析 → 微信草稿箱',
   })[workflowId] || `${workflowId} → 草稿`;
 }
@@ -393,6 +419,15 @@ export async function registerSlack({
       const input = buildSlackThreadInput(messages, { clarification: previous?.clarification });
       const userAttachments = attachmentsFromSlackMessages(messages);
       const metadata = slackPromptMetadata(input, promptRevision, userAttachments);
+      const detectedQdiiPlan = detectQdiiTaskPlan(input);
+      const qdiiPlan = detectedQdiiPlan.qdii
+        ? {
+            ...detectedQdiiPlan,
+            destination: route.workflowId === 'email' ? 'newsletter'
+              : route.workflowId === 'wechat' ? 'wechat'
+                : detectedQdiiPlan.destination,
+          }
+        : detectedQdiiPlan;
       const run = enqueue({
         workflowId: route.workflowId,
         source: 'slack',
@@ -403,6 +438,7 @@ export async function registerSlack({
           user,
           routeLabel: workflowRouteLabel(route.workflowId),
           routeReason: route.reason,
+          ...(qdiiPlan.qdii ? { qdiiPlan } : {}),
           threadKey,
           attachments: userAttachments,
           ...(previous?.clarification?.question ? {

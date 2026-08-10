@@ -49,7 +49,7 @@ publishing or public-IP gate.
 /var/lib/zen-content-hub/      SQLite database and per-run artifacts
 ```
 
-Install Node.js 22+, Chrome/Chromium, Poppler, and a Simplified Chinese font
+Install Node.js 22+, Python 3.11+ with `venv`, Chrome/Chromium, Poppler, and a Simplified Chinese font
 package such as Ubuntu's `fonts-noto-cjk`. Without the CJK font, headless Chrome
 renders Chinese cover titles as empty boxes. The cover generator is versioned
 in `tools/cover-generator`; run `npm ci` in `/opt/zen-content-hub` and set these
@@ -71,6 +71,9 @@ HEALTH_HOST=127.0.0.1
 HEALTH_PORT=8080
 MAX_CONCURRENCY=1
 MAX_QUEUE_SIZE=100
+QDII_ENABLED=true
+QDII_PYTHON_PATH=.venv/bin/python
+QDII_WORKER_PATH=/opt/zen-content-hub/python/qdii_worker.py
 OPENROUTER_MODEL=qwen/qwen3.8-max
 OPENROUTER_ROUTER_MODEL=z-ai/glm-5.2
 OPENROUTER_PLANNER_MODEL=moonshotai/kimi-k3
@@ -96,6 +99,13 @@ SLACK_EDIT_DEBOUNCE_MS=5000
 SLACK_ALLOWED_USER_IDS=U0123456789
 SLACK_ALLOWED_CHANNEL_IDS=C0123456789
 ```
+
+The immutable deploy command creates a release-local `.venv`, installs
+`python/requirements-qdii.lock`, and runs the worker self-test before the normal
+Node checks. The host must provide `python3`, `python3-venv`, Poppler, and the
+native libraries required by OpenCV/Camelot. The Python worker only accepts
+validated six-digit fund codes or local PDFs already downloaded through the
+Node safety gate; it never accepts arbitrary URLs.
 
 The Slack app's Bot Token Scopes must include `files:read` before it can
 download private PDF or text attachments from `files.slack.com`. After adding

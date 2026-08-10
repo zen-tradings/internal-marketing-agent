@@ -101,6 +101,30 @@ test('私有文件跨域重定向时不会把 Authorization 带到 CDN', async (
   assert.equal(requests[1].headers['X-Trace'], 'keep');
 });
 
+test('安全下载只允许有界 GET/POST，并把证监会表单原样交给受控 fetch', async () => {
+  let request;
+  const result = await safeFetchResource({
+    url: 'http://eid.csrc.gov.cn/fund/disclose/validate_fund.do',
+    method: 'POST',
+    body: 'cFundCode=513100',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    dnsLookup: PUBLIC_DNS,
+    fetchFn: async (url, options) => {
+      request = { url, options };
+      return new Response('{"isSuccess":true}', { status: 200 });
+    },
+  });
+  assert.equal(request.options.method, 'POST');
+  assert.equal(request.options.body, 'cFundCode=513100');
+  assert.equal(result.buffer.toString(), '{"isSuccess":true}');
+  await assert.rejects(() => safeFetchResource({
+    url: 'https://example.com', method: 'PUT', dnsLookup: PUBLIC_DNS,
+  }), /不支持请求方法/);
+  await assert.rejects(() => safeFetchResource({
+    url: 'https://example.com', method: 'POST', body: 'x'.repeat(70 * 1024), dnsLookup: PUBLIC_DNS,
+  }), /请求体超过/);
+});
+
 test('PDF 页数在文字提取前受硬上限保护', () => {
   const spawn = () => ({ status: 0, stdout: 'Pages: 121\n', stderr: '' });
   assert.throws(() => assertPdfPageLimit('/tmp/source.pdf', 120, spawn), /121\/120/);

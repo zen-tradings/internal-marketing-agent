@@ -22,6 +22,8 @@ function makeStore(initial) {
     setMediaId(id, mediaId, title) {
       row = { ...row, media_id: mediaId, title: title ?? row.title };
     },
+    setOutputKind(id, outputKind) { row = { ...row, output_kind: outputKind }; },
+    setSlackResponseTs(id, responseTs) { row = { ...row, slack_response_ts: responseTs }; },
   };
 }
 
@@ -31,13 +33,15 @@ function makeNotifier() {
   const cancelledCalls = [];
   const needsInputCalls = [];
   const warnCalls = [];
+  const respondCalls = [];
   return {
-    successCalls, failureCalls, cancelledCalls, needsInputCalls, warnCalls,
+    successCalls, failureCalls, cancelledCalls, needsInputCalls, warnCalls, respondCalls,
     async success(notify, payload) { successCalls.push({ notify, payload }); },
     async failure(notify, payload) { failureCalls.push({ notify, payload }); },
     async cancelled(notify, payload) { cancelledCalls.push({ notify, payload }); },
     async needsInput(notify, payload) { needsInputCalls.push({ notify, payload }); },
     async warn(notify, message) { warnCalls.push({ notify, message }); },
+    async respond(notify, payload) { respondCalls.push({ notify, payload }); return { responseTs: 'reply-ts' }; },
   };
 }
 
@@ -91,6 +95,101 @@ test('happy path:生成 + 发布成功 → done,success 调用一次,failure 不
   assert.equal(store._row().media_id, 'M');
   assert.equal(notifier.successCalls.length, 1);
   assert.equal(notifier.failureCalls.length, 0);
+});
+
+test('QDII 直接查询回复 Slack 后 done，media_id 保持为空', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qdii-handler-'));
+  const store = makeStore({
+    notify_json: JSON.stringify({ channel: 'C1', ts: '1.1', qdiiPlan: { qdii: true, codes: ['513100'], destination: 'slack', language: 'en' } }),
+  });
+  const notifier = makeNotifier();
+  const { deps } = baseDeps({
+    store,
+    notifier,
+    workflows: { qdii: { id: 'qdii', mode: 'qdii-query', workDir: root, retries: 0 } },
+  });
+  deps.runQdiiQuery = async () => ({
+    taskPlan: { language: 'en' },
+    query: { language: 'en' },
+    results: [{
+      code: '513100', fundName: 'NASDAQ 100 QDII', reportPeriod: { key: '2026-Q1', type: 'Q1' }, disclosureScope: 'top10',
+      source: { provider: 'Eastmoney / AKShare', url: 'https://fundf10.eastmoney.com/ccmx_513100.html' }, freshness: { status: 'current' }, warnings: [],
+      holdings: [{ rank: 1, securityCode: 'AAPL', securityName: 'Apple', navRatioPct: 8.2, marketValue: 100, marketValueUnit: '10k CNY' }],
+    }],
+    failures: [],
+  });
+
+  await makeHandler(deps)({ id: 'qdii-run', workflowId: 'qdii', input: '513100 holdings' });
+
+  assert.equal(store._row().status, 'done');
+  assert.equal(store._row().output_kind, 'slack-response');
+  assert.equal(store._row().slack_response_ts, 'reply-ts');
+  assert.equal(store._row().media_id, undefined);
+  assert.equal(notifier.respondCalls.length, 1);
+  assert.equal(notifier.successCalls.length, 0);
+});
+
+test('QDII Newsletter 把结构化数据注入 writer 后仍只创建草稿', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qdii-draft-handler-'));
+  const store = makeStore({
+    notify_json: JSON.stringify({ channel: 'C1', ts: '1.1', qdiiPlan: { qdii: true, codes: ['513100'], destination: 'newsletter', language: 'en', dualReply: false } }),
+  });
+  let capturedContext;
+  const runWriter = async ({ taskContext }) => {
+    capturedContext = taskContext;
+    return { ok: true, articlePath: '/tmp/qdii-newsletter.md', sources: [] };
+  };
+  const { deps, publishCalls } = baseDeps({
+    store,
+    runWriter,
+    workflows: { email: { id: 'email', mode: 'newsletter', workDir: root, channel: 'mock', retries: 0 } },
+  });
+  deps.runQdiiQuery = async () => ({
+    query: { language: 'en', fundCodes: ['513100'] }, artifactPath: '/tmp/qdii-result.json', failures: [],
+    results: [{
+      code: '513100', fundName: 'NASDAQ 100 QDII', reportPeriod: { key: '2026-Q1', type: 'Q1', end: '2026-03-31' }, disclosureScope: 'top10',
+      source: { provider: 'Eastmoney / AKShare', url: 'https://fundf10.eastmoney.com/ccmx_513100.html' }, freshness: { status: 'current' }, warnings: [],
+      holdings: [{ rank: 1, securityCode: 'AAPL', securityName: 'Apple', navRatioPct: 8.2, marketValue: 100, marketValueUnit: '10k CNY' }],
+    }],
+  });
+
+  await makeHandler(deps)({ id: 'email-qdii', workflowId: 'email', input: 'Use fund 513100 holdings for a newsletter' });
+
+  assert.equal(store._row().status, 'done');
+  assert.equal(store._row().output_kind, 'draft');
+  assert.equal(publishCalls.length, 1);
+  assert.equal(capturedContext.qdiiSources.length, 1);
+  assert.match(capturedContext.qdiiSources[0].text, /AAPL/);
+});
+
+test('QDII 双输出重试保留已发 Slack 摘要，只继续创建草稿', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qdii-dual-handler-'));
+  const store = makeStore({
+    slack_response_ts: 'existing-reply',
+    notify_json: JSON.stringify({ channel: 'C1', ts: '1.1', qdiiPlan: { qdii: true, codes: ['513100'], destination: 'newsletter', language: 'en', dualReply: true } }),
+  });
+  const notifier = makeNotifier();
+  const { deps, publishCalls } = baseDeps({
+    store,
+    notifier,
+    workflows: { email: { id: 'email', mode: 'newsletter', workDir: root, channel: 'mock', retries: 0 } },
+  });
+  deps.runQdiiQuery = async () => ({
+    query: { language: 'en', fundCodes: ['513100'] }, failures: [],
+    results: [{
+      code: '513100', fundName: 'NASDAQ 100 QDII', reportPeriod: { key: '2026-Q1', type: 'Q1', end: '2026-03-31' }, disclosureScope: 'top10',
+      source: { provider: 'Eastmoney / AKShare', url: 'https://fundf10.eastmoney.com/ccmx_513100.html' }, freshness: { status: 'current' }, warnings: [],
+      holdings: [{ rank: 1, securityCode: 'AAPL', securityName: 'Apple', navRatioPct: 8.2, marketValue: 100, marketValueUnit: '10k CNY' }],
+    }],
+  });
+
+  await makeHandler(deps)({ id: 'email-qdii-dual', workflowId: 'email', input: 'Reply and create a Newsletter draft for 513100 holdings' });
+
+  assert.equal(notifier.respondCalls.length, 0);
+  assert.equal(publishCalls.length, 1);
+  assert.equal(store._row().slack_response_ts, 'existing-reply');
+  assert.equal(store._row().output_kind, 'draft-with-slack-summary');
+  assert.equal(store._row().media_id, 'M');
 });
 
 test('macro 高风险推断保留时发 Slack 提醒但不阻断草稿', async () => {

@@ -34,6 +34,9 @@ test('embedded remote preflight and activation scripts are valid Bash', () => {
     const result = spawnSync('bash', ['-n'], { input: script, encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
   }
+  assert.match(ACTIVATE_SCRIPT, /python3 -m venv "\$stage\/\.venv"/);
+  assert.match(ACTIVATE_SCRIPT, /requirements-qdii\.lock/);
+  assert.match(ACTIVATE_SCRIPT, /check-qdii-python\.mjs/);
 });
 
 test('deploy target must come from an explicit DigitalOcean target file', () => {

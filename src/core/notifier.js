@@ -55,6 +55,19 @@ export function createNotifier(postMessage) {
         : cleaned ? '未完成文件已清理' : '没有需要清理的运行文件';
       return send(notify, `🛑 任务已停止\n任务:${runId}\n${cleanup}\n未创建新草稿。`);
     },
+    async respond(notify, { messages }) {
+      if (!notify?.channel || !notify?.ts) throw new Error('QDII Slack response is missing channel/thread metadata');
+      const posted = [];
+      for (const message of Array.isArray(messages) ? messages : []) {
+        posted.push(await postMessage({
+          channel: notify.channel,
+          thread_ts: notify.ts,
+          text: String(message || '').slice(0, 39000),
+        }));
+      }
+      if (!posted.length) throw new Error('QDII Slack response contains no messages');
+      return { responseTs: posted[posted.length - 1]?.ts || posted[0]?.ts || '' };
+    },
     warn(notify, msg) { return send(notify, `⚠️ ${msg}`); },
   };
 }

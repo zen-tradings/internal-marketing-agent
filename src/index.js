@@ -6,6 +6,7 @@ import { openStore } from './core/store.js';
 import { createQueue } from './core/queue.js';
 import { runWriter } from './core/runner.js';
 import { createNotifier } from './core/notifier.js';
+import { formatQdiiSlackMessages, qdiiSourcesForWriter, runQdiiQuery } from './core/qdii.js';
 import { registerSlack } from './triggers/slack.js';
 import { registerCron } from './triggers/cron.js';
 import { isTransientSocketModeError } from './lib/slack-resilience.js';
@@ -28,6 +29,7 @@ import emailWorkflow from './workflows/email.js';
 import macroWorkflow from './workflows/macro.js';
 import openingDigestWorkflow from './workflows/opening-digest.js';
 import openingDigestEodWorkflow from './workflows/opening-digest-eod.js';
+import qdiiWorkflow from './workflows/qdii.js';
 import mockChannel from './channels/mock.js';
 import wechatDraft from './channels/wechat-draft.js';
 import customerioDraft from './channels/customerio-draft.js';
@@ -47,6 +49,7 @@ const WORKFLOWS = {
   macro: macroWorkflow,
   'opening-digest': openingDigestWorkflow,
   'opening-digest-eod': openingDigestEodWorkflow,
+  qdii: qdiiWorkflow,
 };
 const CHANNELS = {
   mock: mockChannel,
@@ -115,6 +118,56 @@ export function makeHandler(deps) {
       store.setStatus(run.id, 'running', { startedAt: Date.now(), stage: null, error: null, nextRetryAt: null });
       setPhase('generate');
 
+      const qdiiPlan = notify.qdiiPlan?.qdii ? notify.qdiiPlan : null;
+      if (runtimeWorkflow.mode === 'qdii-query') {
+        if (persisted.slack_response_ts) {
+          store.setOutputKind?.(run.id, 'slack-response');
+          store.setStatus(run.id, 'done', {
+            title: persisted.title || 'QDII holdings response',
+            finishedAt: Date.now(),
+          });
+          return;
+        }
+        const payload = await deps.runQdiiQuery({
+          input: run.input,
+          taskPlan: qdiiPlan,
+          config,
+          workDir: runtimeWorkflow.workDir,
+          signal,
+          onProgress: (progress) => notifyBestEffort(deps.notifier, 'progress', notify, progress),
+        });
+        if (!payload.results.length) throw stageError('generate', payload.failures.map((item) => `${item.code}: ${item.error}`).join('; ') || '未取得可用 QDII 持仓');
+        setPhase('respond');
+        const delivered = await deliverQdiiResponse(deps.notifier, notify, payload);
+        store.setOutputKind?.(run.id, 'slack-response');
+        store.setSlackResponseTs?.(run.id, delivered.responseTs || 'delivered');
+        store.setStatus(run.id, 'done', {
+          title: `QDII holdings: ${payload.results.map((item) => item.code).join(', ')}`,
+          finishedAt: Date.now(),
+        });
+        return;
+      }
+
+      let qdiiPayload;
+      if (qdiiPlan) {
+        qdiiPayload = await deps.runQdiiQuery({
+          input: run.input,
+          taskPlan: qdiiPlan,
+          config,
+          workDir: runtimeWorkflow.workDir,
+          signal,
+          onProgress: (progress) => notifyBestEffort(deps.notifier, 'progress', notify, progress),
+        });
+        if (!qdiiPayload.results.length) throw stageError('generate', qdiiPayload.failures.map((item) => `${item.code}: ${item.error}`).join('; ') || '未取得可用 QDII 持仓');
+        if (qdiiPlan.dualReply && !persisted.slack_response_ts) {
+          setPhase('respond');
+          const delivered = await deliverQdiiResponse(deps.notifier, notify, qdiiPayload);
+          store.setSlackResponseTs?.(run.id, delivered.responseTs || 'delivered');
+        }
+        store.setOutputKind?.(run.id, qdiiPlan.dualReply ? 'draft-with-slack-summary' : 'draft');
+        setPhase('generate');
+      }
+
       const { title, mediaId, sourceCount, completeness } = await runWithRetry(async () => {
         throwIfTaskCancelled(signal);
         // 发布幂等:已有 media_id 说明上一轮(重试循环内或重启后重投)已经发布成功过,
@@ -139,6 +192,10 @@ export function makeHandler(deps) {
               attachments: notify.attachments,
               resolvedClarification: notify.resolvedClarification,
               routeReason: notify.routeReason,
+              ...(qdiiPayload ? {
+                qdiiPayload,
+                qdiiSources: qdiiSourcesForWriter(qdiiPayload),
+              } : {}),
             },
             onProgress: (progress) => notifyBestEffort(deps.notifier, 'progress', notify, progress),
             resumeFromCheckpoint,
@@ -349,6 +406,17 @@ async function notifyBestEffort(notifier, method, notify, payload) {
   }
 }
 
+async function deliverQdiiResponse(notifier, notify, payload) {
+  if (!notifier?.respond) throw stageError('respond', 'Slack responder is not ready');
+  try {
+    return await notifier.respond(notify, {
+      messages: formatQdiiSlackMessages(payload, { language: payload.taskPlan?.language || payload.query?.language }),
+    });
+  } catch (error) {
+    throw stageError('respond', `QDII Slack response failed: ${error?.message || error}`);
+  }
+}
+
 export async function start() {
   const config = loadConfig();
   const store = openStore(config.dbPath);
@@ -388,6 +456,7 @@ export async function start() {
     channels: CHANNELS,
     config,
     notifier: undefined,
+    runQdiiQuery,
   };
   const handler = makeHandler(deps);
 

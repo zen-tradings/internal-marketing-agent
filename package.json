@@ -9,6 +9,9 @@
   "scripts": {
     "start": "node src/index.js",
     "check:openrouter": "node scripts/check-openrouter.mjs",
+    "setup:qdii": "node scripts/setup-qdii-python.mjs",
+    "check:qdii-python": "node scripts/check-qdii-python.mjs",
+    "check:qdii": "node scripts/check-qdii.mjs",
     "check:translation": "node scripts/check-translation.mjs",
     "requeue:translation": "node scripts/requeue-translation.mjs",
     "requeue:analysis-gate": "node scripts/requeue-analysis-gate.mjs",

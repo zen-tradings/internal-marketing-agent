@@ -68,6 +68,18 @@ export function loadConfig(env = process.env) {
       searchMaxQueries: positiveIntegerOrThrow(env.ANALYSIS_SEARCH_MAX_QUERIES, 8, 'ANALYSIS_SEARCH_MAX_QUERIES'),
       recentWindowDays: positiveIntegerOrThrow(env.ANALYSIS_RECENT_WINDOW_DAYS, 60, 'ANALYSIS_RECENT_WINDOW_DAYS'),
     },
+    qdii: {
+      enabled: booleanFlag(env.QDII_ENABLED),
+      pythonPath: env.QDII_PYTHON_PATH || 'python3',
+      workerPath: env.QDII_WORKER_PATH || path.join(REPO_ROOT, 'python', 'qdii_worker.py'),
+      workerTimeoutMs: positiveNumber(env.QDII_WORKER_TIMEOUT_MS, 120000, 'QDII_WORKER_TIMEOUT_MS'),
+      maxFundsSlack: positiveIntegerOrThrow(env.QDII_MAX_FUNDS_SLACK, 20, 'QDII_MAX_FUNDS_SLACK'),
+      maxFundsDraft: positiveIntegerOrThrow(env.QDII_MAX_FUNDS_DRAFT, 8, 'QDII_MAX_FUNDS_DRAFT'),
+      staleMaxDays: positiveIntegerOrThrow(env.QDII_STALE_MAX_DAYS, 366, 'QDII_STALE_MAX_DAYS'),
+      maxReportBytes: positiveIntegerOrThrow(env.QDII_MAX_REPORT_BYTES, 30 * 1024 * 1024, 'QDII_MAX_REPORT_BYTES'),
+      maxTaskDownloadBytes: positiveIntegerOrThrow(env.QDII_MAX_TASK_DOWNLOAD_BYTES, 150 * 1024 * 1024, 'QDII_MAX_TASK_DOWNLOAD_BYTES'),
+      maxReportCandidates: positiveIntegerOrThrow(env.QDII_MAX_REPORT_CANDIDATES, 3, 'QDII_MAX_REPORT_CANDIDATES'),
+    },
     translation: {
       // 直译优先使用原站结构化 HTML；PDF 由 Datalab 托管解析后回到同一结构化链路。
       browserEnabled: env.TRANSLATION_BROWSER_ENABLED === undefined

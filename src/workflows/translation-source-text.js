@@ -1409,7 +1409,13 @@ export async function safeFetchResource({
   accept,
   headers = {},
   maxBytes = limits.maxSourceBytes,
+  method = 'GET',
+  body,
 }) {
+  const requestMethod = String(method || 'GET').toUpperCase();
+  if (!['GET', 'POST'].includes(requestMethod)) throw new Error(`安全下载不支持请求方法:${requestMethod}`);
+  const requestBody = body === undefined || body === null ? undefined : String(body);
+  if (requestBody && Buffer.byteLength(requestBody) > 64 * 1024) throw new Error('安全下载请求体超过 64KB 上限');
   let current = url;
   let currentHeaders = { ...headers };
   for (let redirects = 0; redirects <= limits.maxRedirects; redirects += 1) {
@@ -1417,6 +1423,8 @@ export async function safeFetchResource({
     const requestFetch = fetchFn === globalThis.fetch ? pinnedHttpFetch(resolved.addresses) : fetchFn;
     const response = await callFetch(fetchWithRetry, requestFetch, current, {
       redirect: 'manual',
+      method: requestMethod,
+      body: requestBody,
       headers: {
         Accept: accept || '*/*',
         'User-Agent': 'Mozilla/5.0 ZenTranslationBot/3.0',
@@ -1510,7 +1518,7 @@ function pinnedHttpFetch(addresses) {
     const transport = target.protocol === 'https:' ? https : http;
     return new Promise((resolve, reject) => {
       const request = transport.request(target, {
-        method: 'GET',
+        method: options.method || 'GET',
         headers: options.headers,
         signal: options.signal,
         lookup(_hostname, lookupOptions, callback) {
@@ -1543,7 +1551,7 @@ function pinnedHttpFetch(addresses) {
         }
       });
       request.once('error', reject);
-      request.end();
+      request.end(options.body);
     });
   };
 }

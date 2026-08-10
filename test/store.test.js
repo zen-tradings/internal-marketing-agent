@@ -31,6 +31,17 @@ test('setMediaId 只写 media_id/title,不改变 status(支撑发布幂等判断
   assert.equal(r.status, 'running', 'setMediaId 不应改变 status(早写落库,收尾状态由 setStatus 负责)');
 });
 
+test('Slack 核心回复单独记录 output kind/ts，绝不伪造 media_id', () => {
+  const s = openStore(':memory:');
+  s.createRun({ id: 'qdii-1', workflowId: 'qdii', source: 'slack', input: '513100', notify: {} });
+  s.setOutputKind('qdii-1', 'slack-response');
+  s.setSlackResponseTs('qdii-1', '1786332000.001');
+  const row = s.getRun('qdii-1');
+  assert.equal(row.output_kind, 'slack-response');
+  assert.equal(row.slack_response_ts, '1786332000.001');
+  assert.equal(row.media_id, null);
+});
+
 test('markInterrupted 把 running 置 interrupted', () => {
   const s = openStore(':memory:');
   s.createRun({ id: 'a', workflowId: 'w', source: 'slack', input: 'x', notify: {} });

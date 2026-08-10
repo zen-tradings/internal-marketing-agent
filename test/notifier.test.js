@@ -64,3 +64,16 @@ test('入队回执显示 Prompt 修订、精确实体、链接数量与完整要
   assert.match(sent[1].text, /用户链接与官方页面的型号不同/);
   assert.match(sent[1].text, /请确认 Opus 5/);
 });
+
+test('QDII respond 是线程内核心多段回复并返回最后一条 ts', async () => {
+  const sent = [];
+  const n = createNotifier(async (message) => {
+    sent.push(message);
+    return { ts: `reply-${sent.length}` };
+  });
+  const result = await n.respond({ channel: 'C', ts: 'root' }, { messages: ['part 1', 'part 2'] });
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0].thread_ts, 'root');
+  assert.equal(sent[1].text, 'part 2');
+  assert.equal(result.responseTs, 'reply-2');
+});

@@ -125,6 +125,14 @@ export async function runWriter({
   try {
     throwIfTaskCancelled(signal);
     fs.mkdirSync(workflow.workDir, { recursive: true });
+    if (Array.isArray(taskContext?.qdiiSources) && taskContext.qdiiSources.length) {
+      trace.qdii = {
+        artifactPath: taskContext.qdiiPayload?.artifactPath || null,
+        fundCodes: taskContext.qdiiPayload?.query?.fundCodes || [],
+        failures: taskContext.qdiiPayload?.failures || [],
+        sourceCount: taskContext.qdiiSources.length,
+      };
+    }
     if (workflow.mode === 'opening-digest-eod') {
       const digest = config.openingDigest || {};
       const capture = await captureTrendingOptionsTable({
@@ -243,7 +251,8 @@ export async function runWriter({
     const sourcePolicy = sourcePolicyFor({ input, workflow });
     if (!writer.exaApiKey && !sourcePolicy.skipResearch) throw new Error('原创研究工作流缺少 Exa API key');
     trace.sourcePolicy = sourcePolicy;
-    const research = await searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy });
+    const externalResearch = await searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy });
+    const research = mergeInjectedSources(taskContext.qdiiSources, externalResearch);
     throwIfTaskCancelled(signal);
     trace.selectedSources = research.map(sourceForTrace);
     trace.officialSourceCount = research.filter((source) => source.official).length;
@@ -389,7 +398,7 @@ async function runAnalysisV2({
     );
   }
 
-  const sources = await searchExaV2({
+  const searchedSources = await searchExaV2({
     taskContract,
     searchPlan,
     workflow,
@@ -401,6 +410,7 @@ async function runAnalysisV2({
     recentWindowDays,
     asOf: new Date(),
   });
+  const sources = mergeInjectedSources(taskContext.qdiiSources, searchedSources);
   throwIfTaskCancelled(signal);
   if (!sources.length) {
     throw new Error(
@@ -571,6 +581,18 @@ async function runAnalysisV2({
     warnings: audit.warnings,
     contentPolicy: taskContract.content_policy,
   };
+}
+
+function mergeInjectedSources(injected, searched) {
+  const output = [];
+  const seen = new Set();
+  for (const source of [...(Array.isArray(injected) ? injected : []), ...(Array.isArray(searched) ? searched : [])]) {
+    const key = String(source?.url || source?.id || `${source?.title}\u0000${source?.text}`).trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(source);
+  }
+  return output;
 }
 
 async function searchExaV2({

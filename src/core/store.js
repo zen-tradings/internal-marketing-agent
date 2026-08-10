@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS runs (
   title TEXT,
   media_id TEXT,
   remote_id TEXT,
+  output_kind TEXT,
+  slack_response_ts TEXT,
   error TEXT,
   notify_json TEXT,
   created_at INTEGER NOT NULL,
@@ -55,6 +57,8 @@ export function openStore(dbPath) {
   ensureColumn(db, 'runs', 'next_retry_at', 'INTEGER');
   ensureColumn(db, 'runs', 'last_reminded_at', 'INTEGER');
   ensureColumn(db, 'runs', 'remote_id', 'TEXT');
+  ensureColumn(db, 'runs', 'output_kind', 'TEXT');
+  ensureColumn(db, 'runs', 'slack_response_ts', 'TEXT');
   return {
     createRun({ id, workflowId, source, input, notify }) {
       db.prepare(
@@ -82,6 +86,12 @@ export function openStore(dbPath) {
     },
     setRemoteId(id, remoteId) {
       db.prepare('UPDATE runs SET remote_id = ? WHERE id = ?').run(remoteId, id);
+    },
+    setOutputKind(id, outputKind) {
+      db.prepare('UPDATE runs SET output_kind = ? WHERE id = ?').run(outputKind || null, id);
+    },
+    setSlackResponseTs(id, responseTs) {
+      db.prepare('UPDATE runs SET slack_response_ts = ? WHERE id = ?').run(responseTs || null, id);
     },
     listByStatus(status) { return db.prepare('SELECT * FROM runs WHERE status = ? ORDER BY created_at').all(status); },
     getSlackThread(threadKey) {
