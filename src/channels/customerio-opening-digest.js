@@ -80,6 +80,7 @@ export function makeChannel({
 
         let headerImageUrl = '';
         try {
+          const coverKey = acceptance ? `${dateKey}-${acceptanceId}` : dateKey;
           const cover = await renderCover({
             dateLabel: displayDate(dateKey),
             executablePath: digest.browserExecutablePath,
@@ -92,8 +93,8 @@ export function makeChannel({
             timeoutMs: cio.timeoutMs,
             parentFolderId: digest.assetFolderId,
             buffer: cover,
-            filename: `opening-digest-cover-${dateKey}.png`,
-            name: `Zen Opening Digest cover ${dateKey}`,
+            filename: `opening-digest-cover-${coverKey}.png`,
+            name: `Zen Opening Digest cover ${coverKey}`,
           });
           const candidate = String(asset?.path || '').trim();
           if (/^https:\/\//i.test(candidate)) headerImageUrl = candidate;

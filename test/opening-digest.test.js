@@ -403,7 +403,16 @@ test('manual digest is allowed off-session and labels live options latest availa
 
 test('production acceptance uses an explicit TEST identity and sends immediately to test2', async () => {
   const requests = [];
-  const { channel } = standardChannel({ requests });
+  const uploads = [];
+  const { channel } = standardChannel({
+    requests,
+    channel: {
+      uploadAsset: async (args) => {
+        uploads.push({ filename: args.filename, name: args.name });
+        return { path: `https://assets.example/${args.filename}` };
+      },
+    },
+  });
   await channel.publish({
     articlePath: '/tmp/article.md',
     config: config(),
@@ -413,6 +422,10 @@ test('production acceptance uses an explicit TEST identity and sends immediately
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
   assert.equal(create.body.name, '[TEST] Zen Opening Digest · 2026-08-10 · cc3fc06bb76a-1045et');
   assert.match(create.body.subject, /^\[TEST\] Zen Opening Digest/);
+  assert.deepEqual(uploads, [{
+    filename: 'opening-digest-cover-2026-08-10-cc3fc06bb76a-1045et.png',
+    name: 'Zen Opening Digest cover 2026-08-10-cc3fc06bb76a-1045et',
+  }]);
   assert.ok(requests.some((item) => item.path.endsWith('/send')));
   assert.equal(requests.some((item) => item.path.endsWith('/schedule')), false);
 });
