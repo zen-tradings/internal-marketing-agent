@@ -26,6 +26,7 @@
 - 发布成功以渠道返回的 `media_id` 为准；Slack 通知是 best-effort，通知失败不得把已创建的草稿改记为失败。
 - 所有真实草稿渠道必须在 `src/lib/draft-template.js` 登记固定模板，并暴露完全匹配的 `templateId` 与 `templateLocked: true`；任务输入和工作流不得临时覆盖模板。改版时必须升级模板版本并同步渲染测试与文档。
 - 保持微信公众号与常规 Newsletter 的“只创建草稿”边界；`opening-digest` 仅可使用受保护的独立受众并通过现有门禁发送/排期；继续遵守 Slack 允许名单和渲染 golden 测试约束。不得新增公网 IP 白名单、出口 IP 校验或因代理环境变量阻止启动/发布的门禁。
+- `opening-digest` 的内容格式/新鲜度、部分行情、OIC、封面、受众人数和预检异常属于可发送降级，只写 `research-trace.json`，不得发 Slack warning；只有明确的硬门禁、严重事实问题修复耗尽或客观发送失败才发送 Slack failure。正文退订标签必须本地移除，Customer.io layout 唯一负责法定退订链接，不得恢复 `/contents` 读回门禁。
 - 不提交 `.env`、凭据、任务数据库或生成内容。修改环境变量时同步 `.env.example`；改变用户流程、渠道或运维方式时同步 README 或 `docs/`。
 
 ## 运维边界

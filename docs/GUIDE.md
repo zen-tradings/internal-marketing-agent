@@ -108,7 +108,7 @@
 | 草稿固定模板总门禁 | `src/lib/draft-template.js` | 所有真实渠道必须登记模板 ID 并锁定；任务不得覆盖，改版必须升版本和更新测试 |
 | 微信渲染主题 | `zen-wechat/zen-trading@4`、`assets/zen-trading.css` 与 `RENDER_OPTS` | 主题文件随仓库部署；引用块归一为正文字号，最终 HTML 在发布前执行字体、重复来源与固定尾图顺序检查 |
 | Customer.io 邮件草稿 | `src/workflows/email.js` + `src/channels/customerio-draft.js` | 固定 `zen-customerio/zen-research@3`，页脚地址固定为 `700 Leahy St, Redwood City, CA 94061`，只创建草稿；受众由 internal/pilot/full 三阶段配置控制 |
-| Opening Digest 开市日报 | `src/workflows/opening-digest.js` + `src/channels/customerio-opening-digest.js` | 美东 10:15 生成、目标 10:30；专用开盘窗口检索并硬校验 3-5 条当期 catalyst；封面锁定 `assets/zen-opening-digest-background.png` 并只叠加 digest 名与美东日期；DigitalOcean Chrome 提取 OIC 表格 DOM，渲染响应式 HTML；测试阶段仅允许非空 `test2`，发送前验证 Customer.io layout 的唯一退订链接 |
+| Opening Digest 开市日报 | `src/workflows/opening-digest.js` + `src/channels/customerio-opening-digest.js` | 美东 10:15 生成、目标 10:30；开盘窗口、标准区块、3-5 条 catalyst 与来源规则均为软审计，只有带具体证据的高置信度核心事实错误在两轮局部修复后仍失败才停发；九格行情固定归一化，OIC 或封面失败可省略。受众预检失败或人数为零只写 trace，明确读到非 `test2` 才停发；正文退订标签本地移除，不再读回 `/contents`，所有可继续的降级均不发 Slack warning |
 | 新发布渠道 | 新建 `src/channels/<name>.js` 实现 publish() + 注册模板和渠道 | 见 README「扩展」一节；未登记模板时 fail closed |
 
 ## 四、日常运维

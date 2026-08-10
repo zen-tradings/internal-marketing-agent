@@ -42,11 +42,16 @@ scripts/
 ├── research-trace.mjs       查看 Exa 查询与命中来源
 ├── check-openrouter.mjs     检查 OpenRouter 配置
 ├── check-egress.mjs         只读检查各外部 API 的网络可达性
+├── check-customerio.mjs     只读检查 Newsletter 受众与远端状态
 ├── check-translation.mjs    生成结构化直译本地验收稿
 ├── requeue-translation.mjs  受限恢复有 checkpoint 的失败直译
 ├── requeue-analysis-gate.mjs 受限恢复旧版代码门禁误拦截的 V2 分析
 ├── check-documents.mjs      只读验收私有 Notion / Google Docs
 ├── google-docs-oauth.mjs    本机生成 Google Docs refresh token
+├── auth-oic-session.mjs     刷新 Opening Digest 的 OIC 浏览器会话
+├── run-opening-digest-acceptance.mjs 运行隔离的 Opening Digest 生产验收
+├── run-macro-acceptance.mjs 运行 macro 本地验收
+├── deploy-digitalocean.mjs  执行 DigitalOcean 预检与不可变部署
 ├── preview-newsletter.mjs   生成 Newsletter 本地 HTML 预览
 └── update-render-golden.mjs 更新渲染基准
 
