@@ -24,7 +24,7 @@ export function makeChannel({
     id: 'customerio-opening-digest',
     templateId: NEWSLETTER_TEMPLATE_ID,
     templateLocked: true,
-    async publish({ articlePath, config, workflow, notifier, notify, source = 'manual', existingRemoteId = '', onCreated }) {
+    async publish({ articlePath, config, workflow, source = 'manual', existingRemoteId = '', onCreated }) {
       const cio = config.customerio || {};
       const digest = config.openingDigest || {};
       assertDigestConfig(cio, digest);
@@ -67,13 +67,20 @@ export function makeChannel({
       }
 
       const common = { baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, fetchFn, timeoutMs: cio.timeoutMs, parentFolderId: digest.assetFolderId };
-      let headerImageUrl = '';
-      try {
-        const cover = await renderCover({ dateLabel: displayDate(dateKey), executablePath: digest.browserExecutablePath, timeoutMs: digest.captureTimeoutMs });
-        const asset = await uploadAsset({ ...common, buffer: cover, filename: `opening-digest-cover-${dateKey}.png`, name: `Zen Opening Digest cover ${dateKey}` });
-        headerImageUrl = asset.path;
-      } catch (error) {
-        await notifier?.warn?.(notify, `Opening Digest 封面不可用，按规则无封面继续发送: ${error.message}`);
+      const cover = await renderCover({
+        dateLabel: displayDate(dateKey),
+        executablePath: digest.browserExecutablePath,
+        timeoutMs: digest.captureTimeoutMs,
+      });
+      const asset = await uploadAsset({
+        ...common,
+        buffer: cover,
+        filename: `opening-digest-cover-${dateKey}.png`,
+        name: `Zen Opening Digest cover ${dateKey}`,
+      });
+      const headerImageUrl = String(asset?.path || '').trim();
+      if (!/^https:\/\//i.test(headerImageUrl)) {
+        throw publishError('Customer.io 未返回 Opening Digest 封面 HTTPS URL，拒绝发送无封面邮件');
       }
 
       // An OIC-login retry must keep the original opening snapshot. Persist this

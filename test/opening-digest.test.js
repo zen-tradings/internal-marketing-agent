@@ -5,7 +5,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { JSDOM } from 'jsdom';
 import { isUsEquitySession, easternDateKey } from '../src/lib/us-equity-calendar.js';
-import { coverHtml, OPENING_COVER_HEIGHT, OPENING_COVER_WIDTH } from '../src/lib/opening-digest-cover.js';
+import {
+  coverHtml,
+  loadOpeningCoverBackground,
+  OPENING_COVER_BACKGROUND_HEIGHT,
+  OPENING_COVER_BACKGROUND_SHA256,
+  OPENING_COVER_BACKGROUND_WIDTH,
+  OPENING_COVER_HEIGHT,
+  OPENING_COVER_WIDTH,
+} from '../src/lib/opening-digest-cover.js';
 import { cacheEodOptions, makeChannel, renderOptionsHtml } from '../src/channels/customerio-opening-digest.js';
 import { countTrendingRows, validateTrendingOptionsData } from '../src/lib/options-volume.js';
 import { collectOpeningMetrics, validateOpeningMetrics } from '../src/lib/opening-digest-metrics.js';
@@ -160,13 +168,25 @@ test('structured options data requires exact headers, twenty ordered rows, and c
   assert.throws(() => validateTrendingOptionsData(badVolumeOrder), /总成交量排序或数值无效/);
 });
 
-test('opening cover keeps Zen title and uses date-specific digest line', () => {
-  const html = coverHtml('August 10, 2026');
+test('opening cover locks the supplied brand artwork and overlays only digest name and date', async () => {
+  const background = await loadOpeningCoverBackground();
+  assert.ok(background.length > 1_000_000);
+  assert.equal(OPENING_COVER_BACKGROUND_WIDTH, 1774);
+  assert.equal(OPENING_COVER_BACKGROUND_HEIGHT, 887);
+  assert.equal(OPENING_COVER_BACKGROUND_SHA256, '44436cfdf3e7b9dc17aba36fe61c5c8a891cf08885c8887722a907225866e300');
+  const html = coverHtml('August 10, 2026', { backgroundDataUrl: 'data:image/png;base64,iVBORw0KGgo=' });
   assert.equal(OPENING_COVER_WIDTH, 1240);
   assert.equal(OPENING_COVER_HEIGHT, 620);
-  assert.match(html, /Zen Research from Zen Trading/);
-  assert.match(html, /OPENING DIGEST/);
+  assert.match(html, /data-cover-background/);
+  assert.match(html, /Opening Digest/);
   assert.match(html, /August 10, 2026/);
+  assert.doesNotMatch(html, /radial-gradient|class="brand"|class="title"|SUPPLY CHAINS/);
+  assert.throws(() => coverHtml(''), /日期无效/);
+  assert.throws(() => coverHtml('August 10, 2026', { backgroundDataUrl: 'https://example.com/cover.png' }), /内联 PNG/);
+  await assert.rejects(
+    loadOpeningCoverBackground({ readFile: async () => Buffer.from('not a png') }),
+    /签名无效/,
+  );
 });
 
 test('opening digest uploads only its cover, renders options as text, reuses Zen template and schedules the send', async () => {
@@ -193,7 +213,7 @@ test('opening digest uploads only its cover, renders options as text, reuses Zen
   assert.equal(result.mediaId, 'customerio-newsletter:99');
   assert.deepEqual(uploads, ['opening-digest-cover-2026-08-10.png']);
   const create = requests.find((item) => item.url.endsWith('/v1/newsletters'));
-  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@2"/);
+  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@3"/);
   assert.match(create.body.body, /Zen Trading · 700 Leahy St/);
   assert.match(create.body.body, /<table role="table" aria-label="OIC Trending Options Volume top twenty"/);
   assert.match(create.body.body, /Company 20/);
@@ -204,6 +224,37 @@ test('opening digest uploads only its cover, renders options as text, reuses Zen
   assert.equal(schedule.body.scheduled_at, Date.parse('2026-08-10T14:30:00.000Z') / 1000);
   assert.equal(schedule.body.timezone, 'America/New_York');
   assert.equal(schedule.body.tz_match_enabled, false);
+});
+
+test('opening digest fails closed before newsletter creation when the locked cover cannot render or upload', async () => {
+  for (const setup of [
+    { renderCover: async () => { throw new Error('background checksum mismatch'); } },
+    {
+      renderCover: async () => Buffer.from('cover'),
+      uploadAsset: async () => ({ id: 1, path: '' }),
+    },
+  ]) {
+    const requests = [];
+    const channel = makeChannel({
+      readArticle: async () => ARTICLE,
+      now: () => new Date('2026-08-10T14:15:00.000Z'),
+      collectMetrics: async () => openingMetrics(),
+      captureOptions: async () => capturedOptions(),
+      uploadAsset: async () => ({ id: 1, path: 'https://assets.example/cover.png' }),
+      ...setup,
+      fetchFn: async (url) => {
+        requests.push(url);
+        if (url.includes('/customer_count')) return response({ count: 2 });
+        if (url.endsWith('/v1/segments/42')) return response({ segment: { id: 42, name: 'test2' } });
+        throw new Error(`Unexpected URL ${url}`);
+      },
+    });
+    await assert.rejects(
+      channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: {} }),
+      /background checksum mismatch|未返回 Opening Digest 封面 HTTPS URL/,
+    );
+    assert.equal(requests.some((url) => url.endsWith('/v1/newsletters')), false);
+  }
 });
 
 test('opening digest accepts any nonempty test2 audience and a late cron run sends immediately', async () => {

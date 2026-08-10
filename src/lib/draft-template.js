@@ -1,8 +1,8 @@
 export const FIXED_DRAFT_TEMPLATE_IDS = Object.freeze({
   'wechat-draft': 'zen-wechat/zen-trading@4',
-  'customerio-draft': 'zen-customerio/zen-research@2',
+  'customerio-draft': 'zen-customerio/zen-research@3',
   // Opening Digest deliberately reuses the established Zen newsletter design.
-  'customerio-opening-digest': 'zen-customerio/zen-research@2',
+  'customerio-opening-digest': 'zen-customerio/zen-research@3',
 });
 
 export function assertFixedDraftTemplate(channelId, channel) {

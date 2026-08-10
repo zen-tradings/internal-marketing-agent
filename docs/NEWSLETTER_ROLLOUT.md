@@ -22,6 +22,8 @@
 
 生产环境在 DigitalOcean 的 Chrome 会从 OIC/iVolatility iframe 提取 20 行、8 个字段，截图仅用于同会话前后数据一致性校验并立即丢弃；邮件正文渲染为移动端可读的 HTML 表格。校验失败会 fail closed，不创建 Newsletter；EOD cache 只保存结构化 JSON。市场快照固定检查 9 项，最多允许 1 项暂时不可用；2Y UST 使用美国财政部最新可用的 daily par yield 并在邮件中标明口径。测试阶段代码硬锁受众名称为 `test2`、拒绝空受众，且必须具备书面自动化授权。
 
+封面固定以 `assets/zen-opening-digest-background.png` 为唯一底图；源图尺寸、SHA-256 和输出 1240×620 尺寸都会在渲染时硬校验。Chrome 只在底图原有的中部留白区叠加 `OPENING DIGEST` 和当日美东日期，不重绘 Logo、星空、主标题或底部栏目，不访问外部图片 URL。底图、浏览器渲染或 Customer.io 上传任一失败都会 fail closed，不允许无封面邮件继续发送。
+
 API 创建的邮件会被 Customer.io workspace layout 包裹。Opening Digest 正文不再自行加入退订链接；发送前必须从 Customer.io 读回内容并证明 layout 恰好包含一个 `{% unsubscribe_url %}`、正文包含零个，避免最终邮件重复退订链接，同时保持 fail-closed 合规保障。
 - newsletter ID `1` 的首次尝试因退订链接误用变量语法，在 Customer.io 渲染阶段 3 条全部失败；没有错误邮件离开平台。保留该记录用于审计，不复用或扩容。
 - 内部分组目前只包含 Customer.io 中已经存在的 3 位内部人员。扩充体验名单时，先把人员加入该手工 segment，再回到 Review 页核对人数。
@@ -29,7 +31,7 @@ API 创建的邮件会被 Customer.io workspace layout 包裹。Opening Digest �
 Customer.io 的 App API 不能改写由 Design Studio 创建的邮件正文，因此保留两条发布路径：
 
 1. 现有 `Vol. 1` 使用 Customer.io Design Studio 模板，人工替换内容并试发。
-2. Slack `email:` 工作流固定使用仓库内 `zen-customerio/zen-research@2` 邮件 HTML 模板创建新的 Customer.io 草稿，适合后续稳定自动化。
+2. Slack `email:` 工作流固定使用仓库内 `zen-customerio/zen-research@3` 邮件 HTML 模板创建新的 Customer.io 草稿，适合后续稳定自动化。
 
 两条路径都必须经过 Customer.io Review 页，任何发送或排期都由人工确认。
 
