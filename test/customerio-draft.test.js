@@ -45,8 +45,8 @@ test('newsletter article:规范化 Vol. 版号并渲染品牌/退订/反馈结�
   const html = renderNewsletterEmail(parsed, config().customerio);
   assert.match(html, new RegExp(`data-zen-draft-template="${NEWSLETTER_TEMPLATE_ID}"`));
   assert.match(html, /ZEN RESEARCH FROM ZEN TRADING/);
-  assert.equal(NEWSLETTER_COMPANY_ADDRESS, '700 Leahy St');
-  assert.match(html, /Zen Trading · 700 Leahy St/);
+  assert.equal(NEWSLETTER_COMPANY_ADDRESS, '700 Leahy St, Redwood City, CA 94061');
+  assert.match(html, /Zen Trading · 700 Leahy St, Redwood City, CA 94061/);
   assert.doesNotMatch(renderNewsletterEmail(parsed, { companyAddress: 'Old address' }), /Old address/);
   assert.match(html, /HBM supply is the bottleneck/);
   assert.match(html, /\{% unsubscribe_url %\}/);

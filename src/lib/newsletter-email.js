@@ -2,7 +2,7 @@ import { FIXED_DRAFT_TEMPLATE_IDS } from './draft-template.js';
 
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?/;
 export const NEWSLETTER_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['customerio-draft'];
-export const NEWSLETTER_COMPANY_ADDRESS = '700 Leahy St';
+export const NEWSLETTER_COMPANY_ADDRESS = '700 Leahy St, Redwood City, CA 94061';
 
 export function normalizeEdition(value = 'Vol. 1') {
   const raw = String(value || 'Vol. 1').trim();

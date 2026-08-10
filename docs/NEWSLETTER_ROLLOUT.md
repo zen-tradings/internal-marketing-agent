@@ -11,7 +11,7 @@
 - Customer.io Pilot 分组：`Newsletter · Pilot`，segment ID `18`。这是第二批扩容名单，当前为空，加入人员前不能创建 Pilot 草稿。
 - 全量候选分组：`Valid Email Address`，segment ID `6`。切换前仍要在 Review 页核对订阅偏好与预计人数。
 - 新生成草稿的主题和邮件内品牌统一为 `Zen Research from Zen Trading · Vol. N`；不自动改写历史草稿或已发送邮件。
-- 仓库生成的 Customer.io 模板页脚实体地址固定为 `700 Leahy St`；环境变量、Prompt 和单次任务都不能覆盖。历史草稿和已发送邮件不会被回溯改写。
+- 仓库生成的 Customer.io 模板页脚实体地址固定为 `700 Leahy St, Redwood City, CA 94061`；环境变量、Prompt 和单次任务都不能覆盖。历史草稿和已发送邮件不会被回溯改写。
 - `Vol. 1` 已向内部 segment `17` 发送体验版：修正版 newsletter ID `5` 的 3 条消息全部 delivered，failed/suppressed 均为 0。
 
 ### Opening Digest 当前实现
@@ -100,7 +100,7 @@ CUSTOMERIO_NEWSLETTER_CONTACT_EMAIL=
 NEWSLETTER_EDITION="Vol. 1"
 ```
 
-`CUSTOMERIO_NEWSLETTER_HEADER_IMAGE_URL` 是开头品牌图的公开图片 URL(用 Customer.io 图床里的 https 地址,不要用仓库本地图);留空则不渲染顶部图。`CUSTOMERIO_NEWSLETTER_CONTACT_EMAIL` 是页脚展示的联系邮件，也是没有公开反馈页时满意度按钮的 `mailto:` 目标。配置 `CUSTOMERIO_NEWSLETTER_FEEDBACK_URL` 后，满意/不满意按钮会改为带 `rating=positive|negative` 和 `edition` 的网页链接。仓库模板保留法律强制的 `{% unsubscribe_url %}`，公司实体地址固定为 `700 Leahy St`。发送前可用 `npm run preview:newsletter` 生成本地 HTML 预览(不调用外部 API、不创建草稿)核对排版。
+`CUSTOMERIO_NEWSLETTER_HEADER_IMAGE_URL` 是开头品牌图的公开图片 URL(用 Customer.io 图床里的 https 地址,不要用仓库本地图);留空则不渲染顶部图。`CUSTOMERIO_NEWSLETTER_CONTACT_EMAIL` 是页脚展示的联系邮件，也是没有公开反馈页时满意度按钮的 `mailto:` 目标。配置 `CUSTOMERIO_NEWSLETTER_FEEDBACK_URL` 后，满意/不满意按钮会改为带 `rating=positive|negative` 和 `edition` 的网页链接。仓库模板保留法律强制的 `{% unsubscribe_url %}`，公司实体地址固定为 `700 Leahy St, Redwood City, CA 94061`。发送前可用 `npm run preview:newsletter` 生成本地 HTML 预览(不调用外部 API、不创建草稿)核对排版。
 
 所有新建 Newsletter 的可见发件人固定为 `Zen Trading <support@zentradings.com>`；发布渠道会在创建草稿前校验邮箱，防止环境变量漂移到其他发件地址。
 

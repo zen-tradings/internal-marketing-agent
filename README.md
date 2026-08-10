@@ -242,7 +242,7 @@ npm run test:update-golden
 
 ### Customer.io newsletter
 
-Newsletter 工作流使用 Customer.io App API 和固定模板 `zen-customerio/zen-research@3` 创建名为 `Zen Research from Zen Trading · Vol. N` 的 Newsletter Broadcast 草稿，不设置 `send_now` 或 `scheduled_at`。渲染后的 HTML 必须带有该模板标识，否则不会调用 Customer.io。模板页脚的实体地址固定为 `700 Leahy St`，不允许环境变量或单次任务覆盖。受众通过 `NEWSLETTER_AUDIENCE_STAGE=internal|pilot|full` 分阶段扩容：内部组是 `Newsletter · Internal Beta`（ID `17`），Pilot 组是 `Newsletter · Pilot`（ID `18`），全量候选组是 `Valid Email Address`（ID `6`）。Bot 会先读取 segment 实时人数并执行阶段人数门禁；`full` 还必须显式设置 `CUSTOMERIO_ALLOW_FULL_AUDIENCE=true`。
+Newsletter 工作流使用 Customer.io App API 和固定模板 `zen-customerio/zen-research@3` 创建名为 `Zen Research from Zen Trading · Vol. N` 的 Newsletter Broadcast 草稿，不设置 `send_now` 或 `scheduled_at`。渲染后的 HTML 必须带有该模板标识，否则不会调用 Customer.io。模板页脚的实体地址固定为 `700 Leahy St, Redwood City, CA 94061`，不允许环境变量或单次任务覆盖。受众通过 `NEWSLETTER_AUDIENCE_STAGE=internal|pilot|full` 分阶段扩容：内部组是 `Newsletter · Internal Beta`（ID `17`），Pilot 组是 `Newsletter · Pilot`（ID `18`），全量候选组是 `Valid Email Address`（ID `6`）。Bot 会先读取 segment 实时人数并执行阶段人数门禁；`full` 还必须显式设置 `CUSTOMERIO_ALLOW_FULL_AUDIENCE=true`。
 
 所有后续 Customer.io Newsletter 的可见发件人统一为 `Zen Trading <support@zentradings.com>`。渠道和只读检查脚本都会拒绝其他 From 地址，避免配置漂移。
 
