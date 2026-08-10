@@ -57,6 +57,10 @@ export default {
       prioritySources: [...new Set([...MARKET_PRIORITY_SOURCES, ...shared.prioritySources])],
       extraQueries: () => openingDigestResearchQueries(new Date()),
       extraQueryLimit: 10,
+      // Ten search lanes can return far more material than a 3-5 item digest needs.
+      // Keep every source/link available while bounding each excerpt so generation and
+      // severe-only review remain comfortably inside the global prompt limit.
+      maxSourceExcerptChars: 1200,
     };
   },
   collectContext: ({ config, fetchFn, asOf, taskContext, signal }) => collectOpeningDigestUniverseContext({

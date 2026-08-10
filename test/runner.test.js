@@ -928,9 +928,11 @@ test('Opening Digest alone may run ten extra queries and persists collected univ
     research: {
       prioritySources: [],
       extraQueryLimit: 10,
+      maxSourceExcerptChars: 1200,
       extraQueries: () => Array.from({ length: 12 }, (_, index) => ({
         query: `universe-${index + 1}`,
         kind: `universe-${index + 1}`,
+        numResults: index === 9 ? 12 : 6,
         openingDigestKind: index === 9 ? 'earnings-schedule' : 'universe-news',
       })),
     },
@@ -946,19 +948,28 @@ test('Opening Digest alone may run ten extra queries and persists collected univ
     }),
   });
   const searchQueries = [];
+  let searchResultSequence = 0;
   let completionPrompt = '';
   const result = await runWriter({
     workflow,
     input: 'opening',
-    config: baseConfig(),
+    config: {
+      ...baseConfig(),
+      writer: { ...baseConfig().writer, maxPromptChars: 60_000 },
+    },
     fetchFn: async (url, options) => {
       if (String(url).endsWith('/search')) {
         const body = JSON.parse(options.body);
         searchQueries.push(body.query);
-        return jsonResponse({ results: [{
-          title: body.query, url: `https://example.com/${searchQueries.length}`,
-          publishedDate: '2026-08-10T14:00:00Z', text: 'Supported market fact.',
-        }] });
+        return jsonResponse({ results: Array.from({ length: body.numResults || 5 }, () => {
+          searchResultSequence++;
+          return {
+            title: `${body.query} result ${searchResultSequence}`,
+            url: `https://example.com/${searchResultSequence}`,
+            publishedDate: '2026-08-10T14:00:00Z',
+            text: `Supported market fact. ${'x'.repeat(10_000)}`,
+          };
+        }) });
       }
       completionPrompt = JSON.parse(options.body).messages.at(-1).content;
       return jsonResponse({ choices: [{ message: { content: `---
@@ -980,10 +991,17 @@ The opening interpretation remains conditional on whether the initial breadth pe
   assert.equal(searchQueries.length, 11, 'one base search plus ten Opening Digest extras');
   assert.deepEqual(searchQueries.slice(1), Array.from({ length: 10 }, (_, index) => `universe-${index + 1}`));
   assert.match(completionPrompt, /TRACKED-CONTEXT META \+6\.00%/);
+  assert.ok(completionPrompt.length < 60_000, `prompt should stay under the configured global limit: ${completionPrompt.length}`);
   const artifact = JSON.parse(fs.readFileSync(path.join(workflow.workDir, 'opening-digest-universe.json'), 'utf8'));
   assert.equal(artifact.quotes.coverage.available, 72);
   const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
   assert.equal(trace.openingDigestUniverse.universeSize, 72);
+  assert.equal(trace.openingDigestResearchBudget.sourceCount, 72);
+  assert.equal(trace.openingDigestResearchBudget.configuredExcerptChars, 1200);
+  assert.ok(trace.openingDigestResearchBudget.appliedExcerptChars < 1200);
+  assert.equal(trace.openingDigestResearchBudget.promptChars, completionPrompt.length);
+  assert.equal(trace.openingDigestResearchBudget.maxPromptChars, 60_000);
+  assert.equal(trace.openingDigestResearchBudget.withinLimit, true);
 });
 
 test('company 财报深搜:传递 deep/financial report 参数,展开 subpages 并写调研轨迹', async () => {
