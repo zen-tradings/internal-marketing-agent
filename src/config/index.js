@@ -139,7 +139,6 @@ export function loadConfig(env = process.env) {
       feedbackUrl: env.CUSTOMERIO_NEWSLETTER_FEEDBACK_URL || '',
       headerImageUrl: env.CUSTOMERIO_NEWSLETTER_HEADER_IMAGE_URL || '',
       contactEmail: env.CUSTOMERIO_NEWSLETTER_CONTACT_EMAIL || '',
-      companyAddress: env.CUSTOMERIO_COMPANY_ADDRESS || '',
     },
     openingDigest: {
       enabled: booleanFlag(env.OPENING_DIGEST_ENABLED),

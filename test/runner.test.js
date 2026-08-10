@@ -149,6 +149,38 @@ test('成功:Exa 调研 + OpenRouter 写作后写出带 title frontmatter 的 ar
   assert.match(calls[1].body.messages[1].content, /写作任务:英伟达业绩/);
 });
 
+test('工作流确定性内容门禁在 article.md 落盘前执行并可 fail closed', async () => {
+  let validationCalls = 0;
+  const workflow = tempWorkflow({
+    mode: 'newsletter',
+    validateArticle: ({ article, research, asOf }) => {
+      validationCalls += 1;
+      assert.match(article, /待拦截正文/);
+      assert.equal(research.length, 1);
+      assert.ok(asOf instanceof Date);
+      const error = new Error('专用内容门禁未通过');
+      error.stage = 'gate';
+      throw error;
+    },
+  });
+  const fetchFn = async (url) => String(url).endsWith('/search')
+    ? jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/source', text: 'Evidence' }] })
+    : jsonResponse({ choices: [{ message: { content: '---\ntitle: Test\n---\n待拦截正文' } }] });
+  const result = await runWriter({
+    workflow,
+    input: 'test gate',
+    config: { writer: {
+      openrouterApiKey: 'or-key', model: 'model', baseUrl: 'https://openrouter.test/api/v1',
+      exaApiKey: 'exa-key', exaBaseUrl: 'https://exa.test',
+    } },
+    fetchFn,
+  });
+  assert.equal(validationCalls, 1);
+  assert.equal(result.ok, false);
+  assert.match(result.stderr, /专用内容门禁未通过/);
+  assert.equal(fs.existsSync(path.join(workflow.workDir, 'article.md')), false);
+});
+
 test('V1 应急链路为四个中文原创工作流注入确定性编辑方法并记录 trace', async () => {
   const workflow = tempWorkflow({
     id: 'wechat',

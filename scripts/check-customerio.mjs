@@ -48,8 +48,6 @@ if (!process.env.CUSTOMERIO_NEWSLETTER_FROM) errors.push('缺少 CUSTOMERIO_NEWS
 else if (senderEmail(process.env.CUSTOMERIO_NEWSLETTER_FROM) !== 'support@zentradings.com') {
   errors.push('CUSTOMERIO_NEWSLETTER_FROM 必须使用 support@zentradings.com');
 }
-if (!process.env.CUSTOMERIO_COMPANY_ADDRESS) errors.push('缺少 CUSTOMERIO_COMPANY_ADDRESS');
-
 const list = await request('/v1/newsletters');
 const expectedName = `Zen Research from Zen Trading · ${edition}`;
 const editions = await Promise.all((list.newsletters || [])

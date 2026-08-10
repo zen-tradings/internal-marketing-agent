@@ -8,6 +8,13 @@ import { isUsEquitySession, easternDateKey } from '../src/lib/us-equity-calendar
 import { coverHtml, OPENING_COVER_HEIGHT, OPENING_COVER_WIDTH } from '../src/lib/opening-digest-cover.js';
 import { cacheEodOptions, makeChannel, renderOptionsHtml } from '../src/channels/customerio-opening-digest.js';
 import { countTrendingRows, validateTrendingOptionsData } from '../src/lib/options-volume.js';
+import { collectOpeningMetrics, validateOpeningMetrics } from '../src/lib/opening-digest-metrics.js';
+import {
+  openingDigestResearchQueries,
+  openingDigestSearchInput,
+  previousRegularClose,
+  validateOpeningDigestArticle,
+} from '../src/lib/opening-digest-content.js';
 
 const ARTICLE = `---
 title: Zen Opening Digest
@@ -16,10 +23,12 @@ preheader: Morning market signals.
 edition: 2026-08-10
 ---
 ## Today's catalysts
-- [A catalyst](https://example.com/a) matters.
+- [A catalyst](https://example.com/a) has a concrete and material implication for today's US equity opening session.
+- [Another catalyst](https://example.com/b) has a concrete and material implication for today's US equity opening session.
+- [Third catalyst](https://example.com/c) has a distinct and sufficiently detailed implication for today's US equity opening session.
 
 ## Market read
-A falsifiable market read.`;
+A restrained and falsifiable market read that clearly states the condition that would invalidate the opening interpretation during today's session.`;
 
 const OPTIONS_DATA = {
   asOf: 'As of 10 Aug 2026, 10:15:00 EDT',
@@ -39,15 +48,24 @@ function capturedOptions(overrides = {}) {
   };
 }
 
+function openingMetrics() {
+  return ['SPY', 'QQQ', 'IWM', 'VIX', '2Y UST', '10Y UST', 'DXY', 'WTI', 'Gold']
+    .map((label, index) => ({ label, symbol: label, value: 100 + index, prior: 99 + index, changePct: 1 }));
+}
+
 function response(data, { status = 200, headers = { 'content-type': 'application/json' } } = {}) {
   return { ok: status >= 200 && status < 300, status, headers: { get: (key) => headers[key.toLowerCase()] || '' }, async text() { return typeof data === 'string' ? data : JSON.stringify(data); } };
+}
+
+function customerIoContents() {
+  return { contents: [{ id: 1, type: 'email', body: '<html>digest</html>', layout: '{{ content }}\n<a href="{% unsubscribe_url %}">Unsubscribe</a>' }] };
 }
 
 function config() {
   return {
     customerio: {
       appApiKey: 'cio-key', baseUrl: 'https://api.customer.test', timeoutMs: 30000,
-      from: 'Zen Trading <support@zentradings.com>', companyAddress: '1 Market St',
+      from: 'Zen Trading <support@zentradings.com>',
       siteUrl: 'https://zentradings.com', contactEmail: 'support@zentradings.com', feedbackUrl: '',
     },
     openingDigest: {
@@ -63,6 +81,62 @@ test('US equities calendar rejects weekends and recurring NYSE holidays', () => 
   assert.equal(isUsEquitySession(new Date('2026-07-04T16:00:00Z')), false);
   assert.equal(isUsEquitySession(new Date('2026-07-06T16:00:00Z')), true);
   assert.equal(easternDateKey(new Date('2026-08-10T14:00:00Z')), '2026-08-10');
+});
+
+test('opening digest research uses a market-specific query and the prior regular close window', () => {
+  const now = new Date('2026-08-10T14:15:00.000Z');
+  assert.equal(previousRegularClose(now).toISOString(), '2026-08-07T20:00:00.000Z');
+  assert.equal(previousRegularClose(new Date('2026-07-06T14:15:00.000Z')).toISOString(), '2026-07-02T20:00:00.000Z');
+  assert.equal(previousRegularClose(new Date('2026-01-05T15:15:00.000Z')).toISOString(), '2026-01-02T21:00:00.000Z');
+  assert.match(openingDigestSearchInput(now), /US equity opening digest for 2026-08-10/);
+  assert.doesNotMatch(openingDigestSearchInput(now), /today's Zen/i);
+  const queries = openingDigestResearchQueries(now);
+  assert.equal(queries.length, 3);
+  assert.ok(queries.every((query) => query.startPublishedDate === '2026-08-07T20:00:00.000Z'));
+  assert.ok(queries.every((query) => query.endPublishedDate === now.toISOString()));
+});
+
+test('opening digest content gate requires 3-5 unique current-window catalysts', () => {
+  const now = new Date('2026-08-10T14:15:00.000Z');
+  const research = ['a', 'b', 'c'].map((id, index) => ({
+    url: `https://example.com/${id}`,
+    publishedDate: new Date(now.getTime() - (index + 1) * 60_000).toISOString(),
+  }));
+  assert.equal(validateOpeningDigestArticle({
+    article: ARTICLE, research, asOf: now, requireFreshSources: true,
+  }).catalystCount, 3);
+  assert.throws(() => validateOpeningDigestArticle({
+    article: ARTICLE.replace(research[0].url, 'https://example.com/unmatched'),
+    research, asOf: now, requireFreshSources: true,
+  }), /未匹配到本次检索来源/);
+  const stale = ARTICLE.replace('has a concrete and material implication for today\'s US equity opening session.', 'is background rather than a current-window catalyst.');
+  assert.throws(() => validateOpeningDigestArticle({ article: stale, asOf: now }), /旧闻或背景/);
+});
+
+test('opening metrics uses the Treasury daily 2Y series and requires at least eight valid cards', async () => {
+  const metrics = await collectOpeningMetrics({
+    now: () => new Date('2026-08-10T14:15:00.000Z'),
+    fetchFn: async (url) => {
+      if (String(url).includes('home.treasury.gov')) return {
+        ok: true,
+        async text() { return 'Date,"2 Yr"\n08/07/2026,4.19\n08/06/2026,4.14\n'; },
+      };
+      return {
+        ok: true,
+        async json() {
+          return { chart: { result: [{
+            regularMarketTime: 1786371300,
+            timestamp: [1786284900, 1786371300],
+            indicators: { quote: [{ close: [100, 101] }] },
+          }] } };
+        },
+      };
+    },
+  });
+  assert.equal(metrics.find((metric) => metric.label === '2Y UST').value, 4.19);
+  assert.match(metrics.find((metric) => metric.label === '2Y UST').sourceNote, /Treasury daily par yield/);
+  assert.equal(validateOpeningMetrics(metrics), metrics);
+  assert.throws(() => validateOpeningMetrics(metrics.map((metric, index) => index < 2 ? { ...metric, unavailable: true } : metric)), /可用数据不足/);
 });
 
 test('iVolatility component text validates a complete native Top 20 without semantic table rows', () => {
@@ -104,12 +178,13 @@ test('opening digest uploads only its cover, renders options as text, reuses Zen
     renderCover: async () => Buffer.from('cover'),
     captureOptions: async () => capturedOptions(),
     uploadAsset: async (args) => { uploads.push(args.filename); return { id: uploads.length, path: `https://assets.example/${args.filename}` }; },
-    collectMetrics: async () => [{ label: 'SPY', value: 640, prior: 630, changePct: 1.58 }],
+    collectMetrics: async () => openingMetrics(),
     fetchFn: async (url, options = {}) => {
       requests.push({ url, options, body: options.body ? JSON.parse(options.body) : undefined });
       if (url.includes('/customer_count')) return response({ count: 4 });
       if (url.endsWith('/v1/segments/42')) return response({ segment: { id: 42, name: 'test 2' } });
       if (url.endsWith('/v1/newsletters')) return response({ newsletter: { id: 99 } });
+      if (url.endsWith('/v1/newsletters/99/contents')) return response(customerIoContents());
       if (url.endsWith('/schedule')) return response({});
       throw new Error(`Unexpected URL ${url}`);
     },
@@ -118,32 +193,39 @@ test('opening digest uploads only its cover, renders options as text, reuses Zen
   assert.equal(result.mediaId, 'customerio-newsletter:99');
   assert.deepEqual(uploads, ['opening-digest-cover-2026-08-10.png']);
   const create = requests.find((item) => item.url.endsWith('/v1/newsletters'));
-  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@1"/);
+  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@2"/);
+  assert.match(create.body.body, /Zen Trading · 700 Leahy St/);
   assert.match(create.body.body, /<table role="table" aria-label="OIC Trending Options Volume top twenty"/);
   assert.match(create.body.body, /Company 20/);
   assert.doesNotMatch(create.body.body, /opening-digest-options-.*\.png/);
+  assert.doesNotMatch(create.body.body, /unsubscribe_url/);
   assert.equal(create.body.subscription_topic_id, 19);
-  assert.ok(requests.some((item) => item.url.endsWith('/schedule')));
+  const schedule = requests.find((item) => item.url.endsWith('/schedule'));
+  assert.equal(schedule.body.scheduled_at, Date.parse('2026-08-10T14:30:00.000Z') / 1000);
+  assert.equal(schedule.body.timezone, 'America/New_York');
+  assert.equal(schedule.body.tz_match_enabled, false);
 });
 
-test('opening digest accepts any current audience size when the segment is test2', async () => {
+test('opening digest accepts any nonempty test2 audience and a late cron run sends immediately', async () => {
   const requests = [];
   const channel = makeChannel({
     readArticle: async () => ARTICLE,
+    now: () => new Date('2026-08-10T14:45:00.000Z'),
     renderCover: async () => Buffer.from('cover'),
     captureOptions: async () => capturedOptions(),
     uploadAsset: async () => ({ id: 1, path: 'https://assets.example/image.png' }),
-    collectMetrics: async () => [],
+    collectMetrics: async () => openingMetrics(),
     fetchFn: async (url) => {
       requests.push(url);
       if (url.includes('/customer_count')) return response({ count: 37 });
       if (url.endsWith('/v1/segments/42')) return response({ segment: { id: 42, name: 'test2' } });
       if (url.endsWith('/v1/newsletters')) return response({ newsletter: { id: 100 } });
+      if (url.endsWith('/v1/newsletters/100/contents')) return response(customerIoContents());
       if (url.endsWith('/send')) return response({});
       throw new Error(`Unexpected URL ${url}`);
     },
   });
-  const result = await channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: {}, source: 'manual' });
+  const result = await channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: {}, source: 'cron' });
   assert.equal(result.audienceRecipientCount, 37);
   assert.ok(requests.some((url) => url.endsWith('/v1/newsletters/100/send')));
 });
@@ -153,17 +235,18 @@ test('manual Slack digest always captures the live page and labels off-session d
   const uploads = [];
   let captures = 0;
   const channel = makeChannel({
-    readArticle: async () => ARTICLE,
+    readArticle: async () => ARTICLE.replaceAll('2026-08-10', '2026-08-08'),
     now: () => new Date('2026-08-08T15:30:00.000Z'),
     renderCover: async () => Buffer.from('cover'),
     captureOptions: async () => { captures += 1; return capturedOptions({ capturedAt: '2026-08-08T15:29:00.000Z' }); },
     uploadAsset: async (args) => { uploads.push(args.filename); return { id: uploads.length, path: `https://assets.example/${args.filename}` }; },
-    collectMetrics: async () => [],
+    collectMetrics: async () => openingMetrics(),
     fetchFn: async (url, options = {}) => {
       requests.push({ url, body: options.body ? JSON.parse(options.body) : undefined });
       if (url.includes('/customer_count')) return response({ count: 2 });
       if (url.endsWith('/v1/segments/42')) return response({ segment: { id: 42, name: 'test2' } });
       if (url.endsWith('/v1/newsletters')) return response({ newsletter: { id: 101 } });
+      if (url.endsWith('/v1/newsletters/101/contents')) return response(customerIoContents());
       if (url.endsWith('/send')) return response({});
       throw new Error(`Unexpected URL ${url}`);
     },
@@ -178,6 +261,7 @@ test('manual Slack digest always captures the live page and labels off-session d
 test('opening digest rejects a configured segment whose name is not test2', async () => {
   const channel = makeChannel({
     readArticle: async () => ARTICLE,
+    now: () => new Date('2026-08-10T14:45:00.000Z'),
     fetchFn: async (url) => {
       if (url.includes('/customer_count')) return response({ count: 2 });
       if (url.endsWith('/v1/segments/42')) return response({ segment: { id: 42, name: 'customers' } });
@@ -185,6 +269,46 @@ test('opening digest rejects a configured segment whose name is not test2', asyn
     },
   });
   await assert.rejects(channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: {} }), /只能发送到 Customer\.io segment test2/);
+});
+
+test('opening digest rejects an empty test2 audience before creating assets or a newsletter', async () => {
+  let coverCalls = 0;
+  const channel = makeChannel({
+    readArticle: async () => ARTICLE,
+    now: () => new Date('2026-08-10T14:45:00.000Z'),
+    renderCover: async () => { coverCalls += 1; return Buffer.from('cover'); },
+    fetchFn: async (url) => {
+      if (url.includes('/customer_count')) return response({ count: 0 });
+      if (url.endsWith('/v1/segments/42')) return response({ segment: { id: 42, name: 'test2' } });
+      throw new Error(`Unexpected URL ${url}`);
+    },
+  });
+  await assert.rejects(channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: {} }), /test2 受众为空/);
+  assert.equal(coverCalls, 0);
+});
+
+test('opening digest requires exactly one Customer.io layout unsubscribe and none in the body', async () => {
+  const requests = [];
+  const channel = makeChannel({
+    readArticle: async () => ARTICLE,
+    now: () => new Date('2026-08-10T14:45:00.000Z'),
+    renderCover: async () => Buffer.from('cover'),
+    captureOptions: async () => capturedOptions(),
+    uploadAsset: async () => ({ id: 1, path: 'https://assets.example/image.png' }),
+    collectMetrics: async () => openingMetrics(),
+    fetchFn: async (url) => {
+      requests.push(url);
+      if (url.includes('/customer_count')) return response({ count: 2 });
+      if (url.endsWith('/v1/segments/42')) return response({ segment: { id: 42, name: 'test2' } });
+      if (url.endsWith('/v1/newsletters')) return response({ newsletter: { id: 102 } });
+      if (url.endsWith('/v1/newsletters/102/contents')) return response({
+        contents: [{ body: '<a href="{% unsubscribe_url %}">Unsubscribe</a>', layout: '<a href="{% unsubscribe_url %}">Unsubscribe</a>' }],
+      });
+      throw new Error(`Unexpected URL ${url}`);
+    },
+  });
+  await assert.rejects(channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: {} }), /退订链接归属异常/);
+  assert.equal(requests.some((url) => url.endsWith('/send') || url.endsWith('/schedule')), false);
 });
 
 test('opening digest reuses a persisted Customer.io newsletter id after a send retry', async () => {
@@ -195,11 +319,16 @@ test('opening digest reuses a persisted Customer.io newsletter id after a send r
     renderCover: async () => Buffer.from('cover'),
     captureOptions: async () => capturedOptions(),
     uploadAsset: async () => ({ id: 1, path: 'https://assets.example/image.png' }),
-    collectMetrics: async () => [],
+    collectMetrics: async () => openingMetrics(),
     fetchFn: async (url, options = {}) => {
       requests.push({ url, options });
       if (url.includes('/customer_count')) return response({ count: 4 });
       if (url.endsWith('/v1/segments/42')) return response({ segment: { id: 42, name: 'test2' } });
+      if (url.endsWith('/v1/newsletters/99')) return response({ newsletter: {
+        id: 99, name: 'Zen Opening Digest · 2026-08-10', sent_at: null,
+        recipient_segment_ids: [42], subscription_topic_id: 19,
+      } });
+      if (url.endsWith('/v1/newsletters/99/contents')) return response(customerIoContents());
       if (url.endsWith('/send')) return response({});
       throw new Error(`Unexpected URL ${url}`);
     },
@@ -207,6 +336,29 @@ test('opening digest reuses a persisted Customer.io newsletter id after a send r
   await channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: {}, source: 'manual', existingRemoteId: '99' });
   assert.equal(requests.some((item) => item.url.endsWith('/v1/newsletters')), false);
   assert.ok(requests.some((item) => item.url.endsWith('/v1/newsletters/99/send')));
+});
+
+test('opening digest treats an already-sent matching remote newsletter as authoritative', async () => {
+  const requests = [];
+  const channel = makeChannel({
+    readArticle: async () => ARTICLE,
+    now: () => new Date('2026-08-10T14:45:00.000Z'),
+    fetchFn: async (url) => {
+      requests.push(url);
+      if (url.includes('/customer_count')) return response({ count: 2 });
+      if (url.endsWith('/v1/segments/42')) return response({ segment: { id: 42, name: 'test2' } });
+      if (url.endsWith('/v1/newsletters/99')) return response({ newsletter: {
+        id: 99, name: 'Zen Opening Digest · 2026-08-10', sent_at: 1786372201,
+        recipient_segment_ids: [42], subscription_topic_id: 19,
+      } });
+      throw new Error(`Unexpected URL ${url}`);
+    },
+  });
+  const result = await channel.publish({
+    articlePath: '/tmp/article.md', config: config(), workflow: {}, source: 'cron', existingRemoteId: '99',
+  });
+  assert.equal(result.mediaId, 'customerio-newsletter:99');
+  assert.equal(requests.some((url) => url.endsWith('/send') || url.endsWith('/schedule') || url.endsWith('/contents')), false);
 });
 
 test('options HTML reproduces all source values as text without an image or media-query dependency', () => {
@@ -243,10 +395,11 @@ test('opening digest fails closed before creating a newsletter when options vali
   bad.rows.pop();
   const channel = makeChannel({
     readArticle: async () => ARTICLE,
+    now: () => new Date('2026-08-10T14:45:00.000Z'),
     renderCover: async () => Buffer.from('cover'),
     captureOptions: async () => capturedOptions({ data: bad }),
     uploadAsset: async () => ({ id: 1, path: 'https://assets.example/cover.png' }),
-    collectMetrics: async () => [],
+    collectMetrics: async () => openingMetrics(),
     fetchFn: async (url) => {
       requests.push(url);
       if (url.includes('/customer_count')) return response({ count: 2 });

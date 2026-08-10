@@ -293,6 +293,9 @@ export async function runWriter({
       article = canonicalizeTerminalReferences(article, research, sourcePolicy);
     }
     validateArticleSourceContract(article, research, sourcePolicy);
+    if (typeof workflow.validateArticle === 'function') {
+      workflow.validateArticle({ article, research, asOf: new Date() });
+    }
 
     throwIfTaskCancelled(signal);
     trace.finishedAt = new Date().toISOString();

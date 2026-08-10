@@ -2,6 +2,7 @@ import { FIXED_DRAFT_TEMPLATE_IDS } from './draft-template.js';
 
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?/;
 export const NEWSLETTER_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['customerio-draft'];
+export const NEWSLETTER_COMPANY_ADDRESS = '700 Leahy St';
 
 export function normalizeEdition(value = 'Vol. 1') {
   const raw = String(value || 'Vol. 1').trim();
@@ -34,8 +35,11 @@ export function renderNewsletterEmail(article, options = {}) {
   const feedbackUrl = safeUrl(options.feedbackUrl);
   const headerImageUrl = safeUrl(options.headerImageUrl);
   const contactEmail = safeEmail(options.contactEmail);
-  const address = escapeHtml(options.companyAddress || 'Company address required before sending');
+  const address = escapeHtml(NEWSLETTER_COMPANY_ADDRESS);
   const content = options.contentHtml || renderMarkdown(article.body);
+  const unsubscribe = options.includeUnsubscribe === false
+    ? ''
+    : '<p style="margin:0 0 8px"><a href="{% unsubscribe_url %}" class="untracked" style="color:#173f43">Unsubscribe</a></p>';
   const feedback = renderFeedback({ feedbackUrl, contactEmail, edition: article.edition });
   // 开头品牌图:仅在配置了公开图片 URL 时渲染,顶部与卡片圆角对齐,自适应宽度。
   const headerImage = headerImageUrl
@@ -62,7 +66,7 @@ export function renderNewsletterEmail(article, options = {}) {
       </td></tr>
       <tr><td style="padding:20px 32px;border-top:1px solid #dcd8d5;font-size:11px;line-height:1.6;font-weight:300;color:#66787a">
         ${contact}
-        <p style="margin:0 0 8px"><a href="{% unsubscribe_url %}" class="untracked" style="color:#173f43">Unsubscribe</a></p>
+        ${unsubscribe}
         <p style="margin:0">Zen Trading · ${address}</p>
       </td></tr>
     </table>
