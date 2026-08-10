@@ -10,47 +10,62 @@ export function validateOpeningDigestArticle({
   asOf = new Date(),
   requireFreshSources = false,
 } = {}) {
+  return auditOpeningDigestArticle({ article, research, asOf, requireFreshSources });
+}
+
+export function auditOpeningDigestArticle({
+  article,
+  research = [],
+  asOf = new Date(),
+  requireFreshSources = false,
+} = {}) {
+  const warnings = [];
   const body = String(article || '').replace(FRONTMATTER_RE, '').trim();
   const headings = [...body.matchAll(/^##\s+(.+?)\s*$/gm)].map((match) => match[1]);
   if (JSON.stringify(headings) !== JSON.stringify(REQUIRED_HEADINGS)) {
-    throw digestGateError(`Opening Digest 正文必须且只能按顺序包含 ${REQUIRED_HEADINGS.map((item) => `## ${item}`).join('、')}`);
+    warnings.push(`Opening Digest 正文应按顺序只包含 ${REQUIRED_HEADINGS.map((item) => `## ${item}`).join('、')}`);
   }
 
-  const catalystsStart = body.indexOf(`## ${REQUIRED_HEADINGS[0]}`) + `## ${REQUIRED_HEADINGS[0]}`.length;
+  const catalystsHeadingAt = body.indexOf(`## ${REQUIRED_HEADINGS[0]}`);
   const marketReadStart = body.indexOf(`## ${REQUIRED_HEADINGS[1]}`);
-  const catalystSection = body.slice(catalystsStart, marketReadStart).trim();
-  const marketRead = body.slice(marketReadStart + `## ${REQUIRED_HEADINGS[1]}`.length).trim();
+  const catalystsStart = catalystsHeadingAt < 0
+    ? 0
+    : catalystsHeadingAt + `## ${REQUIRED_HEADINGS[0]}`.length;
+  const catalystSection = body.slice(catalystsStart, marketReadStart < 0 ? body.length : marketReadStart).trim();
+  const marketRead = marketReadStart < 0
+    ? ''
+    : body.slice(marketReadStart + `## ${REQUIRED_HEADINGS[1]}`.length).trim();
   const catalystItems = catalystSection.split('\n').map((line) => line.trim()).filter((line) => /^[-*]\s+/.test(line));
   if (catalystItems.length < 3 || catalystItems.length > 5) {
-    throw digestGateError(`Opening Digest Today's catalysts 必须包含 3-5 条，当前为 ${catalystItems.length} 条`);
+    warnings.push(`Opening Digest Today's catalysts 建议包含 3-5 条，当前为 ${catalystItems.length} 条`);
   }
   if (catalystSection.split('\n').map((line) => line.trim()).filter(Boolean).some((line) => !/^[-*]\s+/.test(line))) {
-    throw digestGateError("Opening Digest Today's catalysts 只能包含单行 Markdown 列表项");
+    warnings.push("Opening Digest Today's catalysts 建议只包含单行 Markdown 列表项");
   }
 
   const links = [];
   for (const [index, item] of catalystItems.entries()) {
     const itemLinks = [...item.matchAll(/\[[^\]]+\]\((https?:\/\/[^\s)]+)\)/g)].map((match) => match[1]);
     if (itemLinks.length !== 1) {
-      throw digestGateError(`Opening Digest 第 ${index + 1} 条 catalyst 必须且只能包含一个直接来源链接`);
+      warnings.push(`Opening Digest 第 ${index + 1} 条 catalyst 建议只包含一个直接来源链接`);
     }
     const explanation = item.replace(/^[-*]\s+/, '').replace(/\[[^\]]+\]\(https?:\/\/[^\s)]+\)/g, '').replace(/^[\s—–:-]+/, '').trim();
     if (explanation.length < 40) {
-      throw digestGateError(`Opening Digest 第 ${index + 1} 条 catalyst 缺少充分的事实和影响说明`);
+      warnings.push(`Opening Digest 第 ${index + 1} 条 catalyst 缺少充分的事实和影响说明`);
     }
     if (STALE_ADMISSION_RE.test(item)) {
-      throw digestGateError(`Opening Digest 第 ${index + 1} 条 catalyst 自述为旧闻或背景，不能进入今日催化剂`);
+      warnings.push(`Opening Digest 第 ${index + 1} 条 catalyst 自述为旧闻或背景`);
     }
-    links.push(itemLinks[0]);
+    links.push(...itemLinks);
   }
   if (new Set(links.map(normalizedUrl)).size !== links.length) {
-    throw digestGateError('Opening Digest catalyst 来源链接不得重复');
+    warnings.push('Opening Digest catalyst 来源链接存在重复');
   }
   if (marketRead.length < 80 || marketRead.length > 1600) {
-    throw digestGateError(`Opening Digest Market read 长度异常:${marketRead.length}`);
+    warnings.push(`Opening Digest Market read 长度异常:${marketRead.length}`);
   }
   if (/^[-*]\s+/m.test(marketRead) || STALE_ADMISSION_RE.test(marketRead)) {
-    throw digestGateError('Opening Digest Market read 不得用列表代替判断，也不得以没有新消息或旧背景作为结论');
+    warnings.push('Opening Digest Market read 建议使用判断段落，不应以没有新消息或旧背景作为结论');
   }
 
   if (requireFreshSources) {
@@ -58,18 +73,28 @@ export function validateOpeningDigestArticle({
     const cutoff = previousRegularClose(asOf);
     for (const [index, link] of links.entries()) {
       const source = sources.get(normalizedUrl(link));
-      if (!source) throw digestGateError(`Opening Digest 第 ${index + 1} 条 catalyst 未匹配到本次检索来源`);
+      if (!source) {
+        warnings.push(`Opening Digest 第 ${index + 1} 个 catalyst 链接未匹配到本次检索来源`);
+        continue;
+      }
       const published = new Date(source.publishedDate || '');
       if (!Number.isFinite(published.getTime())) {
-        throw digestGateError(`Opening Digest 第 ${index + 1} 条 catalyst 缺少可验证的发布日期，无法证明属于当前开盘窗口`);
+        warnings.push(`Opening Digest 第 ${index + 1} 个 catalyst 链接缺少可验证的发布日期`);
+        continue;
       }
       if (published.getTime() < cutoff.getTime() || published.getTime() > asOf.getTime() + 5 * 60_000) {
-        throw digestGateError(`Opening Digest 第 ${index + 1} 条 catalyst 不在上一交易日收盘至当前的时间窗口内`);
+        warnings.push(`Opening Digest 第 ${index + 1} 个 catalyst 链接不在上一交易日收盘至当前的时间窗口内`);
       }
     }
   }
 
-  return { catalystCount: catalystItems.length, links, marketReadLength: marketRead.length };
+  return {
+    warnings,
+    stats: { catalystCount: catalystItems.length, links, marketReadLength: marketRead.length },
+    catalystCount: catalystItems.length,
+    links,
+    marketReadLength: marketRead.length,
+  };
 }
 
 export function openingDigestResearchQueries(asOf = new Date()) {
@@ -132,10 +157,4 @@ function normalizedUrl(value) {
     url.pathname = url.pathname.replace(/\/+$/, '') || '/';
     return url.toString();
   } catch { return String(value || '').trim(); }
-}
-
-function digestGateError(message) {
-  const error = new Error(message);
-  error.stage = 'gate';
-  return error;
 }

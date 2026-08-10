@@ -151,8 +151,6 @@ export function loadConfig(env = process.env) {
       segmentId: positiveInteger(env.CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID),
       subscriptionTopicId: positiveInteger(env.CUSTOMERIO_OPENING_DIGEST_TOPIC_ID),
       assetFolderId: positiveInteger(env.CUSTOMERIO_OPENING_DIGEST_ASSET_FOLDER_ID),
-      eodCachePath: env.OPENING_DIGEST_EOD_CACHE_PATH
-        || path.join(env.WORK_DIR || '/var/lib/zen-content-hub/work', 'opening-digest-options-eod.json'),
       browserExecutablePath: env.OPENING_DIGEST_BROWSER_EXECUTABLE
         || env.TRANSLATION_BROWSER_EXECUTABLE
         || '/usr/bin/google-chrome',

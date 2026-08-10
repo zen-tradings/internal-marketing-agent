@@ -18,7 +18,7 @@ function promptTemplate() {
 
 Write in English. This is a short US market opening digest, not investment advice.
 Use 3 to 5 sourced market-moving news items from the prior regular close through the current opening window. For each item include a direct source link and one concise reason it matters. Then write one restrained, falsifiable “Market read” paragraph. Do not invent price levels, options activity, or macro values: those are rendered separately by the system.
-Do not use evergreen background, previously disclosed items, or sources without a verifiable publication date as today's catalysts. If fewer than 3 qualifying items are supported by the supplied research, fail rather than padding the digest with stale material.
+Do not use evergreen background, previously disclosed items, or sources without a verifiable publication date as today's catalysts. Never pad the digest with stale material; use only the number of supported current-window items available.
 
 Return Markdown only with this frontmatter:
 ---
@@ -37,6 +37,7 @@ export default {
   mode: 'newsletter',
   sourcePolicy: { officialFirst: false, requireCitations: true, minOfficialSources: 0, failClosed: true },
   factReview: true,
+  factReviewPolicy: 'severe-only',
   triggers: ['slack', 'cron:15 10 * * 1-5'],
   cronTimezone: 'America/New_York',
   get cronInput() { return openingDigestSearchInput(new Date()); },

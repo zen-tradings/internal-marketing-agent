@@ -13,7 +13,6 @@ import { isTransientSocketModeError } from './lib/slack-resilience.js';
 import { runWorkDir, workflowForRun } from './lib/run-workdir.js';
 import { startHealthServer, stopHealthServer } from './lib/health.js';
 import { assertFixedDraftTemplate } from './lib/draft-template.js';
-import { isSameEasternDay } from './lib/us-equity-calendar.js';
 import {
   cancellationErrorFromSignal,
   isTaskCancelled,
@@ -28,13 +27,11 @@ import companyWorkflow from './workflows/company.js';
 import emailWorkflow from './workflows/email.js';
 import macroWorkflow from './workflows/macro.js';
 import openingDigestWorkflow from './workflows/opening-digest.js';
-import openingDigestEodWorkflow from './workflows/opening-digest-eod.js';
 import qdiiWorkflow from './workflows/qdii.js';
 import mockChannel from './channels/mock.js';
 import wechatDraft from './channels/wechat-draft.js';
 import customerioDraft from './channels/customerio-draft.js';
 import { makeChannel as makeOpeningDigestChannel } from './channels/customerio-opening-digest.js';
-import { makeChannel as makeOpeningDigestCacheChannel } from './channels/customerio-opening-digest-cache.js';
 
 dotenv.config({ override: true });
 
@@ -48,7 +45,6 @@ const WORKFLOWS = {
   email: emailWorkflow,
   macro: macroWorkflow,
   'opening-digest': openingDigestWorkflow,
-  'opening-digest-eod': openingDigestEodWorkflow,
   qdii: qdiiWorkflow,
 };
 const CHANNELS = {
@@ -56,7 +52,6 @@ const CHANNELS = {
   'wechat-draft': wechatDraft,
   'customerio-draft': customerioDraft,
   'customerio-opening-digest': makeOpeningDigestChannel(),
-  'customerio-opening-digest-cache': makeOpeningDigestCacheChannel(),
 };
 
 export async function runWithRetry(
@@ -109,12 +104,6 @@ export function makeHandler(deps) {
       const wf = workflows[run.workflowId];
       if (!wf) throw stageError('config', `未知工作流:${run.workflowId}`);
       runtimeWorkflow = wf.workDir ? workflowForRun(wf, run.id) : wf;
-      // OIC re-auth is a deliberate paused state, not a fresh edition. Preserve
-      // the original editorial article (and the channel's persisted metrics)
-      // when the retry is still on the same ET date.
-      const reuseOpeningDigestArticle = (persisted.status === 'waiting_options_auth' || persisted.stage === 'options-auth')
-        && runtimeWorkflow.id === 'opening-digest'
-        && fs.existsSync(path.join(runtimeWorkflow.workDir, 'article.md'));
       store.setStatus(run.id, 'running', { startedAt: Date.now(), stage: null, error: null, nextRetryAt: null });
       setPhase('generate');
 
@@ -178,11 +167,9 @@ export function makeHandler(deps) {
           return { title: existing.title, mediaId: existing.media_id };
         }
 
-        const resumeFromCheckpoint = Boolean(run.restored || writerAttempt > 0 || reuseOpeningDigestArticle);
+        const resumeFromCheckpoint = Boolean(run.restored || writerAttempt > 0);
         writerAttempt += 1;
-        const res = reuseOpeningDigestArticle
-          ? { ok: true, articlePath: path.join(runtimeWorkflow.workDir, 'article.md'), sources: [] }
-          : await runWriter({
+        const res = await runWriter({
             workflow: runtimeWorkflow,
             input: run.input,
             config,
@@ -209,7 +196,7 @@ export function makeHandler(deps) {
         }
         if (!res.ok) { const err = new Error(res.stderr); err.stage = 'generate'; throw err; }
         throwIfTaskCancelled(signal);
-        if (Array.isArray(res.warnings) && res.warnings.length) {
+        if (runtimeWorkflow.id !== 'opening-digest' && Array.isArray(res.warnings) && res.warnings.length) {
           const highRiskRetained = res.warnings
             .filter((item) => /保留待人工复核\([^/]+\/high\//.test(item)).length;
           const warningHeading = runtimeWorkflow.mode === 'translation'
@@ -264,6 +251,7 @@ export function makeHandler(deps) {
           onCreated: ({ remoteId }) => store.setRemoteId(run.id, remoteId),
           resumeFromCheckpoint,
           contentPolicy: res.contentPolicy || {},
+          contentMode: res.contentMode,
           source: run.source,
         });
         store.setMediaId(run.id, mediaId, title); // 早写,发布成功后立刻落库,支撑上面的幂等判断
@@ -322,29 +310,6 @@ export function makeHandler(deps) {
             details: e.details || {},
           });
         }
-        return;
-      }
-      if (e?.code === 'OIC_AUTH_EXPIRED' && runtimeWorkflow?.id === 'opening-digest') {
-        const retryAt = Date.now() + 5 * 60 * 1000;
-        const existing = store.getRun(run.id);
-        if (!isSameEasternDay(new Date(existing?.created_at || Date.now()), new Date())) {
-          store.setStatus(run.id, 'failed', {
-            stage: 'options-auth',
-            error: 'OIC 会话未在同一美东交易日恢复，Opening Digest 已作废',
-            finishedAt: Date.now(),
-          });
-          if (deps.notifier) await notifyBestEffort(deps.notifier, 'failure', notify, { stage: 'options-auth', error: 'OIC 会话未在同一美东交易日恢复，Opening Digest 已作废' });
-          return;
-        }
-        const remind = !existing?.last_reminded_at || Date.now() - existing.last_reminded_at >= 30 * 60 * 1000;
-        store.setStatus(run.id, 'waiting_options_auth', {
-          stage: 'options-auth', error: e.message, nextRetryAt: retryAt,
-          ...(remind ? { lastRemindedAt: Date.now() } : {}),
-        });
-        if (remind && deps.notifier) {
-          await notifyBestEffort(deps.notifier, 'warn', notify, `⚠️ OIC 会话失效，Opening Digest 已暂停；请通过 DO 临时 VNC 更新会话。系统将在 5 分钟后重试。`);
-        }
-        deps.deferRun?.(run, retryAt);
         return;
       }
       const stage = e.stage || 'publish';
@@ -447,7 +412,6 @@ export async function start() {
   // 只恢复显式处于 queued 的持久化任务。interrupted 不会自动重跑，必须先由
   // 管理操作明确 requeue，避免旧任务在重启后意外创建草稿。
   const persistedQueued = store.listByStatus('queued');
-  const waitingOptionsAuth = store.listByStatus('waiting_options_auth');
 
   const deps = {
     store,
@@ -466,7 +430,6 @@ export async function start() {
     maxQueueSize: config.maxQueueSize,
     handler,
   });
-  const deferredRuns = new Map();
   const restoreRun = (rowOrRun) => queue.restore({
     id: rowOrRun.id,
     workflowId: rowOrRun.workflowId || rowOrRun.workflow_id,
@@ -475,25 +438,6 @@ export async function start() {
     notify: {},
     restored: true,
   });
-  deps.deferRun = (run, retryAt) => {
-    const delay = Math.max(0, Number(retryAt || Date.now()) - Date.now());
-    clearTimeout(deferredRuns.get(run.id));
-    const timer = setTimeout(() => {
-      deferredRuns.delete(run.id);
-      const row = store.getRun(run.id);
-      if (!row || row.status !== 'waiting_options_auth') return;
-      if (!isSameEasternDay(new Date(row.created_at), new Date())) {
-        store.setStatus(run.id, 'failed', { stage: 'options-auth', error: 'OIC 会话未在同一美东交易日恢复，Opening Digest 已作废', finishedAt: Date.now() });
-        return;
-      }
-      // Keep the stage marker while the queue owns the retry; handler uses it
-      // to reuse the frozen opening edition instead of regenerating it.
-      store.setStatus(run.id, 'queued', { stage: 'options-auth', error: null, nextRetryAt: null });
-      restoreRun(row);
-    }, delay);
-    timer.unref?.();
-    deferredRuns.set(run.id, timer);
-  };
   const enqueue = (t) => {
     const result = queue.enqueue({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, ...t });
     // 收到即回执:不等待任务真正被处理(那要等到出队),用户提交后立刻有反馈。
@@ -595,13 +539,6 @@ export async function start() {
     restoreRun(row);
   }
   if (persistedQueued.length) console.log(`[hub] 已恢复 ${persistedQueued.length} 个持久化排队任务`);
-  for (const row of waitingOptionsAuth) {
-    if (!isSameEasternDay(new Date(row.created_at), new Date())) {
-      store.setStatus(row.id, 'failed', { stage: 'options-auth', error: 'OIC 会话未在同一美东交易日恢复，Opening Digest 已作废', finishedAt: Date.now() });
-      continue;
-    }
-    deps.deferRun(row, Math.max(Date.now(), Number(row.next_retry_at || 0)));
-  }
   registerCron({
     workflows: WORKFLOWS,
     enqueue,
@@ -614,7 +551,6 @@ export async function start() {
     shuttingDown = true;
     console.log(`[hub] 收到 ${signal},停止接单并等待活动任务收尾`);
     queue.stop();
-    for (const timer of deferredRuns.values()) clearTimeout(timer);
     await stopHealthServer(healthServer).catch(() => {});
     if (currentSlackApp) {
       try { await currentSlackApp.stop(); } catch (error) { console.error('[hub] Slack 停止失败:', error?.message || error); }

@@ -1,15 +1,14 @@
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import {
-  NEWSLETTER_TEMPLATE_ID, parseNewsletterArticle, renderMarkdown, renderNewsletterEmail,
+  NEWSLETTER_COMPANY_ADDRESS, NEWSLETTER_TEMPLATE_ID, parseNewsletterArticle, renderMarkdown, renderNewsletterEmail,
 } from '../lib/newsletter-email.js';
 import { assertRenderedTemplateMarker } from '../lib/draft-template.js';
 import { uploadCustomerIoAsset } from '../lib/customerio-assets.js';
 import { renderOpeningDigestCover } from '../lib/opening-digest-cover.js';
 import { captureTrendingOptionsTable, validateTrendingOptionsData } from '../lib/options-volume.js';
-import { collectOpeningMetrics, renderMetricsHtml, validateOpeningMetrics } from '../lib/opening-digest-metrics.js';
+import { collectOpeningMetrics, normalizeOpeningMetrics, renderMetricsHtml } from '../lib/opening-digest-metrics.js';
 import { easternDateKey } from '../lib/us-equity-calendar.js';
-import { validateOpeningDigestArticle } from '../lib/opening-digest-content.js';
+import { auditOpeningDigestArticle } from '../lib/opening-digest-content.js';
 
 const SENDER = 'support@zentradings.com';
 const CUSTOMERIO_MIN_SCHEDULE_LEAD_MS = 5 * 60 * 1000;
@@ -19,113 +18,167 @@ export function makeChannel({
   now = () => new Date(), captureOptions = captureTrendingOptionsTable,
   renderCover = renderOpeningDigestCover, uploadAsset = uploadCustomerIoAsset,
   collectMetrics = collectOpeningMetrics,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 } = {}) {
   return {
     id: 'customerio-opening-digest',
     templateId: NEWSLETTER_TEMPLATE_ID,
     templateLocked: true,
-    async publish({ articlePath, config, workflow, source = 'manual', existingRemoteId = '', onCreated }) {
+    async publish({ articlePath, config, workflow, source = 'manual', existingRemoteId = '', onCreated, contentMode = 'editorial', acceptanceId = '' }) {
       const cio = config.customerio || {};
       const digest = config.openingDigest || {};
       assertDigestConfig(cio, digest);
       const current = now();
       const dateKey = easternDateKey(current);
-      const articleSource = await readArticle(articlePath);
-      validateOpeningDigestArticle({ article: articleSource, asOf: current });
-      const article = parseNewsletterArticle(articleSource, dateKey);
-      if (article.title !== 'Zen Opening Digest' || article.edition !== dateKey) {
-        throw publishError(`Opening Digest 标题或 edition 与当前美东日期不一致:${article.title} / ${article.edition}`);
-      }
-      const { count: audienceCount, name: audienceName } = await audiencePreflightFor({
-        baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, segmentId: digest.segmentId,
-        fetchFn, timeoutMs: cio.timeoutMs,
-      });
-      if (normalizedSegmentName(audienceName) !== 'test2') {
-        throw publishError(`Opening Digest 测试版只能发送到 Customer.io segment test2，当前为 ${audienceName || '(unnamed)'}`);
-      }
-      if (audienceCount < 1) throw publishError('Opening Digest test2 受众为空，拒绝创建或发送 Newsletter');
-      const name = `Zen Opening Digest · ${dateKey}`;
-      let newsletterId = Number(existingRemoteId) || 0;
-      if (newsletterId) {
-        const remoteData = await customerIoJson({
-          baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, path: `/v1/newsletters/${newsletterId}`,
-          method: 'GET', fetchFn, timeoutMs: cio.timeoutMs,
-        });
-        const remote = remoteData?.newsletter || remoteData;
-        assertExistingNewsletter(remote, {
-          newsletterId, name, segmentId: digest.segmentId, subscriptionTopicId: digest.subscriptionTopicId,
-        });
-        // A crash can happen after Customer.io starts the send but before the
-        // local media_id write. Treat the remote sent_at as authoritative and
-        // do not attempt a second send that Customer.io will reject.
-        if (remote.sent_at != null) {
-          return {
-            mediaId: `customerio-newsletter:${newsletterId}`, title: name, audienceStage: 'test2',
-            audienceSegmentId: digest.segmentId, audienceRecipientCount: audienceCount,
-          };
+      const diagnostics = [];
+      try {
+        const articleSource = await readArticle(articlePath);
+        const articleAudit = auditOpeningDigestArticle({ article: articleSource, asOf: current });
+        diagnostics.push(...articleAudit.warnings);
+        const parsed = parseNewsletterArticle(articleSource, dateKey);
+        if (parsed.title !== 'Zen Opening Digest' || parsed.edition !== dateKey) {
+          throw publishError(`Opening Digest 标题或 edition 与当前美东日期不一致:${parsed.title} / ${parsed.edition}`);
         }
-      }
+        const sanitized = sanitizeUnsubscribeTags(parsed.body);
+        if (sanitized.removed) diagnostics.push(`Opening Digest 正文已移除 ${sanitized.removed} 个退订 Liquid 标签`);
+        const article = { ...parsed, body: sanitized.body };
 
-      const common = { baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, fetchFn, timeoutMs: cio.timeoutMs, parentFolderId: digest.assetFolderId };
-      const cover = await renderCover({
-        dateLabel: displayDate(dateKey),
-        executablePath: digest.browserExecutablePath,
-        timeoutMs: digest.captureTimeoutMs,
-      });
-      const asset = await uploadAsset({
-        ...common,
-        buffer: cover,
-        filename: `opening-digest-cover-${dateKey}.png`,
-        name: `Zen Opening Digest cover ${dateKey}`,
-      });
-      const headerImageUrl = String(asset?.path || '').trim();
-      if (!/^https:\/\//i.test(headerImageUrl)) {
-        throw publishError('Customer.io 未返回 Opening Digest 封面 HTTPS URL，拒绝发送无封面邮件');
-      }
+        const audience = await audiencePreflightFor({
+          baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, segmentId: digest.segmentId,
+          fetchFn, timeoutMs: cio.timeoutMs, sleep,
+        });
+        diagnostics.push(...audience.diagnostics);
+        if (audience.name && normalizedSegmentName(audience.name) !== 'test2') {
+          throw publishError(`Opening Digest 测试版只能发送到 Customer.io segment test2，当前为 ${audience.name}`);
+        }
+        const acceptance = source === 'acceptance';
+        if (acceptance && !/^[a-z0-9-]{8,80}$/i.test(acceptanceId)) {
+          throw publishError('Opening Digest 验收邮件缺少安全的 acceptance ID');
+        }
+        const name = acceptance
+          ? `[TEST] Zen Opening Digest · ${dateKey} · ${acceptanceId}`
+          : `Zen Opening Digest · ${dateKey}`;
+        let newsletterId = Number(existingRemoteId) || 0;
+        let remote;
+        if (newsletterId) {
+          const remoteData = await customerIoRequestWithRetry({
+            baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, path: `/v1/newsletters/${newsletterId}`,
+            method: 'GET', fetchFn, timeoutMs: cio.timeoutMs, sleep,
+          });
+          remote = remoteData?.newsletter || remoteData;
+          assertExistingNewsletter(remote, {
+            newsletterId, name, segmentId: digest.segmentId, subscriptionTopicId: digest.subscriptionTopicId,
+          });
+        } else {
+          remote = await findExistingNewsletter({ cio, digest, name, fetchFn, sleep, diagnostics });
+          newsletterId = Number(remote?.id) || 0;
+          if (newsletterId) await onCreated?.({ remoteId: String(newsletterId), title: name });
+        }
+        if (remote?.sent_at != null) {
+          return publishResult({ newsletterId, name, digest, audience });
+        }
 
-      // An OIC-login retry must keep the original opening snapshot. Persist this
-      // before the OIC call because that call is the only deliberate hold point.
-      const metrics = validateOpeningMetrics(await loadOrCollectMetrics({
-        articlePath, dateKey, collectMetrics, fetchFn, timeoutMs: Math.min(cio.timeoutMs, 15000),
-      }));
-      const options = await resolveOptions({ digest, source, current, captureOptions });
-      const contentHtml = [renderMetricsHtml(metrics), renderMarkdown(article.body), renderOptionsHtml(options)].join('\n');
-      // Customer.io wraps API-created emails in the workspace layout. Opening
-      // Digest verifies that layout below and leaves the legal unsubscribe link
-      // to that single wrapper so the delivered HTML cannot contain duplicates.
-      const body = renderNewsletterEmail({ ...article, edition: dateKey }, {
-        ...cio, headerImageUrl, contentHtml, includeUnsubscribe: false,
-      });
-      assertRenderedTemplateMarker(body, NEWSLETTER_TEMPLATE_ID);
-      const payload = {
-        name,
-        type: 'email',
-        recipients: { and: [{ or: [{ segment: { id: digest.segmentId } }] }] },
-        subject: `Zen Opening Digest · ${displayDate(dateKey)}`,
-        preheader_text: article.preheader,
-        body,
-        from: cio.from,
-        subscription_topic_id: digest.subscriptionTopicId,
-      };
-      if (!newsletterId) {
-        const newsletter = await customerIoJson({ baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, path: '/v1/newsletters', method: 'POST', body: payload, fetchFn, timeoutMs: cio.timeoutMs });
-        newsletterId = newsletter?.newsletter?.id;
-        if (!newsletterId) throw publishError('Customer.io 创建 Opening Digest 后未返回 newsletter.id');
-        await onCreated?.({ remoteId: String(newsletterId), title: name });
+        let headerImageUrl = '';
+        try {
+          const cover = await renderCover({
+            dateLabel: displayDate(dateKey),
+            executablePath: digest.browserExecutablePath,
+            timeoutMs: digest.captureTimeoutMs,
+          });
+          const asset = await uploadAsset({
+            baseUrl: cio.baseUrl,
+            appApiKey: cio.appApiKey,
+            fetchFn,
+            timeoutMs: cio.timeoutMs,
+            parentFolderId: digest.assetFolderId,
+            buffer: cover,
+            filename: `opening-digest-cover-${dateKey}.png`,
+            name: `Zen Opening Digest cover ${dateKey}`,
+          });
+          const candidate = String(asset?.path || '').trim();
+          if (/^https:\/\//i.test(candidate)) headerImageUrl = candidate;
+          else diagnostics.push('Customer.io 未返回 Opening Digest 封面 HTTPS URL，已使用无封面版');
+        } catch (error) {
+          diagnostics.push(`Opening Digest 封面已省略:${error.message}`);
+        }
+
+        const metricResult = await loadOrCollectMetrics({
+          articlePath, dateKey, collectMetrics, fetchFn,
+          timeoutMs: Math.min(cio.timeoutMs, 15000), diagnostics,
+        });
+        diagnostics.push(...metricResult.warnings);
+        let options;
+        try {
+          options = await resolveOptions({ digest, source, current, captureOptions });
+        } catch (error) {
+          diagnostics.push(`Opening Digest 期权区块已省略:${error.message}`);
+        }
+        if (contentMode === 'data-only' && metricResult.availableCount === 0 && !options) {
+          throw publishError('Opening Digest 数据版无可用正文、行情或期权数据，拒绝发送空邮件');
+        }
+
+        const contentHtml = [
+          renderMetricsHtml(metricResult.metrics),
+          renderMarkdown(article.body),
+          options ? renderOptionsHtml(options) : '',
+        ].filter(Boolean).join('\n');
+        const body = renderNewsletterEmail({ ...article, edition: dateKey }, {
+          ...cio, headerImageUrl, contentHtml, includeUnsubscribe: false,
+        });
+        assertRenderedTemplateMarker(body, NEWSLETTER_TEMPLATE_ID);
+        if (!body.includes(`Zen Trading · ${NEWSLETTER_COMPANY_ADDRESS}`)) {
+          throw publishError(`Opening Digest 固定地址缺失:${NEWSLETTER_COMPANY_ADDRESS}`);
+        }
+        if (/\{%\s*unsubscribe_url\s*%\}/i.test(body)) {
+          throw publishError('Opening Digest 本地渲染后仍含退订 Liquid 标签');
+        }
+        const payload = {
+          name,
+          type: 'email',
+          recipients: { and: [{ or: [{ segment: { id: digest.segmentId } }] }] },
+          subject: acceptance
+            ? `[TEST] Zen Opening Digest · ${displayDate(dateKey)} · ${acceptanceId}`
+            : `Zen Opening Digest · ${displayDate(dateKey)}`,
+          preheader_text: article.preheader,
+          body,
+          from: cio.from,
+          subscription_topic_id: digest.subscriptionTopicId,
+        };
+        if (!newsletterId) {
+          try {
+            const newsletter = await customerIoRequestWithRetry({
+              baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, path: '/v1/newsletters',
+              method: 'POST', body: payload, fetchFn, timeoutMs: cio.timeoutMs,
+              sleep, retryCreateOn429: true,
+            });
+            newsletterId = Number(newsletter?.newsletter?.id) || 0;
+          } catch (error) {
+            if (!isAmbiguousCustomerIoFailure(error)) throw error;
+            diagnostics.push(`Customer.io 创建结果不明，已进入远端恢复:${error.message}`);
+          }
+          if (!newsletterId) {
+            const recovered = await recoverExistingNewsletter({ cio, digest, name, fetchFn, sleep, diagnostics });
+            newsletterId = Number(recovered?.id) || 0;
+          }
+          if (!newsletterId) throw publishError('Customer.io 创建 Opening Digest 后无法恢复 newsletter.id');
+          await onCreated?.({ remoteId: String(newsletterId), title: name });
+        }
+
+        const target = openingSendTarget(current, digest.timezone || 'America/New_York');
+        if (source === 'cron' && target.getTime() > current.getTime() + CUSTOMERIO_MIN_SCHEDULE_LEAD_MS) {
+          await customerIoRequestWithRetry({
+            baseUrl: cio.baseUrl, appApiKey: cio.appApiKey,
+            path: `/v1/newsletters/${newsletterId}/schedule`, method: 'POST',
+            body: { scheduled_at: Math.floor(target.getTime() / 1000), timezone: digest.timezone || 'America/New_York', tz_match_enabled: false },
+            fetchFn, timeoutMs: cio.timeoutMs, sleep, idempotent: true,
+          });
+        } else {
+          await sendNewsletterSafely({ cio, newsletterId, fetchFn, sleep, diagnostics });
+        }
+        return publishResult({ newsletterId, name, digest, audience });
+      } finally {
+        await appendOpeningDiagnostics(articlePath, diagnostics, { contentMode });
       }
-      await assertCustomerIoUnsubscribeLayout({
-        baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, newsletterId, fetchFn, timeoutMs: cio.timeoutMs,
-      });
-      const target = openingSendTarget(current, digest.timezone || 'America/New_York');
-      // Customer.io requires a scheduled newsletter to be at least five
-      // minutes ahead. If editorial/research work finishes later, send now
-      // rather than creating a schedule request guaranteed to be rejected.
-      if (source === 'cron' && target.getTime() > current.getTime() + CUSTOMERIO_MIN_SCHEDULE_LEAD_MS) {
-        await customerIoJson({ baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, path: `/v1/newsletters/${newsletterId}/schedule`, method: 'POST', body: { scheduled_at: Math.floor(target.getTime() / 1000), timezone: digest.timezone || 'America/New_York', tz_match_enabled: false }, fetchFn, timeoutMs: cio.timeoutMs });
-      } else {
-        await customerIoJson({ baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, path: `/v1/newsletters/${newsletterId}/send`, method: 'POST', body: {}, fetchFn, timeoutMs: cio.timeoutMs });
-      }
-      return { mediaId: `customerio-newsletter:${newsletterId}`, title: name, audienceStage: 'test2', audienceSegmentId: digest.segmentId, audienceRecipientCount: audienceCount };
     },
   };
 }
@@ -139,30 +192,24 @@ function assertExistingNewsletter(remote, { newsletterId, name, segmentId, subsc
   }
 }
 
-async function assertCustomerIoUnsubscribeLayout({ baseUrl, appApiKey, newsletterId, fetchFn, timeoutMs }) {
-  const data = await customerIoJson({
-    baseUrl, appApiKey, path: `/v1/newsletters/${newsletterId}/contents`, method: 'GET', fetchFn, timeoutMs,
-  });
-  const contents = Array.isArray(data?.contents) ? data.contents : [];
-  if (!contents.length) throw publishError('Customer.io 未返回 Opening Digest 邮件内容，拒绝发送');
-  for (const content of contents) {
-    const layoutCount = (String(content?.layout || '').match(/\{%\s*unsubscribe_url\s*%\}/g) || []).length;
-    const bodyCount = (String(content?.body || '').match(/\{%\s*unsubscribe_url\s*%\}/g) || []).length;
-    if (layoutCount !== 1 || bodyCount !== 0) {
-      throw publishError(`Customer.io Opening Digest 退订链接归属异常:layout=${layoutCount},body=${bodyCount}`);
-    }
-  }
-}
-
-async function loadOrCollectMetrics({ articlePath, dateKey, collectMetrics, fetchFn, timeoutMs }) {
+async function loadOrCollectMetrics({ articlePath, dateKey, collectMetrics, fetchFn, timeoutMs, diagnostics }) {
   const statePath = `${articlePath}.opening-digest-state.json`;
   try {
     const prior = JSON.parse(await fs.readFile(statePath, 'utf8'));
-    if (prior?.dateKey === dateKey && Array.isArray(prior.metrics)) return validateOpeningMetrics(prior.metrics);
-  } catch {}
-  const metrics = validateOpeningMetrics(await collectMetrics({ fetchFn, timeoutMs }));
-  await fs.writeFile(statePath, JSON.stringify({ dateKey, metrics, capturedAt: new Date().toISOString() }), { mode: 0o600 });
-  return metrics;
+    if (prior?.dateKey === dateKey && Array.isArray(prior.metrics)) return normalizeOpeningMetrics(prior.metrics);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') diagnostics.push(`Opening Digest 行情缓存读取失败:${error.message}`);
+  }
+  let collected = [];
+  try { collected = await collectMetrics({ fetchFn, timeoutMs }); }
+  catch (error) { diagnostics.push(`Opening Digest 行情采集失败:${error.message}`); }
+  const normalized = normalizeOpeningMetrics(collected);
+  try {
+    await fs.writeFile(statePath, JSON.stringify({ dateKey, metrics: normalized.metrics, capturedAt: new Date().toISOString() }), { mode: 0o600 });
+  } catch (error) {
+    diagnostics.push(`Opening Digest 行情缓存写入失败:${error.message}`);
+  }
+  return normalized;
 }
 
 async function resolveOptions({ digest, source, current, captureOptions }) {
@@ -177,17 +224,6 @@ async function resolveOptions({ digest, source, current, captureOptions }) {
     capturedAt: screenshot.capturedAt || current.toISOString(),
     kind: manual ? 'Latest available' : 'Opening',
   };
-}
-
-export async function cacheEodOptions({ articlePath, config }) {
-  const digest = config.openingDigest || {};
-  const cio = config.customerio || {};
-  assertDigestConfig(cio, digest);
-  const payload = JSON.parse(await fs.readFile(articlePath, 'utf8'));
-  const data = validateTrendingOptionsData(payload.data);
-  await fs.mkdir(path.dirname(digest.eodCachePath), { recursive: true });
-  await fs.writeFile(digest.eodCachePath, JSON.stringify({ data, dateKey: payload.dateKey, capturedAt: payload.capturedAt, kind: 'EOD' }), { mode: 0o600 });
-  return { mediaId: `opening-digest-eod:${payload.dateKey}`, title: `Opening Digest EOD options cache · ${payload.dateKey}` };
 }
 
 export function renderOptionsHtml(options) {
@@ -214,26 +250,176 @@ function assertDigestConfig(cio, digest) {
   if (senderEmail(cio.from) !== SENDER) throw publishError(`Customer.io 发件邮箱必须统一为 ${SENDER}`);
   if (!digest.segmentId || !digest.subscriptionTopicId) throw publishError('缺少 Opening Digest segment 或 subscription topic ID');
 }
-async function audiencePreflightFor({ baseUrl, appApiKey, segmentId, fetchFn, timeoutMs }) {
-  const [segmentData, countData] = await Promise.all([
-    customerIoJson({ baseUrl, appApiKey, path: `/v1/segments/${segmentId}`, method: 'GET', fetchFn, timeoutMs }),
-    customerIoJson({ baseUrl, appApiKey, path: `/v1/segments/${segmentId}/customer_count`, method: 'GET', fetchFn, timeoutMs }),
+async function audiencePreflightFor({ baseUrl, appApiKey, segmentId, fetchFn, timeoutMs, sleep }) {
+  const diagnostics = [];
+  const [segmentResult, countResult] = await Promise.allSettled([
+    customerIoRequestWithRetry({ baseUrl, appApiKey, path: `/v1/segments/${segmentId}`, method: 'GET', fetchFn, timeoutMs, sleep }),
+    customerIoRequestWithRetry({ baseUrl, appApiKey, path: `/v1/segments/${segmentId}/customer_count`, method: 'GET', fetchFn, timeoutMs, sleep }),
   ]);
+  const segmentData = segmentResult.status === 'fulfilled' ? segmentResult.value : undefined;
+  const countData = countResult.status === 'fulfilled' ? countResult.value : undefined;
+  if (segmentResult.status === 'rejected') diagnostics.push(`Customer.io segment 名称预检失败:${segmentResult.reason?.message || segmentResult.reason}`);
+  if (countResult.status === 'rejected') diagnostics.push(`Customer.io 受众人数预检失败:${countResult.reason?.message || countResult.reason}`);
   const segment = segmentData?.segment || segmentData;
-  if (!segment?.name) throw publishError('Customer.io segment 预检没有返回名称');
-  if (!Number.isInteger(countData?.count)) throw publishError('Customer.io 受众预检返回无效人数');
-  return { name: String(segment.name), count: countData.count };
+  const name = segment?.name ? String(segment.name) : '';
+  const count = Number.isInteger(countData?.count) ? countData.count : undefined;
+  if (!name && segmentResult.status === 'fulfilled') diagnostics.push('Customer.io segment 预检未返回名称');
+  if (count === undefined && countResult.status === 'fulfilled') diagnostics.push('Customer.io 受众预检返回无效人数');
+  if (count === 0) diagnostics.push('Customer.io test2 受众预检人数为 0');
+  return { name, count, diagnostics };
 }
-async function customerIoJson({ baseUrl = 'https://api.customer.io', appApiKey, path: apiPath, method, body, fetchFn, timeoutMs }) {
+
+async function customerIoOnce({ baseUrl = 'https://api.customer.io', appApiKey, path: apiPath, method, body, fetchFn, timeoutMs }) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), Number(timeoutMs) || 30000);
   try {
-    const response = await fetchFn(`${String(baseUrl).replace(/\/+$/, '')}${apiPath}`, { method, headers: { Authorization: `Bearer ${appApiKey}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: controller.signal });
+    let response;
+    try {
+      response = await fetchFn(`${String(baseUrl).replace(/\/+$/, '')}${apiPath}`, { method, headers: { Authorization: `Bearer ${appApiKey}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}), signal: controller.signal });
+    } catch (cause) {
+      throw customerIoError(`Customer.io ${method} ${apiPath} 网络失败:${cause.message || cause}`, { cause, method, apiPath });
+    }
     const raw = await response.text();
     let data; try { data = raw ? JSON.parse(raw) : {}; } catch { data = {}; }
-    if (!response.ok) throw publishError(`Customer.io 请求失败:${response.status} ${raw.slice(0, 500)}`);
+    if (!response.ok) throw customerIoError(`Customer.io 请求失败:${response.status} ${raw.slice(0, 500)}`, {
+      status: response.status,
+      retryAfter: response.headers?.get?.('retry-after') || '',
+      method,
+      apiPath,
+    });
     return data;
   } finally { clearTimeout(timer); }
+}
+
+async function customerIoRequestWithRetry(args) {
+  const attempts = 3;
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try { return await customerIoOnce(args); }
+    catch (error) {
+      lastError = error;
+      const retryableStatus = !Number.isInteger(error.status)
+        || [408, 425, 429, 500, 502, 503, 504].includes(error.status);
+      const safe = args.method === 'GET' || args.idempotent === true
+        || (args.retryCreateOn429 === true && error.status === 429);
+      if (!safe || !retryableStatus || attempt === attempts - 1) break;
+      await args.sleep(retryDelay(error, attempt));
+    }
+  }
+  throw lastError;
+}
+
+async function findExistingNewsletter({ cio, digest, name, fetchFn, sleep, diagnostics }) {
+  let start = '';
+  const matches = [];
+  for (let page = 0; page < 5; page++) {
+    const query = new URLSearchParams({ limit: '100', sort: 'desc', ...(start ? { start } : {}) });
+    const data = await customerIoRequestWithRetry({
+      baseUrl: cio.baseUrl, appApiKey: cio.appApiKey,
+      path: `/v1/newsletters?${query}`, method: 'GET', fetchFn, timeoutMs: cio.timeoutMs, sleep,
+    });
+    matches.push(...(Array.isArray(data?.newsletters) ? data.newsletters.filter((item) => item?.name === name) : []));
+    if (matches.length > 1 || !data?.next) break;
+    start = String(data.next);
+  }
+  if (matches.length > 1) throw publishError(`Customer.io 存在 ${matches.length} 个同名 Opening Digest，拒绝自动选择`);
+  if (!matches.length) return undefined;
+  const remote = matches[0];
+  assertExistingNewsletter(remote, {
+    newsletterId: Number(remote.id), name,
+    segmentId: digest.segmentId, subscriptionTopicId: digest.subscriptionTopicId,
+  });
+  diagnostics.push(`Customer.io 已恢复当日 Opening Digest:${remote.id}`);
+  return remote;
+}
+
+async function recoverExistingNewsletter(args) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await args.sleep([250, 750][attempt - 1]);
+    const remote = await findExistingNewsletter(args);
+    if (remote) return remote;
+  }
+  return undefined;
+}
+
+async function sendNewsletterSafely({ cio, newsletterId, fetchFn, sleep, diagnostics }) {
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await customerIoOnce({
+        baseUrl: cio.baseUrl, appApiKey: cio.appApiKey,
+        path: `/v1/newsletters/${newsletterId}/send`, method: 'POST', body: {},
+        fetchFn, timeoutMs: cio.timeoutMs,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (error.status === 429) {
+        await sleep(retryDelay(error, attempt));
+        continue;
+      }
+      if (!isAmbiguousCustomerIoFailure(error) && error.status !== 400) throw error;
+      const data = await customerIoRequestWithRetry({
+        baseUrl: cio.baseUrl, appApiKey: cio.appApiKey,
+        path: `/v1/newsletters/${newsletterId}`, method: 'GET', fetchFn, timeoutMs: cio.timeoutMs, sleep,
+      });
+      const remote = data?.newsletter || data;
+      if (remote?.sent_at != null) {
+        diagnostics.push(`Customer.io 发送结果已通过远端 sent_at 恢复:${newsletterId}`);
+        return;
+      }
+      if (attempt < 2) await sleep([250, 750][attempt]);
+    }
+  }
+  throw lastError || publishError('Customer.io 发送重试耗尽');
+}
+
+function sanitizeUnsubscribeTags(value) {
+  let removed = 0;
+  const body = String(value || '').replace(/\{%\s*unsubscribe_url\s*%\}/gi, () => { removed += 1; return ''; });
+  return { body, removed };
+}
+
+async function appendOpeningDiagnostics(articlePath, diagnostics, metadata = {}) {
+  if (!articlePath || !diagnostics.length) return;
+  const tracePath = `${articlePath.slice(0, articlePath.lastIndexOf('/') + 1)}research-trace.json`;
+  try {
+    let trace = {};
+    try { trace = JSON.parse(await fs.readFile(tracePath, 'utf8')); } catch {}
+    trace.openingDigestDelivery = {
+      ...(trace.openingDigestDelivery || {}),
+      ...metadata,
+      diagnostics: [...new Set([...(trace.openingDigestDelivery?.diagnostics || []), ...diagnostics])],
+      updatedAt: new Date().toISOString(),
+    };
+    await fs.writeFile(tracePath, `${JSON.stringify(trace, null, 2)}\n`, { mode: 0o600 });
+  } catch {}
+}
+
+function publishResult({ newsletterId, name, digest, audience }) {
+  return {
+    mediaId: `customerio-newsletter:${newsletterId}`,
+    title: name,
+    audienceStage: 'test2',
+    audienceSegmentId: digest.segmentId,
+    audienceRecipientCount: audience.count,
+  };
+}
+
+function isAmbiguousCustomerIoFailure(error) {
+  return !Number.isInteger(error?.status) || error.status >= 500 || [408, 425].includes(error.status);
+}
+
+function retryDelay(error, attempt) {
+  const seconds = Number(error?.retryAfter);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 30000);
+  return [250, 750, 1500][Math.min(attempt, 2)];
+}
+
+function customerIoError(message, details = {}) {
+  const error = publishError(message);
+  Object.assign(error, details);
+  return error;
 }
 function openingSendTarget(now, timezone) {
   const date = easternDateKey(now);

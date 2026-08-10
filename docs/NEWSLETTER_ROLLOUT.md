@@ -18,13 +18,15 @@
 
 生产环境在美东交易日 10:15 生成 Opening Digest；若完成时距 10:30 仍超过 Customer.io 要求的 5 分钟最小提前量，则排期到 10:30，否则立即发送。这里的“opening”是开盘后摘要，不是 9:30 开盘铃时点。
 
-内容检索使用上一交易日 16:00 ET 到当前时刻的专用美股开盘窗口，分别覆盖市场新闻、宏观/利率和公司催化剂。正文必须恰好包含 3-5 条不重复、可匹配本次检索且带可验证发布日期的 catalyst，并只有一个 Market read；旧闻、背景材料、来源日期缺失、条数不足或结构漂移都会在创建 Customer.io Newsletter 前 fail closed。
+内容检索使用上一交易日 16:00 ET 到当前时刻的专用美股开盘窗口，分别覆盖市场新闻、宏观/利率和公司催化剂。两个标准区块、3-5 条 catalyst、链接去重、检索匹配、发布日期与当前窗口都是写作和软审计要求；偏差只写入 `research-trace.json`，不阻止发送。零研究结果或正文生成失败时发送带中性提示的数据版。仅当事实问题同时具备高置信度、影响核心结论和具体来源证据，且两轮局部修复仍失败时，才 fail closed。
 
-生产环境在 DigitalOcean 的 Chrome 会从 OIC/iVolatility iframe 提取 20 行、8 个字段，截图仅用于同会话前后数据一致性校验并立即丢弃；邮件正文渲染为移动端可读的 HTML 表格。校验失败会 fail closed，不创建 Newsletter；EOD cache 只保存结构化 JSON。市场快照固定检查 9 项，最多允许 1 项暂时不可用；2Y UST 使用美国财政部最新可用的 daily par yield 并在邮件中标明口径。测试阶段代码硬锁受众名称为 `test2`、拒绝空受众，且必须具备书面自动化授权。
+生产环境在 DigitalOcean 的 Chrome 会从 OIC/iVolatility iframe 提取 20 行、8 个字段，截图仅用于同会话前后数据一致性校验并立即丢弃；邮件正文渲染为移动端可读的 HTML 表格。OIC 授权、会话、浏览器、页面或数据校验失败时整个期权区块省略，诊断只记录到 trace。市场快照始终渲染固定 9 格，不可用项显示 `—`；2Y UST 使用美国财政部最新可用的 daily par yield。已取消无消费者的 EOD 缓存任务。受众名称成功读取且不是 `test2` 时仍硬停；预检失败或人数为 0 只记 trace，最终以 Customer.io 请求结果为准。
 
-封面固定以 `assets/zen-opening-digest-background.png` 为唯一底图；源图尺寸、SHA-256 和输出 1240×620 尺寸都会在渲染时硬校验。Chrome 只在底图原有的中部留白区叠加 `OPENING DIGEST` 和当日美东日期，不重绘 Logo、星空、主标题或底部栏目，不访问外部图片 URL。底图、浏览器渲染或 Customer.io 上传任一失败都会 fail closed，不允许无封面邮件继续发送。
+封面固定以 `assets/zen-opening-digest-background.png` 为唯一底图；源图尺寸、SHA-256 和输出 1240×620 尺寸在渲染器内仍严格校验。Chrome 只在底图中部留白区叠加 `OPENING DIGEST` 和当日美东日期。底图、浏览器渲染或 Customer.io 上传失败时，渠道改为发送无封面版并把原因写入 trace。
 
-API 创建的邮件会被 Customer.io workspace layout 包裹。Opening Digest 正文不再自行加入退订链接；发送前必须从 Customer.io 读回内容并证明 layout 恰好包含一个 `{% unsubscribe_url %}`、正文包含零个，避免最终邮件重复退订链接，同时保持 fail-closed 合规保障。
+API 创建的邮件会被 Customer.io workspace layout 包裹。Opening Digest 正文不自行加入退订链接，渲染前会本地删除模型意外输出的 `{% unsubscribe_url %}`。发送链路不再调用 Customer.io `/contents` 读回接口，workspace layout 唯一负责法定退订链接。
+
+所有可继续发送的降级只写入 `research-trace.json`，不发 Slack warning。只有硬门禁或客观执行失败使用现有 Slack failure 通知。
 - newsletter ID `1` 的首次尝试因退订链接误用变量语法，在 Customer.io 渲染阶段 3 条全部失败；没有错误邮件离开平台。保留该记录用于审计，不复用或扩容。
 - 内部分组目前只包含 Customer.io 中已经存在的 3 位内部人员。扩充体验名单时，先把人员加入该手工 segment，再回到 Review 页核对人数。
 

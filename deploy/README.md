@@ -150,8 +150,11 @@ sufficient. Keep it owned by `root:zenbot` with mode `0640`.
 The production flow extracts the iframe table as structured DOM data and uses a
 same-session screenshot only as a consistency checkpoint; the screenshot is
 discarded and never uploaded to Customer.io. The newsletter contains a
-responsive HTML table, and the end-of-day cache stores JSON data only. During
-the test phase the code requires the configured segment name to be `test2`.
+responsive HTML table. Any OIC authorization, session, browser, page, or data
+validation failure omits the entire options section and records the diagnostic
+in the run trace; it does not pause or block the newsletter. During the test
+phase the code still fails closed when a successfully-read configured segment
+name is not `test2`.
 
 If the provider later requires login, do not put an OIC password in the
 environment. Install the optional GUI helpers only on the Droplet, bind them to
@@ -177,6 +180,31 @@ sudo systemd-run --wait --pipe --collect --uid=zenbot \
 
 Set `/etc/zen-content-hub/oic-storage-state.json` to `root:zenbot` and `0640`,
 then stop Xvfb/x11vnc. Never expose VNC/noVNC on a public interface.
+
+## Opening Digest release acceptance
+
+After an Opening Digest release is active, require `/ready` to show an idle
+queue before running the acceptance command. It starts no Slack socket-mode
+consumer and uses an isolated run directory, but exercises live research,
+market metrics, optional OIC/cover rendering, and Customer.io:
+
+```bash
+sudo systemd-run --wait --pipe --collect \
+  --unit=zen-content-hub-opening-acceptance \
+  --uid=zenbot \
+  --property=WorkingDirectory=/opt/zen-content-hub \
+  --property=EnvironmentFile=/etc/zen-content-hub/zen-content-hub.env \
+  /usr/bin/npm run acceptance:opening-digest
+```
+
+The command immediately sends one clearly named `[TEST]` newsletter to the
+configured `test2` segment, then ensures the formal newsletter for the current
+ET date exists and is scheduled for 10:30 ET or sent immediately when late. An
+existing matching formal newsletter is reused and never duplicated. The final
+JSON line reports the deployed commit, content mode, source count, both
+Customer.io IDs, trace path, and any soft diagnostics. Soft diagnostics do not
+produce Slack warnings; a hard gate or execution failure exits non-zero and is
+handled as a release failure.
 
 Create the service account and data/configuration directories. Copy `.env.example`
 to `/etc/zen-content-hub/zen-content-hub.env`, fill it without committing

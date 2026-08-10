@@ -66,13 +66,36 @@ async function fetchTreasuryTwoYear({ label, fetchFn, timeoutMs, asOf }) {
 }
 
 export function validateOpeningMetrics(metrics = []) {
-  const expected = METRICS.map(([label]) => label);
-  if (!Array.isArray(metrics) || metrics.length !== expected.length) throw new Error(`Opening Digest 市场快照必须包含 ${expected.length} 项`);
-  if (metrics.some((metric, index) => metric?.label !== expected[index])) throw new Error('Opening Digest 市场快照项目或顺序异常');
-  const available = metrics.filter((metric) => !metric.unavailable && Number.isFinite(metric.value));
-  if (available.length < expected.length - 1) throw new Error(`Opening Digest 市场快照可用数据不足:${available.length}/${expected.length}`);
-  return metrics;
+  return normalizeOpeningMetrics(metrics).metrics;
 }
+
+export function normalizeOpeningMetrics(input = []) {
+  const warnings = [];
+  const rows = Array.isArray(input) ? input : [];
+  if (!Array.isArray(input)) warnings.push('Opening Digest 市场快照不是数组，已使用全部占位');
+  const used = new Set();
+  const metrics = METRICS.map(([label, symbol]) => {
+    const index = rows.findIndex((metric, rowIndex) => !used.has(rowIndex)
+      && (metric?.label === label || metric?.symbol === symbol));
+    if (index < 0) {
+      warnings.push(`Opening Digest 市场快照缺少 ${label}`);
+      return { label, symbol, unavailable: true };
+    }
+    used.add(index);
+    const metric = rows[index] || {};
+    if (index !== metricsIndex(label)) warnings.push(`Opening Digest 市场快照 ${label} 顺序已归一化`);
+    if (metric.unavailable || !Number.isFinite(metric.value)) {
+      warnings.push(`Opening Digest 市场快照 ${label} 不可用`);
+      return { ...metric, label, symbol, unavailable: true };
+    }
+    return { ...metric, label, symbol, unavailable: false };
+  });
+  if (used.size < rows.length) warnings.push(`Opening Digest 市场快照忽略 ${rows.length - used.size} 个未知或重复项`);
+  const availableCount = metrics.filter((metric) => !metric.unavailable && Number.isFinite(metric.value)).length;
+  return { metrics, warnings, availableCount };
+}
+
+function metricsIndex(label) { return METRICS.findIndex(([expected]) => expected === label); }
 
 export function renderMetricsHtml(metrics = []) {
   const cards = metrics.map((metric) => {
