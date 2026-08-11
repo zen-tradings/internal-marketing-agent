@@ -35,7 +35,7 @@ Customer.io 的 App API 不能改写由 Design Studio 创建的邮件正文，�
 1. 现有 `Vol. 1` 使用 Customer.io Design Studio 模板，人工替换内容并试发。
 2. Slack `email:` 工作流固定使用仓库内 `zen-customerio/zen-research@3` 邮件 HTML 模板创建新的 Customer.io 草稿，适合后续稳定自动化。
 
-两条路径都必须经过 Customer.io Review 页，任何发送或排期都由人工确认。
+这两条常规 `email:` 路径都必须经过 Customer.io Review 页，任何发送或排期都由人工确认；`opening-digest` 是前文定义的独立受控例外，只能向配置的 `test2` 受众按其专用门禁发送或排期。
 
 Bot 自动化路径不接受单次任务或工作流覆盖模板。真实渠道会在调用 Customer.io 前核对中央登记的模板 ID、锁定状态和最终 HTML 模板标识；任一不匹配都会拒绝创建草稿。后续改版必须升级模板版本并更新离线渲染测试。
 
@@ -104,7 +104,7 @@ NEWSLETTER_EDITION="Vol. 1"
 
 所有新建 Newsletter 的可见发件人固定为 `Zen Trading <support@zentradings.com>`；发布渠道会在创建草稿前校验邮箱，防止环境变量漂移到其他发件地址。
 
-核心自动化使用 App API，只创建 Newsletter 草稿。Customer.io MCP 可供人工管理草稿使用，但不进入 Bot 的核心链，也不为 Bot 配置发送所需的 `write:live` 权限。
+除 `opening-digest` 这一受控例外外，核心自动化使用 App API 只创建 Newsletter 草稿。Customer.io MCP 可供人工管理草稿使用，但不进入 Bot 的核心链，也不为 Bot 配置发送所需的 `write:live` 权限。
 
 内容门禁按类型执行：研究型 Newsletter 强制官方/一手来源、紧邻引用和事实审查；欢迎、首封问候、需求收集、产品或 Agent 介绍、通知公告等关系型邮件跳过外部研究与引用门禁，只使用任务中给出的材料。明确要求官方数据或市场分析时仍按研究型处理。
 
