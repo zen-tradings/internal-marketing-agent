@@ -939,11 +939,8 @@ test('Opening Digest alone may run ten extra queries and persists collected univ
     collectContext: async () => ({
       artifact: { schemaVersion: 1, dateKey: '2026-08-10', quotes: { coverage: { requested: 72, available: 72 } } },
       trace: { universeSize: 72, quoteCoverage: { requested: 72, available: 72 } },
-      promptText: 'TRACKED-CONTEXT META +6.00%',
-      sources: [{
-        title: 'META quote', url: 'https://finance.yahoo.com/quote/META',
-        publishedDate: '2026-08-10T14:15:00Z', text: 'META +6%', openingDigestKind: 'universe-price',
-      }],
+      promptText: 'TRACKED-OPTIONS-CONTEXT NVDA IVX30 65.00%',
+      sources: [],
       diagnostics: [],
     }),
   });
@@ -979,9 +976,9 @@ preheader: Test
 edition: 2026-08-10
 ---
 ## Today's catalysts
-- [META quote](https://finance.yahoo.com/quote/META) moved materially at the captured time without an asserted cause.
-- [Source](https://example.com/1) supports a second current and material opening catalyst for the session.
-- [Source two](https://example.com/2) supports a third current and material opening catalyst for the session.
+- [Source](https://example.com/1) supports a first current and material opening catalyst for the session.
+- [Source two](https://example.com/2) supports a second current and material opening catalyst for the session.
+- [Source three](https://example.com/3) supports a third current and material opening catalyst for the session.
 
 ## Market read
 The opening interpretation remains conditional on whether the initial breadth persists through the first hour.` } }] });
@@ -990,13 +987,14 @@ The opening interpretation remains conditional on whether the initial breadth pe
   assert.equal(result.ok, true);
   assert.equal(searchQueries.length, 11, 'one base search plus ten Opening Digest extras');
   assert.deepEqual(searchQueries.slice(1), Array.from({ length: 10 }, (_, index) => `universe-${index + 1}`));
-  assert.match(completionPrompt, /TRACKED-CONTEXT META \+6\.00%/);
+  assert.match(completionPrompt, /TRACKED-OPTIONS-CONTEXT NVDA IVX30 65\.00%/);
+  assert.doesNotMatch(completionPrompt, /META quote|without an asserted cause|no cause/i);
   assert.ok(completionPrompt.length < 60_000, `prompt should stay under the configured global limit: ${completionPrompt.length}`);
   const artifact = JSON.parse(fs.readFileSync(path.join(workflow.workDir, 'opening-digest-universe.json'), 'utf8'));
   assert.equal(artifact.quotes.coverage.available, 72);
   const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
   assert.equal(trace.openingDigestUniverse.universeSize, 72);
-  assert.equal(trace.openingDigestResearchBudget.sourceCount, 72);
+  assert.equal(trace.openingDigestResearchBudget.sourceCount, 71);
   assert.equal(trace.openingDigestResearchBudget.configuredExcerptChars, 1200);
   assert.ok(trace.openingDigestResearchBudget.appliedExcerptChars < 1200);
   assert.equal(trace.openingDigestResearchBudget.promptChars, completionPrompt.length);
