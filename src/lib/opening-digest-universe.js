@@ -89,6 +89,7 @@ export async function collectOpeningDigestUniverseContext({
   ]);
   diagnostics.push(...quotes.diagnostics, ...options.diagnostics);
   const sources = [
+    ...quotes.movers.map(quoteSource),
     ...(options.triggers.length ? [optionsSource(options)] : []),
   ];
   const artifact = {
@@ -313,6 +314,17 @@ function summarizeHistory(historyData, tickers) {
   return output;
 }
 
+function quoteSource(item) {
+  return {
+    title: `${item.ticker} market quote`,
+    url: item.sourceUrl,
+    publishedDate: item.asOf,
+    text: `${item.ticker} (${item.company}) was ${signed(item.changePct)}% at ${item.asOf}, versus the prior regular close.`,
+    openingDigestKind: 'universe-price',
+    specialist: true,
+  };
+}
+
 function optionsSource(options) {
   return {
     title: 'OIC Trending Options Volume',
@@ -324,12 +336,14 @@ function optionsSource(options) {
   };
 }
 
-function universePromptText({ options }) {
+function universePromptText({ quotes, options }) {
   return `【Opening Digest tracked-universe signals】
+Universe size: ${OPENING_DIGEST_UNIVERSE.length}. Price coverage: ${quotes.coverage.available}/${quotes.coverage.requested}.
+Price movers at or above 5% versus prior regular close: ${JSON.stringify(quotes.movers)}
 OIC universe matches: ${JSON.stringify(options.matches)}
 OIC IV triggers (IVX30 >= 60% or derived one-day increase >= 5 volatility points): ${JSON.stringify(options.triggers)}
 IV limitation: this is not a full-universe IV scan; it only covers tracked tickers that appear in the OIC Top 20.
-Selection rules: use a tracked ticker's price action only when a supplied current source gives a verifiable catalyst; otherwise omit it. Combine standalone IV signals into at most one catalyst; allow at most one genuinely material macro catalyst; accept explicit upgrades/downgrades but not price-target-only notes or unconfirmed rumors; current-week earnings schedules may use an older verifiable schedule source.`;
+Selection rules: prioritize material tracked-universe events; a price-only mover may be used as a timestamped fact, without causal interpretation or commentary about the absence of one; combine standalone IV signals into at most one catalyst; allow at most one genuinely material macro catalyst; accept explicit upgrades/downgrades but not price-target-only notes or unconfirmed rumors; current-week earnings schedules may use an older verifiable schedule source.`;
 }
 
 function group(id, tuples) {

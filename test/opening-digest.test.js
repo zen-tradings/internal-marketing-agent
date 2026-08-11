@@ -217,7 +217,7 @@ test('universe OIC analysis applies absolute and derived point thresholds with s
   assert.equal(analyzed.history.IREN.firstAppearanceInWindow, true);
 });
 
-test('universe context keeps unsupported price moves out of editorial sources and prompts', async () => {
+test('universe context emits prompt sources and a reusable OIC artifact without making IV coverage claims', async () => {
   const asOf = new Date('2026-08-10T14:15:00.000Z');
   const data = structuredClone(OPTIONS_DATA);
   data.rows[0].splice(1, 7, 'NVDA', 'NVIDIA', '60.00 %', '40.00 %', '1,000,000', '65.00', '1.00');
@@ -241,9 +241,10 @@ test('universe context keeps unsupported price moves out of editorial sources an
   assert.equal(context.artifact.schemaVersion, 1);
   assert.equal(context.artifact.quotes.coverage.available, 72);
   assert.equal(context.artifact.options.data.rows.length, 20);
-  assert.deepEqual(context.sources.map((source) => source.openingDigestKind), ['universe-iv']);
+  assert.deepEqual(context.sources.map((source) => source.openingDigestKind), ['universe-price', 'universe-iv']);
+  assert.equal(context.sources[0].text, 'META (Meta Platforms) was +6.00% at 2026-08-10T14:15:00.000Z, versus the prior regular close.');
+  assert.doesNotMatch(context.sources[0].text, /cause|reason|asserted/i);
   assert.match(context.promptText, /not a full-universe IV scan/);
-  assert.doesNotMatch(context.promptText, /META|Price movers|price-only|no cause/i);
   assert.equal(recorded[0].status, 'success');
 });
 

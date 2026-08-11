@@ -279,3 +279,12 @@ test('email 工作流:Customer.io 草稿渠道、独立目录与 Vol. 版号', a
     if (origEdition) process.env.NEWSLETTER_EDITION = origEdition; else delete process.env.NEWSLETTER_EDITION;
   }
 });
+
+test('Opening Digest 保留价格事实，但禁止解释没有催化原因', async () => {
+  const { default: openingDigest } = await import('../src/workflows/opening-digest.js');
+  const prompt = openingDigest.promptTemplate('opening');
+  assert.match(prompt, /price move may be reported as a timestamped price fact/i);
+  assert.match(prompt, /write one factual price sentence only: omit a Reason clause entirely/i);
+  assert.match(prompt, /never comment that a cause is missing, unknown, or unasserted/i);
+  assert.doesNotMatch(prompt, /without asserting a cause/i);
+});
