@@ -33,7 +33,7 @@ API 创建的邮件会被 Customer.io workspace layout 包裹。Opening Digest �
 Customer.io 的 App API 不能改写由 Design Studio 创建的邮件正文，因此保留两条发布路径：
 
 1. 现有 `Vol. 1` 使用 Customer.io Design Studio 模板，人工替换内容并试发。
-2. Slack `email:` 工作流固定使用仓库内 `zen-customerio/zen-research@3` 邮件 HTML 模板创建新的 Customer.io 草稿，适合后续稳定自动化。
+2. Slack `email:` 工作流固定使用仓库内 `zen-customerio/zen-research@4` 邮件 HTML 模板创建新的 Customer.io 草稿；移动端外壳左右留白为 4px、正文左右留白为 8px，适合数据表格较宽的稳定自动化内容。
 
 这两条常规 `email:` 路径都必须经过 Customer.io Review 页，任何发送或排期都由人工确认；`opening-digest` 是前文定义的独立受控例外，只能向配置的 `test2` 受众按其专用门禁发送或排期。
 

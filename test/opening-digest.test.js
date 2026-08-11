@@ -336,7 +336,8 @@ test('complete digest renders template, address, options and schedules without c
   assert.equal(result.mediaId, 'customerio-newsletter:99');
   assert.deepEqual(uploads, ['opening-digest-cover-2026-08-10.png']);
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
-  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@3"/);
+  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@4"/);
+  assert.match(create.body.body, /\.zen-email-content \{ padding:20px 8px !important; \}/);
   assert.match(create.body.body, /Zen Trading · 700 Leahy St, Redwood City, CA 94061/);
   assert.match(create.body.body, /OIC Trending Options Volume top twenty/);
   assert.doesNotMatch(create.body.body, /unsubscribe_url/);

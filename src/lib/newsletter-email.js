@@ -52,19 +52,27 @@ export function renderNewsletterEmail(article, options = {}) {
 
   return `<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(article.subject)}</title></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(article.subject)}</title>
+  <style>
+    @media screen and (max-width:640px) {
+      .zen-email-shell { padding:8px 4px !important; }
+      .zen-email-content { padding:20px 8px !important; }
+      .zen-email-footer { padding:18px 8px !important; }
+    }
+  </style>
+</head>
 <body data-zen-draft-template="${NEWSLETTER_TEMPLATE_ID}" style="margin:0;background:#f0edeb;color:#08272b;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-weight:300">
   <div style="display:none;max-height:0;overflow:hidden;opacity:0">${escapeHtml(article.preheader)}</div>
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f0edeb"><tr><td align="center" style="padding:24px 12px">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f0edeb"><tr><td class="zen-email-shell" align="center" style="padding:16px 6px">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#fffdf8;border:1px solid #dcd8d5;border-radius:12px">
       ${headerImage}
-      <tr><td style="padding:28px 32px">
+      <tr><td class="zen-email-content" style="padding:24px 16px">
         <p style="margin:0 0 14px;font-size:11px;letter-spacing:.12em;font-weight:600;color:#66787a">ZEN RESEARCH FROM ZEN TRADING · ${escapeHtml(article.edition.toUpperCase())}</p>
         <h1 style="margin:0 0 20px;font-size:24px;line-height:1.25;font-weight:500;color:#08272b">${escapeHtml(article.title)}</h1>
         <div style="font-size:14px;line-height:1.6;font-weight:300;color:#173f43">${content}</div>
         ${feedback}
       </td></tr>
-      <tr><td style="padding:20px 32px;border-top:1px solid #dcd8d5;font-size:11px;line-height:1.6;font-weight:300;color:#66787a">
+      <tr><td class="zen-email-footer" style="padding:18px 16px;border-top:1px solid #dcd8d5;font-size:11px;line-height:1.6;font-weight:300;color:#66787a">
         ${contact}
         ${unsubscribe}
         <p style="margin:0">Zen Trading · ${address}</p>

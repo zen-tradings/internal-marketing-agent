@@ -58,6 +58,10 @@ test('newsletter article:规范化 Vol. 版号并渲染品牌/退订/反馈结�
   assert.match(html, /edition=Vol\.\+1/);
   assert.match(html, /<strong>supply matters<\/strong>/);
   assert.match(html, /href="https:\/\/example\.com\/filing"/);
+  assert.match(html, /@media screen and \(max-width:640px\)/);
+  assert.match(html, /\.zen-email-shell \{ padding:8px 4px !important; \}/);
+  assert.match(html, /\.zen-email-content \{ padding:20px 8px !important; \}/);
+  assert.match(html, /class="zen-email-content" style="padding:24px 16px"/);
 });
 
 test('newsletter feedback:未配置反馈页时退化为可追踪 mailto 按钮', () => {
