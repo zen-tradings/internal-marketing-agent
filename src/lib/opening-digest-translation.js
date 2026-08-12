@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 1;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 2;
 
 const FIXED_TERMS = new Map([
   ['Market snapshot', '市场快照'],
@@ -146,12 +146,15 @@ function compareBrandTokens(source, translated, kind) {
 
 function brandTokens(value, kind) {
   const text = String(value || '');
-  const properNames = kind === 'company_name' ? [] : (text.match(/\b(?:[A-Z][A-Za-z.&'-]+\s+){1,4}[A-Z][A-Za-z.&'-]+\b/g) || [])
-    .map((token) => stripLegalSuffix(token));
+  const linkedSources = kind === 'company_name' ? [] : [...text.matchAll(/\(\[([^\]]+)]\(https?:\/\//gi)]
+    .map((match) => match[1].trim());
+  const tickerCompanies = kind === 'company_name' ? [] : [...text.matchAll(/\*\*([^*()]+?)\s*\(([A-Z]{1,6})\)\*\*/g)]
+    .map((match) => stripLegalSuffix(match[1].replace(/^[^A-Za-z]+|[^A-Za-z.&'\-]+$/g, '').trim()));
   const tokens = [
     ...(text.match(/\b[A-Z]{2,10}\b/g) || []),
     ...(text.match(/\b[A-Za-z]*[a-z][A-Z][A-Za-z]*\b/g) || []),
-    ...properNames,
+    ...linkedSources,
+    ...tickerCompanies,
   ];
   if (kind === 'company_name') {
     const brand = stripLegalSuffix(text);

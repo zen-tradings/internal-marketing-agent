@@ -96,6 +96,35 @@ test('Opening Digest 专用翻译把可配置长超时传给模型调用', async
   assert.equal(observedTimeout, 420000);
 });
 
+test('Opening Digest 品牌门禁不把英文标题短语误判为机构名', async () => {
+  const source = {
+    article: {
+      preheader: 'Market signals and catalysts.',
+      body: `## Today's catalysts
+- **OIC IV signals: SPCX** — The OIC Top 20 scan shows SPCX at 68.54% ([Options Education](https://example.com/oic)).
+- **Macro: July CPI** — The July CPI report is scheduled for release at 8:30 a.m. ET Wednesday ([Barron’s](https://example.com/cpi)).`,
+    },
+    metrics: [],
+  };
+  const mapping = new Map([
+    ['preheader', '市场信号与催化因素。'],
+    ['body-1', '今日催化'],
+    ['body-2', '**OIC IV 信号：SPCX** — OIC 前 20 名扫描显示 SPCX 为 68.54%（[Options Education](https://example.com/oic)）。'],
+    ['body-3', '**宏观：7 月 CPI** — 7 月 CPI 报告定于周三上午 8:30 ET 发布（[Barron’s](https://example.com/cpi)）。'],
+  ]);
+  let calls = 0;
+  const result = await translateOpeningDigestPayload(source, {
+    writer: { model: 'test' },
+    complete: async ({ units }) => {
+      calls += 1;
+      return { translations: units.map((unit) => ({ id: unit.id, text: mapping.get(unit.id) })) };
+    },
+  });
+  assert.equal(calls, 1);
+  assert.match(result.translations.find((unit) => unit.id === 'body-2').text, /OIC 前 20 名/);
+  assert.match(result.translations.find((unit) => unit.id === 'body-3').text, /7 月 CPI.*8:30 ET/);
+});
+
 test('中文直译在两轮局部修复后仍拒绝缺块、重复和乱序', async () => {
   await assert.rejects(translateOpeningDigestPayload(payload(), {
     writer: { model: 'test' },
