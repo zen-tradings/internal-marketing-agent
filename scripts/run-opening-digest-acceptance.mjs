@@ -33,6 +33,7 @@ const testResult = await channel.publish({
   contentMode: generated.contentMode || 'editorial',
   acceptanceId,
 });
+assertVerifiedWechat(testResult, 'TEST');
 const formalResult = await channel.publish({
   articlePath: generated.articlePath,
   config,
@@ -40,6 +41,7 @@ const formalResult = await channel.publish({
   source: 'cron',
   contentMode: generated.contentMode || 'editorial',
 });
+assertVerifiedWechat(formalResult, 'formal');
 const trace = JSON.parse(fs.readFileSync(generated.researchTracePath, 'utf8'));
 const universe = trace.openingDigestUniverse || {};
 console.log(JSON.stringify({
@@ -78,4 +80,14 @@ function easternTimeKey(value) {
   }).formatToParts(value);
   const get = (type) => parts.find((part) => part.type === type)?.value || '00';
   return `${get('hour')}${get('minute')}et`;
+}
+
+function assertVerifiedWechat(result, label) {
+  if (!config.openingDigest.wechatEnabled) {
+    throw new Error(`Opening Digest ${label} acceptance requires OPENING_DIGEST_WECHAT_ENABLED=true`);
+  }
+  const delivery = result.deliveries?.find((item) => item.destination === 'wechat');
+  if (!delivery?.mediaId || delivery.status !== 'verified') {
+    throw new Error(`Opening Digest ${label} WeChat acceptance failed:${JSON.stringify(delivery || null)}`);
+  }
 }

@@ -83,6 +83,19 @@ test('Opening Digest 专用直译保持块 ID、顺序、数字、Ticker、时�
   assert.equal(calls, 1, '同一英文 payload 的测试稿和正式稿必须复用中文译文');
 });
 
+test('Opening Digest 专用翻译把可配置长超时传给模型调用', async () => {
+  let observedTimeout;
+  await translateOpeningDigestPayload(payload(), {
+    writer: { model: 'test' }, timeoutMs: 420000,
+    complete: async ({ units, timeoutMs }) => {
+      observedTimeout = timeoutMs;
+      const mapping = new Map(translated().translations.map((item) => [item.id, item.text]));
+      return { translations: units.map((unit) => ({ id: unit.id, text: mapping.get(unit.id) })) };
+    },
+  });
+  assert.equal(observedTimeout, 420000);
+});
+
 test('中文直译在两轮局部修复后仍拒绝缺块、重复和乱序', async () => {
   await assert.rejects(translateOpeningDigestPayload(payload(), {
     writer: { model: 'test' },

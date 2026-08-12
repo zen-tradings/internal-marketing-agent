@@ -202,6 +202,7 @@ export function makeChannel({
           try {
             const translated = await translatePayload(openingPayload, {
               writer: config.writer, fetchFn, cacheDir: path.dirname(articlePath),
+              timeoutMs: config.defaultTimeoutMs,
             });
             traceMetadata.translation = {
               model: translated.model, payloadHash: translated.payloadHash, blockCount: translated.blockCount,
