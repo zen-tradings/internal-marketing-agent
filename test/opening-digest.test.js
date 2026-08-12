@@ -100,7 +100,7 @@ function config() {
   };
 }
 
-function makeCioFetch({ requests, audienceName = 'test2', audienceCount = 4, newsletterId = 99, list = [], send } = {}) {
+function makeCioFetch({ requests, audienceName = 'test 1', audienceCount = 4, newsletterId = 99, list = [], send } = {}) {
   return async (url, options = {}) => {
     const parsed = new URL(url);
     const body = options.body === undefined ? undefined : JSON.parse(options.body);
@@ -336,7 +336,8 @@ test('complete digest renders template, address, options and schedules without c
   assert.equal(result.mediaId, 'customerio-newsletter:99');
   assert.deepEqual(uploads, ['opening-digest-cover-2026-08-10.png']);
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
-  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@4"/);
+  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@5"/);
+  assert.match(create.body.body, /href="https:\/\/www\.linkedin\.com\/company\/110921483"[^>]*>LinkedIn<\/a>/);
   assert.match(create.body.body, /\.zen-email-content \{ padding:20px 8px !important; \}/);
   assert.match(create.body.body, /Zen Trading · 700 Leahy St, Redwood City, CA 94061/);
   assert.match(create.body.body, /OIC Trending Options Volume top twenty/);
@@ -393,7 +394,7 @@ test('cover and OIC failures degrade silently and persist diagnostics to trace',
   assert.ok(trace.openingDigestDelivery.diagnostics.some((item) => /期权区块已省略/.test(item)));
 });
 
-test('zero audience and failed audience preflight do not block configured test2 delivery', async () => {
+test('zero audience and failed audience preflight do not block configured test1 delivery', async () => {
   for (const fetchMode of ['zero', 'failed']) {
     const requests = [];
     const fallback = makeCioFetch({ requests, audienceCount: 0 });
@@ -416,9 +417,9 @@ test('zero audience and failed audience preflight do not block configured test2 
   }
 });
 
-test('a known non-test2 segment name remains a hard gate', async () => {
+test('a known non-test1 segment name remains a hard gate', async () => {
   const { channel } = standardChannel({ cio: { audienceName: 'customers' } });
-  await assert.rejects(channel.publish({ articlePath: '/tmp/article.md', config: config() }), /只能发送到 Customer\.io segment test2/);
+  await assert.rejects(channel.publish({ articlePath: '/tmp/article.md', config: config() }), /只能发送到 Customer\.io segment test1/);
 });
 
 test('data-only digest requires at least one valid metric or a valid options section', async (t) => {
@@ -539,7 +540,7 @@ test('manual digest is allowed off-session and labels live options latest availa
   assert.match(create.body.body, /Latest available capture/);
 });
 
-test('production acceptance uses an explicit TEST identity and sends immediately to test2', async () => {
+test('production acceptance uses an explicit TEST identity and sends immediately to test1', async () => {
   const requests = [];
   const uploads = [];
   const { channel } = standardChannel({

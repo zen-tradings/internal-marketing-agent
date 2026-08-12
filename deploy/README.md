@@ -28,6 +28,12 @@ After reviewing the preflight output, activate the exact pushed commit:
 npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --activate
 ```
 
+需要同时切换 Opening Digest 的受控测试受众时，必须通过同一事务化部署命令传入已在 Customer.io 核验的 segment ID；部署失败会连同受保护环境文件一起回滚：
+
+```bash
+npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --activate --opening-digest-segment-id 19
+```
+
 The command requires a clean worktree and a commit present on the upstream
 branch. It creates a local archive, stages and tests a separate release on the
 Droplet, runs the SQLite backup service, requires an idle queue, updates the
@@ -154,7 +160,7 @@ responsive HTML table. Any OIC authorization, session, browser, page, or data
 validation failure omits the entire options section and records the diagnostic
 in the run trace; it does not pause or block the newsletter. During the test
 phase the code still fails closed when a successfully-read configured segment
-name is not `test2`.
+name does not normalize to `test1`.
 
 If the provider later requires login, do not put an OIC password in the
 environment. Install the optional GUI helpers only on the Droplet, bind them to
@@ -198,7 +204,7 @@ sudo systemd-run --wait --pipe --collect \
 ```
 
 The command immediately sends one clearly named `[TEST]` newsletter to the
-configured `test2` segment, then ensures the formal newsletter for the current
+configured `test1` segment, then ensures the formal newsletter for the current
 ET date exists and is scheduled for 10:30 ET or sent immediately when late. An
 existing matching formal newsletter is reused and never duplicated. The same
 run also exercises the 72-ticker universe quote scan, grouped Exa research and

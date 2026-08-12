@@ -249,7 +249,7 @@ test('Opening Digest 硬失败发送 Slack failure，但不发送 warning', asyn
     'customerio-opening-digest': {
       templateId: FIXED_DRAFT_TEMPLATE_IDS['customerio-opening-digest'],
       templateLocked: true,
-      async publish() { const error = new Error('segment 名称不是 test2'); error.stage = 'publish'; throw error; },
+      async publish() { const error = new Error('segment 名称不是 test1'); error.stage = 'publish'; throw error; },
     },
   };
   const { deps, store, notifier } = baseDeps({ workflows, channels });
@@ -259,7 +259,7 @@ test('Opening Digest 硬失败发送 Slack failure，但不发送 warning', asyn
   assert.equal(store._row().status, 'failed');
   assert.equal(notifier.warnCalls.length, 0);
   assert.equal(notifier.failureCalls.length, 1);
-  assert.match(notifier.failureCalls[0].payload.error, /不是 test2/);
+  assert.match(notifier.failureCalls[0].payload.error, /不是 test1/);
 });
 
 test('真实草稿渠道未锁定登记模板时在 publish 前拦截', async () => {

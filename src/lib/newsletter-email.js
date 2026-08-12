@@ -3,6 +3,7 @@ import { FIXED_DRAFT_TEMPLATE_IDS } from './draft-template.js';
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?/;
 export const NEWSLETTER_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['customerio-draft'];
 export const NEWSLETTER_COMPANY_ADDRESS = '700 Leahy St, Redwood City, CA 94061';
+export const NEWSLETTER_COMPANY_LINKEDIN_URL = 'https://www.linkedin.com/company/110921483';
 
 export function normalizeEdition(value = 'Vol. 1') {
   const raw = String(value || 'Vol. 1').trim();
@@ -45,7 +46,7 @@ export function renderNewsletterEmail(article, options = {}) {
   const headerImage = headerImageUrl
     ? `<tr><td style="padding:0"><img src="${escapeAttr(headerImageUrl)}" alt="Zen Research from Zen Trading" width="620" style="display:block;width:100%;max-width:620px;height:auto;border:0;border-top-left-radius:12px;border-top-right-radius:12px"></td></tr>`
     : '';
-  // 页脚只保留公司信息(网址 + 邮件)与法律强制项(退订 + 实体地址)。
+  // 页脚只保留固定公司信息(网址 + 邮件 + LinkedIn)与法律强制项(退订 + 实体地址)。
   const contact = contactEmail
     ? `<p style="margin:0 0 8px"><a href="${escapeAttr(siteUrl)}" style="color:#173f43">${escapeHtml(siteLabel)}</a> · <a href="mailto:${escapeAttr(contactEmail)}" style="color:#173f43">${escapeHtml(contactEmail)}</a></p>`
     : `<p style="margin:0 0 8px"><a href="${escapeAttr(siteUrl)}" style="color:#173f43">${escapeHtml(siteLabel)}</a></p>`;
@@ -74,6 +75,7 @@ export function renderNewsletterEmail(article, options = {}) {
       </td></tr>
       <tr><td class="zen-email-footer" style="padding:18px 16px;border-top:1px solid #dcd8d5;font-size:11px;line-height:1.6;font-weight:300;color:#66787a">
         ${contact}
+        <p style="margin:0 0 8px"><a href="${NEWSLETTER_COMPANY_LINKEDIN_URL}" style="color:#173f43">LinkedIn</a></p>
         ${unsubscribe}
         <p style="margin:0">Zen Trading · ${address}</p>
       </td></tr>
