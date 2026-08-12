@@ -3,7 +3,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 8;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 9;
+const MODEL_TRANSLATION_BATCH_SIZE = 1;
 
 const FIXED_TERMS = new Map([
   ['Market snapshot', '市场快照'],
@@ -50,42 +51,44 @@ export async function translateOpeningDigestPayload(payload, {
   }
   const repairs = [];
   if (modelUnits.length) {
-    let pending = modelUnits;
-    for (let round = 0; round < 3 && pending.length; round++) {
-      const protectedUnits = pending.map(protectTranslationUnit);
-      const protectionById = new Map(protectedUnits.map((item) => [item.unit.id, item]));
-      const result = await complete({ units: protectedUnits.map((item) => item.unit), writer, fetchFn, round, timeoutMs });
-      const returnedItems = Array.isArray(result?.translations) ? result.translations : [];
-      const expectedIds = pending.map((unit) => unit.id);
-      const returnedIds = returnedItems.map((item) => String(item.id));
-      const responseMappingError = mappingResponseError(expectedIds, returnedIds);
-      const returned = new Map(returnedItems.map((item) => [String(item.id), String(item.text || '').trim()]));
-      const next = [];
-      for (const unit of pending) {
-        if (responseMappingError) {
-          const issues = [responseMappingError];
-          next.push({ ...unit, issues });
-          repairs.push({ round: round + 1, id: unit.id, issues });
-          continue;
+    for (let offset = 0; offset < modelUnits.length; offset += MODEL_TRANSLATION_BATCH_SIZE) {
+      let pending = modelUnits.slice(offset, offset + MODEL_TRANSLATION_BATCH_SIZE);
+      for (let round = 0; round < 3 && pending.length; round++) {
+        const protectedUnits = pending.map(protectTranslationUnit);
+        const protectionById = new Map(protectedUnits.map((item) => [item.unit.id, item]));
+        const result = await complete({ units: protectedUnits.map((item) => item.unit), writer, fetchFn, round, timeoutMs });
+        const returnedItems = Array.isArray(result?.translations) ? result.translations : [];
+        const expectedIds = pending.map((unit) => unit.id);
+        const returnedIds = returnedItems.map((item) => String(item.id));
+        const responseMappingError = mappingResponseError(expectedIds, returnedIds);
+        const returned = new Map(returnedItems.map((item) => [String(item.id), String(item.text || '').trim()]));
+        const next = [];
+        for (const unit of pending) {
+          if (responseMappingError) {
+            const issues = [responseMappingError];
+            next.push({ ...unit, issues });
+            repairs.push({ round: round + 1, id: unit.id, issues });
+            continue;
+          }
+          if (!returned.has(unit.id)) {
+            const issues = [`模型未返回文本块:${unit.id}`];
+            next.push({ ...unit, issues });
+            repairs.push({ round: round + 1, id: unit.id, issues });
+            continue;
+          }
+          const text = restoreTranslationUnit(returned.get(unit.id) || '', protectionById.get(unit.id)?.tokens || []);
+          const assessment = assessUnit(unit, text, round > 0);
+          if (!assessment.hardErrors.length) translations.set(unit.id, text);
+          else {
+            next.push({ ...unit, issues: assessment.hardErrors });
+            repairs.push({ round: round + 1, id: unit.id, issues: assessment.hardErrors });
+          }
         }
-        if (!returned.has(unit.id)) {
-          const issues = [`模型未返回文本块:${unit.id}`];
-          next.push({ ...unit, issues });
-          repairs.push({ round: round + 1, id: unit.id, issues });
-          continue;
-        }
-        const text = restoreTranslationUnit(returned.get(unit.id) || '', protectionById.get(unit.id)?.tokens || []);
-        const assessment = assessUnit(unit, text, round > 0);
-        if (!assessment.hardErrors.length) translations.set(unit.id, text);
-        else {
-          next.push({ ...unit, issues: assessment.hardErrors });
-          repairs.push({ round: round + 1, id: unit.id, issues: assessment.hardErrors });
-        }
+        pending = next;
       }
-      pending = next;
-    }
-    if (pending.length) {
-      throw translationError(`Opening Digest 中文直译硬校验失败:${pending.map((unit) => `${unit.id}(${unit.issues.join('、')})`).join('; ')}`);
+      if (pending.length) {
+        throw translationError(`Opening Digest 中文直译硬校验失败:${pending.map((unit) => `${unit.id}(${unit.issues.join('、')})`).join('; ')}`);
+      }
     }
   }
   const ordered = units.map((unit) => ({ id: unit.id, kind: unit.kind, source: unit.text, text: translations.get(unit.id) }));
@@ -221,9 +224,11 @@ function mappingResponseError(expectedIds, returnedIds) {
 export function protectTranslationUnit(unit) {
   const source = String(unit.text || '');
   const candidates = [
+    ...institutionMarkdownLinks(source),
     ...(source.match(/https?:\/\/[^\s)\]}>"']+/gi) || []),
     ...(source.match(/\b\d{1,2}:\d{2}(?:\s*(?:a\.m\.|p\.m\.|AM|PM))?(?:\s+(?:ET|EST|EDT|PT|PST|PDT|UTC|GMT))?/gi) || []),
     ...(source.match(/\b(?:ET|EST|EDT|PT|PST|PDT|UTC|GMT)\b/g) || []),
+    ...(source.match(/\b(?:Q[1-4]|H[12]|FY\d{2,4}|[1-4]Q\d{2,4})\b/g) || []),
     ...(source.match(/(?:[$€£¥]\s*)?[-+]?\d+(?:[,.]\d+)*\s+(?:thousand|million|billion|trillion)(?:\s+(?:U\.S\.\s+)?dollars?)?/gi) || []),
     ...(source.match(/(?<![A-Za-z0-9])[-+]?\d+(?:[,.]\d+)*(?:%|‰)?/g) || []),
     ...brandTokens(source, unit.kind),
@@ -248,6 +253,12 @@ export function protectTranslationUnit(unit) {
   text += source.slice(cursor);
   const { markdown: _unprotectedMarkdown, ...safeUnit } = unit;
   return { unit: { ...safeUnit, text }, tokens };
+}
+
+function institutionMarkdownLinks(source) {
+  return [...String(source || '').matchAll(/\[([^\]]+)]\((https?:\/\/[^)\s]+)\)/gi)]
+    .filter((match) => isInstitutionLabel(match[1]))
+    .map((match) => match[0]);
 }
 
 function alphaMarker(index) {

@@ -85,8 +85,10 @@ test('Opening Digest 专用直译保持块 ID、顺序、数字、Ticker、时�
   assert.match(result.translations.find((item) => item.id === 'body-2').text, /SPY.*10:15 EDT.*10\.25%/);
   assert.equal(result.translations.find((item) => item.id === 'oic-company-1').text, 'NVIDIA 公司');
   assert.equal(result.translations.find((item) => item.id === 'oic-company-2').text, 'Company 2');
+  const callsBeforeCacheRead = calls;
+  assert.ok(callsBeforeCacheRead > 1, '动态文本应逐块翻译以隔离模型漏块');
   await translateOpeningDigestPayload(payload(), { cacheDir: directory, writer: { model: 'test' }, complete: async () => { throw new Error('cache miss'); } });
-  assert.equal(calls, 1, '同一英文 payload 的测试稿和正式稿必须复用中文译文');
+  assert.equal(calls, callsBeforeCacheRead, '同一英文 payload 的测试稿和正式稿必须复用中文译文');
 });
 
 test('Opening Digest 专用翻译把可配置长超时传给模型调用', async () => {
@@ -126,7 +128,7 @@ test('Opening Digest 品牌门禁不把英文标题短语误判为机构名', as
       return { translations: units.map((unit) => ({ id: unit.id, text: mapping.get(unit.id) })) };
     },
   });
-  assert.equal(calls, 1);
+  assert.equal(calls, 3);
   assert.match(result.translations.find((unit) => unit.id === 'body-2').text, /OIC 前 20 名/);
   assert.match(result.translations.find((unit) => unit.id === 'body-3').text, /7 月 CPI.*8:30 ET/);
 });
@@ -171,27 +173,43 @@ test('模型输入不泄露未保护原文且重叠缩写 token 可无损还原'
   assert.equal(restoreTranslationUnit(protectedUnit.unit.text, protectedUnit.tokens), unit.text);
 });
 
+test('财务季度与机构 Markdown 来源链接作为完整 token 保护', () => {
+  const unit = {
+    id: 'body-2', kind: 'paragraph',
+    text: 'CoreWeave Q2 revenue rose ([CNBC](https://www.cnbc.com/q2-report.html)); guidance for FY2026 held.',
+  };
+  const protectedUnit = protectTranslationUnit(unit);
+  assert.doesNotMatch(protectedUnit.unit.text, /Q2|CNBC|cnbc\.com|FY2026/);
+  assert.ok(protectedUnit.tokens.some((token) => token.value === '[CNBC](https://www.cnbc.com/q2-report.html)'));
+  assert.equal(restoreTranslationUnit(protectedUnit.unit.text, protectedUnit.tokens), unit.text);
+});
+
 test('中文直译在两轮局部修复后仍拒绝缺块、重复和乱序', async () => {
   await assert.rejects(translateOpeningDigestPayload(payload(), {
     writer: { model: 'test' },
-    complete: async ({ units }) => ({ translations: [...units].reverse().map((unit) => ({ id: unit.id, text: unit.text })) }),
+    complete: async ({ units }) => ({ translations: [
+      { id: units[0].id, text: units[0].text },
+      { id: units[0].id, text: units[0].text },
+    ] }),
   }), /块 ID 重复、乱序或含未知项/);
 });
 
 test('局部修复漏一块时保留已合格块，下一轮只重试缺失块', async () => {
   const source = payload();
   const mapping = new Map(translated(source).translations.map((item) => [item.id, item.text]));
-  const calls = [];
+  const calls = new Map();
+  const retryId = 'body-2';
   const result = await translateOpeningDigestPayload(source, {
     writer: { model: 'test' },
-    complete: async ({ units, round }) => {
-      calls.push(units.map((unit) => unit.id));
+    complete: async ({ units }) => {
+      const id = units[0].id;
+      calls.set(id, (calls.get(id) || 0) + 1);
       const items = units.map((unit) => ({ id: unit.id, text: mapping.get(unit.id) }));
-      return { translations: round === 0 ? items.slice(0, -1) : items };
+      return { translations: id === retryId && calls.get(id) === 1 ? [] : items };
     },
   });
-  assert.equal(calls.length, 2);
-  assert.deepEqual(calls[1], [calls[0].at(-1)]);
+  assert.equal(calls.get(retryId), 2);
+  assert.ok([...calls.entries()].filter(([id]) => id !== retryId).every(([, count]) => count === 1));
   assert.deepEqual(result.translations.map((item) => item.id), translationUnits(source).map((item) => item.id));
 });
 
