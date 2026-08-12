@@ -14,7 +14,11 @@ import {
   OPENING_COVER_HEIGHT,
   OPENING_COVER_WIDTH,
 } from '../src/lib/opening-digest-cover.js';
-import { makeChannel, renderOptionsHtml } from '../src/channels/customerio-opening-digest.js';
+import {
+  makeChannel,
+  publishHistoricalOpeningDigestWechat,
+  renderOptionsHtml,
+} from '../src/channels/customerio-opening-digest.js';
 import { countTrendingRows, validateTrendingOptionsData } from '../src/lib/options-volume.js';
 import { collectOpeningMetrics, normalizeOpeningMetrics, validateOpeningMetrics } from '../src/lib/opening-digest-metrics.js';
 import {
@@ -611,6 +615,76 @@ test('production acceptance uses an explicit TEST identity and sends immediately
   assert.equal(requests.some((item) => item.path.endsWith('/schedule')), false);
 });
 
+test('历史迁移验收仅从同源隔离 payload 创建正式微信稿', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'zen-opening-acceptance-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  await fs.writeFile(path.join(directory, 'article.md'), ARTICLE);
+  await fs.writeFile(path.join(directory, 'article.md.opening-digest-state.json'), JSON.stringify({
+    dateKey: '2026-08-10', metrics: openingMetrics(), capturedAt: '2026-08-10T14:15:00.000Z',
+  }));
+  await fs.writeFile(path.join(directory, 'opening-digest-universe.json'), JSON.stringify({
+    schemaVersion: 1, dateKey: '2026-08-10',
+    options: { data: OPTIONS_DATA, capturedAt: '2026-08-10T14:15:00.000Z' },
+  }));
+  await fs.writeFile(path.join(directory, 'research-trace.json'), JSON.stringify({
+    startedAt: '2026-08-10T14:00:00.000Z', finishedAt: '2026-08-10T14:20:00.000Z',
+  }));
+  let translatedPayload; let wechatPayload;
+  const migratedConfig = config();
+  migratedConfig.openingDigest.wechatEnabled = true;
+  const result = await publishHistoricalOpeningDigestWechat({
+    sourceDir: directory,
+    newsletterId: 88,
+    historicalSegmentId: 21,
+    historicalSegmentName: 'test2',
+    config: migratedConfig,
+    now: () => new Date('2026-08-10T14:45:00.000Z'),
+    fetchFn: async (url) => {
+      const pathname = new URL(url).pathname;
+      if (pathname === '/v1/newsletters/88') return response({ newsletter: {
+        id: 88, name: 'Zen Opening Digest · 2026-08-10', created: 1786371000, sent_at: 1786372201,
+        recipient_segment_ids: [21], subscription_topic_id: 19,
+      } });
+      if (pathname === '/v1/segments/21') return response({ segment: { id: 21, name: 'test2' } });
+      throw new Error(`Unexpected URL ${url}`);
+    },
+    translatePayload: async (payload) => {
+      translatedPayload = payload;
+      return { model: 'test', payloadHash: 'hash', blockCount: 1, repairs: [], translations: [{ id: 'preheader', text: '早盘信号' }] };
+    },
+    wechatChannel: { async publish({ payload, acceptance }) {
+      wechatPayload = payload;
+      assert.equal(acceptance, false);
+      return { mediaId: 'wx-formal', title: 'Zen 开市日报 · 2026-08-10', status: 'verified', errors: [], attempts: [{ status: 'verified' }] };
+    } },
+  });
+  assert.equal(translatedPayload, wechatPayload);
+  assert.equal(Object.isFrozen(wechatPayload), true);
+  assert.equal(wechatPayload.article.body, parseArticleBody(ARTICLE));
+  assert.deepEqual(wechatPayload.metrics, normalizeOpeningMetrics(openingMetrics()).metrics);
+  assert.deepEqual(wechatPayload.options.data, OPTIONS_DATA);
+  assert.equal(result.mediaId, 'customerio-newsletter:88');
+  assert.equal(result.deliveries.find((item) => item.destination === 'wechat').mediaId, 'wx-formal');
+});
+
+test('历史迁移验收拒绝未发送邮件', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'zen-opening-acceptance-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  await fs.writeFile(path.join(directory, 'article.md'), ARTICLE);
+  await fs.writeFile(path.join(directory, 'article.md.opening-digest-state.json'), JSON.stringify({ dateKey: '2026-08-10', metrics: openingMetrics() }));
+  await fs.writeFile(path.join(directory, 'opening-digest-universe.json'), JSON.stringify({ schemaVersion: 1, dateKey: '2026-08-10' }));
+  await fs.writeFile(path.join(directory, 'research-trace.json'), JSON.stringify({ startedAt: '2026-08-10T14:00:00.000Z', finishedAt: '2026-08-10T14:20:00.000Z' }));
+  const migratedConfig = config(); migratedConfig.openingDigest.wechatEnabled = true;
+  await assert.rejects(publishHistoricalOpeningDigestWechat({
+    sourceDir: directory, newsletterId: 88, historicalSegmentId: 21, historicalSegmentName: 'test2',
+    config: migratedConfig, now: () => new Date('2026-08-10T14:45:00.000Z'),
+    fetchFn: async () => response({ newsletter: {
+      id: 88, name: 'Zen Opening Digest · 2026-08-10', created: 1786371000, sent_at: null,
+      recipient_segment_ids: [21], subscription_topic_id: 19,
+    } }),
+  }), /已发送历史 Opening Digest/);
+});
+
 test('options HTML reproduces all source values safely as text', () => {
   const data = structuredClone(OPTIONS_DATA);
   data.rows[0][2] = '<img src=x onerror=alert(1)>';
@@ -623,3 +697,7 @@ test('options HTML reproduces all source values safely as text', () => {
   assert.match(html, /color:#167a45/);
   assert.ok(Buffer.byteLength(html) < 70 * 1024);
 });
+
+function parseArticleBody(markdown) {
+  return String(markdown).replace(/^---\n[\s\S]*?\n---\n/, '').trim();
+}

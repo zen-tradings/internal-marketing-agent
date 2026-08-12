@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../src/config/index.js';
 import { runWriter } from '../src/core/runner.js';
-import { makeChannel } from '../src/channels/customerio-opening-digest.js';
+import { makeChannel, publishHistoricalOpeningDigestWechat } from '../src/channels/customerio-opening-digest.js';
 import openingDigest from '../src/workflows/opening-digest.js';
 import { easternDateKey } from '../src/lib/us-equity-calendar.js';
 
@@ -16,6 +16,7 @@ const commit = deployedCommit(root);
 const timestamp = easternTimeKey(new Date());
 const acceptanceId = `${commit.slice(0, 12)}-${timestamp}`;
 const workflow = { ...openingDigest, workDir };
+const migration = parseHistoricalMigrationArgs(process.argv.slice(2));
 
 const generated = await runWriter({
   workflow,
@@ -34,13 +35,15 @@ const testResult = await channel.publish({
   acceptanceId,
 });
 assertVerifiedWechat(testResult, 'TEST');
-const formalResult = await channel.publish({
-  articlePath: generated.articlePath,
-  config,
-  workflow,
-  source: 'cron',
-  contentMode: generated.contentMode || 'editorial',
-});
+const formalResult = migration
+  ? await publishHistoricalOpeningDigestWechat({ ...migration, config })
+  : await channel.publish({
+    articlePath: generated.articlePath,
+    config,
+    workflow,
+    source: 'cron',
+    contentMode: generated.contentMode || 'editorial',
+  });
 assertVerifiedWechat(formalResult, 'formal');
 const trace = JSON.parse(fs.readFileSync(generated.researchTracePath, 'utf8'));
 const universe = trace.openingDigestUniverse || {};
@@ -63,7 +66,35 @@ console.log(JSON.stringify({
   universeResearchLanes: (trace.researchLanes || []).filter((lane) => /opening-digest-universe/.test(lane)),
   tracePath: generated.researchTracePath,
   diagnostics: trace.openingDigestDelivery?.diagnostics || [],
+  historicalMigration: migration ? {
+    sourceDir: migration.sourceDir,
+    newsletterId: migration.newsletterId,
+    historicalSegmentId: migration.historicalSegmentId,
+    historicalSegmentName: migration.historicalSegmentName,
+  } : null,
 }));
+
+export function parseHistoricalMigrationArgs(argv) {
+  if (!argv.length) return null;
+  const parsed = {};
+  const allowed = new Set(['--historical-source-dir', '--historical-newsletter-id', '--historical-segment-id', '--historical-segment-name']);
+  for (let index = 0; index < argv.length; index += 2) {
+    const key = argv[index]; const value = argv[index + 1];
+    if (!allowed.has(key) || !value) throw new Error(`Invalid historical migration argument:${key || '(empty)'}`);
+    parsed[key.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = value;
+  }
+  const required = ['historicalSourceDir', 'historicalNewsletterId', 'historicalSegmentId', 'historicalSegmentName'];
+  if (required.some((key) => !parsed[key])) throw new Error('Historical migration acceptance requires all four arguments');
+  if (!/^\d+$/.test(parsed.historicalNewsletterId) || !/^\d+$/.test(parsed.historicalSegmentId)) {
+    throw new Error('Historical migration newsletter and segment IDs must be positive integers');
+  }
+  return {
+    sourceDir: parsed.historicalSourceDir,
+    newsletterId: Number(parsed.historicalNewsletterId),
+    historicalSegmentId: Number(parsed.historicalSegmentId),
+    historicalSegmentName: parsed.historicalSegmentName,
+  };
+}
 
 function deployedCommit(repoRoot) {
   const marker = path.join(repoRoot, '.deploy-commit');

@@ -236,6 +236,123 @@ export function makeChannel({
   };
 }
 
+export async function publishHistoricalOpeningDigestWechat({
+  sourceDir, newsletterId, historicalSegmentId, historicalSegmentName,
+  config, fetchFn = globalThis.fetch, now = () => new Date(),
+  translatePayload = translateOpeningDigestPayload,
+  wechatChannel = makeWechatOpeningDigestChannel(),
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  const cio = config?.customerio || {};
+  const digest = config?.openingDigest || {};
+  assertDigestConfig(cio, digest);
+  if (!digest.wechatEnabled) throw publishError('OPENING_DIGEST_WECHAT_ENABLED=true 才能执行历史同源迁移验收');
+  if (!Number.isInteger(Number(newsletterId)) || Number(newsletterId) <= 0
+    || !Number.isInteger(Number(historicalSegmentId)) || Number(historicalSegmentId) <= 0
+    || !String(historicalSegmentName || '').trim()) {
+    throw publishError('历史同源迁移验收必须显式提供邮件 ID、历史 segment ID 和名称');
+  }
+  if (Number(historicalSegmentId) === Number(digest.segmentId)) {
+    throw publishError('历史 segment 与当前 test1 相同，不应进入迁移验收');
+  }
+  const resolvedDir = await fs.realpath(String(sourceDir || '')).catch(() => '');
+  if (!resolvedDir || !/^zen-opening-acceptance-[A-Za-z0-9]+$/.test(path.basename(resolvedDir))) {
+    throw publishError('历史同源目录必须是保留的 zen-opening-acceptance 隔离目录');
+  }
+  const articlePath = path.join(resolvedDir, 'article.md');
+  const [articleSource, state, universe, trace] = await Promise.all([
+    fs.readFile(articlePath, 'utf8'),
+    readJson(path.join(resolvedDir, 'article.md.opening-digest-state.json'), '行情缓存'),
+    readJson(path.join(resolvedDir, 'opening-digest-universe.json'), 'Opening Digest universe'),
+    readJson(path.join(resolvedDir, 'research-trace.json'), '研究轨迹'),
+  ]);
+  const dateKey = easternDateKey(now());
+  const article = parseNewsletterArticle(articleSource, dateKey);
+  if (article.title !== 'Zen Opening Digest' || article.edition !== dateKey
+    || state?.dateKey !== dateKey || universe?.dateKey !== dateKey) {
+    throw publishError('历史同源目录与当前美东日期或 Opening Digest 标识不一致');
+  }
+  const remoteData = await customerIoRequestWithRetry({
+    baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, path: `/v1/newsletters/${Number(newsletterId)}`,
+    method: 'GET', fetchFn, timeoutMs: cio.timeoutMs, sleep,
+  });
+  const remote = remoteData?.newsletter || remoteData;
+  const segments = Array.isArray(remote?.recipient_segment_ids) ? remote.recipient_segment_ids.map(Number) : [];
+  const expectedName = `Zen Opening Digest · ${dateKey}`;
+  if (Number(remote?.id) !== Number(newsletterId) || remote?.name !== expectedName || remote?.sent_at == null
+    || segments.length !== 1 || segments[0] !== Number(historicalSegmentId)
+    || Number(remote?.subscription_topic_id) !== Number(digest.subscriptionTopicId)) {
+    throw publishError('已发送历史 Opening Digest 的日期、受众或订阅主题与迁移参数不一致');
+  }
+  const segmentData = await customerIoRequestWithRetry({
+    baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, path: `/v1/segments/${Number(historicalSegmentId)}`,
+    method: 'GET', fetchFn, timeoutMs: cio.timeoutMs, sleep,
+  });
+  const segment = segmentData?.segment || segmentData;
+  if (normalizedSegmentName(segment?.name) !== normalizedSegmentName(historicalSegmentName)) {
+    throw publishError(`历史 segment 名称不一致:${segment?.name || '(empty)'}`);
+  }
+  const sourceStarted = Date.parse(trace?.startedAt || '');
+  const sourceFinished = Math.max(...[
+    Date.parse(trace?.finishedAt || ''),
+    Date.parse(trace?.openingDigestDelivery?.updatedAt || ''),
+  ].filter(Number.isFinite));
+  const remoteCreated = Number(remote?.created) * 1000;
+  if (![sourceStarted, sourceFinished, remoteCreated].every(Number.isFinite)
+    || remoteCreated < sourceStarted || remoteCreated > sourceFinished) {
+    throw publishError('历史邮件创建时间不在指定隔离 run 的生成/投递轨迹内');
+  }
+  const metrics = normalizeOpeningMetrics(state.metrics).metrics;
+  const options = universe?.options?.data && universe?.options?.capturedAt ? {
+    data: validateTrendingOptionsData(universe.options.data),
+    capturedAt: universe.options.capturedAt,
+    kind: 'Opening',
+  } : null;
+  const openingPayload = deepFreeze({
+    schemaVersion: 1,
+    dateKey,
+    article: { title: article.title, preheader: article.preheader, body: sanitizeUnsubscribeTags(article.body).body },
+    metrics,
+    options,
+    cover: { label: 'Opening Digest', dateLabel: displayDate(dateKey) },
+  });
+  let traceMetadata = { historicalMigration: { newsletterId: Number(newsletterId), segmentId: Number(historicalSegmentId), segmentName: segment.name, sourceDir: resolvedDir } };
+  try {
+    const translated = await translatePayload(openingPayload, {
+      writer: config.writer, fetchFn, cacheDir: resolvedDir, timeoutMs: config.defaultTimeoutMs,
+    });
+    const wechat = await wechatChannel.publish({ payload: openingPayload, translation: translated, config, acceptance: false });
+    traceMetadata = {
+      ...traceMetadata,
+      translation: {
+        model: translated.model, payloadHash: translated.payloadHash, blockCount: translated.blockCount,
+        repairs: translated.repairs, invariants: { blockIdsAndOrder: true, numbersTickersTimesAndUrls: true },
+      },
+      wechat: { ...wechat, html: undefined },
+    };
+    await appendOpeningDiagnostics(articlePath, ['Acceptance 仅用历史隔离 payload 补验已发送邮件的正式中文微信稿'], traceMetadata);
+    return {
+      mediaId: `customerio-newsletter:${Number(newsletterId)}`,
+      title: expectedName,
+      audienceStage: normalizedSegmentName(segment.name),
+      audienceSegmentId: Number(historicalSegmentId),
+      deliveries: [
+        { destination: 'customerio', status: 'existing', mediaId: `customerio-newsletter:${Number(newsletterId)}`, title: expectedName },
+        { destination: 'wechat', status: wechat.status, mediaId: wechat.mediaId, title: wechat.title, details: { errors: wechat.errors, attempts: wechat.attempts } },
+      ],
+      deliveryWarnings: [],
+    };
+  } catch (error) {
+    await appendOpeningDiagnostics(articlePath, [], { ...traceMetadata, wechat: { status: 'failed', error: error.message } });
+    throw error;
+  }
+}
+
+async function readJson(filename, label) {
+  try { return JSON.parse(await fs.readFile(filename, 'utf8')); }
+  catch (error) { throw publishError(`历史同源目录缺少或损坏${label}:${error.message}`); }
+}
+
 function assertExistingNewsletter(remote, { newsletterId, name, segmentId, subscriptionTopicId }) {
   const segments = Array.isArray(remote?.recipient_segment_ids) ? remote.recipient_segment_ids.map(Number) : [];
   if (Number(remote?.id) !== newsletterId || remote?.name !== name
