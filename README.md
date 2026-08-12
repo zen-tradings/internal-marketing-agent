@@ -13,7 +13,7 @@ Slack 私聊自然语言 / 频道 @Bot / PDF/文本附件 / cron
   → 通用任务用 LatePost 方法；macro 由 Global Macro 主导并组合 LatePost 证据纪律
   → Qwen3.8-Max 写作 → GLM 5.2 逐句事实审计 → 系统确定性引用
   → 中央模板门禁 → 微信固定版式 / Customer.io Newsletter 固定模板
-  → 常规渠道只创建草稿；`opening-digest` 为受控发送/排期例外
+  → 常规渠道只创建草稿；`opening-digest` 为受控邮件发送/排期例外，并可在邮件成功后同步中文微信草稿
   → QDII 查询以 Slack 回复为核心结果；草稿任务的状态通知仍为 best-effort
 ```
 
@@ -210,6 +210,8 @@ npm run requeue:analysis-gate -- <run-id>
 ### 固定模板契约
 
 所有由 Bot 创建的真实草稿都必须沿用中央登记的固定模板。`src/lib/draft-template.js` 是唯一模板注册表：微信公众号草稿固定为 `zen-wechat/zen-trading@4`，Customer.io Newsletter 草稿固定为 `zen-customerio/zen-research@4`。真实渠道未登记模板、模板 ID 不匹配或未声明锁定时，会在调用发布接口前失败；任务文字、工作流和单次运行都不能指定另一套模板。`mock` 只用于 dry-run，不属于真实草稿渠道。
+
+`opening-digest` 在 `OPENING_DIGEST_WECHAT_ENABLED=true` 时先完成英文 Customer.io 发送或排期，再使用冻结的同一份行情、正文和 OIC 数据生成完整简体中文直译，并创建 `Zen 开市日报 · YYYY-MM-DD` 微信草稿。微信稿固定使用 `zen-wechat/zen-trading@4`、九格行情和 OIC 20×8 两行记录块；站外链接只保留可见文字。微信翻译、创建或回读失败不会撤销邮件，主任务仍以邮件结果完成并另发精确 Slack 警告。
 
 需要改版时，必须集中修改模板实现、升级注册表中的版本号，并同步渠道测试、渲染 golden 与本文档；不能在单个任务里绕过。标题、正文、链接、期号和受众等内容进入模板预留槽位，不改变模板本身。
 

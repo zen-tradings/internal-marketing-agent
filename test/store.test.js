@@ -31,6 +31,19 @@ test('setMediaId 只写 media_id/title,不改变 status(支撑发布幂等判断
   assert.equal(r.status, 'running', 'setMediaId 不应改变 status(早写落库,收尾状态由 setStatus 负责)');
 });
 
+test('Opening Digest 双渠道结果按 run_id + destination 幂等记录', () => {
+  const s = openStore(':memory:');
+  s.createRun({ id: 'od-1', workflowId: 'opening-digest', source: 'cron', input: 'digest', notify: {} });
+  s.upsertDelivery('od-1', { destination: 'customerio', status: 'delivered', mediaId: 'customerio-newsletter:1', title: 'English' });
+  s.upsertDelivery('od-1', { destination: 'wechat', status: 'unverified', mediaId: 'wx-1', details: { errors: ['readback'] } });
+  s.upsertDelivery('od-1', { destination: 'wechat', status: 'verified', mediaId: 'wx-1' });
+  const rows = s.listDeliveries('od-1');
+  assert.equal(rows.length, 2);
+  assert.equal(rows.find((row) => row.destination === 'wechat').status, 'verified');
+  assert.equal(rows.find((row) => row.destination === 'wechat').media_id, 'wx-1');
+  assert.equal(s.getRun('od-1').media_id, null, '子渠道记录不得覆盖主邮件 media_id');
+});
+
 test('Slack 核心回复单独记录 output kind/ts，绝不伪造 media_id', () => {
   const s = openStore(':memory:');
   s.createRun({ id: 'qdii-1', workflowId: 'qdii', source: 'slack', input: '513100', notify: {} });

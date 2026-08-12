@@ -51,6 +51,8 @@ console.log(JSON.stringify({
   sourceCount: generated.sources?.length || 0,
   testMediaId: testResult.mediaId,
   formalMediaId: formalResult.mediaId,
+  testWechat: testResult.deliveries?.find((item) => item.destination === 'wechat') || null,
+  formalWechat: formalResult.deliveries?.find((item) => item.destination === 'wechat') || null,
   universeSize: universe.universeSize || 0,
   quoteCoverage: universe.quoteCoverage || null,
   priceMoverCount: universe.priceMovers?.length || 0,

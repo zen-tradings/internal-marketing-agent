@@ -393,6 +393,48 @@ test('cover and OIC failures degrade silently and persist diagnostics to trace',
   assert.ok(trace.openingDigestDelivery.diagnostics.some((item) => /期权区块已省略/.test(item)));
 });
 
+test('中文翻译失败不影响已成功的 Customer.io 邮件且绝不创建英文微信稿', async () => {
+  let wechatCreates = 0;
+  const { channel } = standardChannel({
+    channel: {
+      translatePayload: async () => { throw new Error('missing translated block body-2'); },
+      wechatChannel: { publish: async () => { wechatCreates += 1; throw new Error('must not run'); } },
+    },
+  });
+  const enabled = config();
+  enabled.openingDigest.wechatEnabled = true;
+  const result = await channel.publish({ articlePath: '/tmp/article.md', config: enabled, source: 'manual' });
+  assert.equal(result.mediaId, 'customerio-newsletter:99');
+  assert.equal(wechatCreates, 0);
+  assert.equal(result.deliveries.find((item) => item.destination === 'wechat').status, 'failed');
+  assert.match(result.deliveryWarnings[0], /邮件已成功.*中文微信草稿创建失败/);
+});
+
+test('双渠道严格先完成 Customer.io，再用同一冻结 payload 创建中文微信草稿', async () => {
+  const events = []; let translatedPayload; let wechatPayload;
+  const { channel } = standardChannel({
+    cio: { send: async () => { events.push('email'); return response({}); } },
+    channel: {
+      translatePayload: async (input) => {
+        events.push('translate'); translatedPayload = input;
+        return { model: 'test', payloadHash: 'hash', blockCount: 1, repairs: [], translations: [{ id: 'preheader', text: '早盘信号' }] };
+      },
+      wechatChannel: {
+        async publish({ payload: input }) {
+          events.push('wechat'); wechatPayload = input;
+          return { mediaId: 'wx-media-1', title: 'Zen 开市日报 · 2026-08-10', status: 'verified', errors: [], attempts: [{ status: 'verified' }] };
+        },
+      },
+    },
+  });
+  const enabled = config(); enabled.openingDigest.wechatEnabled = true;
+  const result = await channel.publish({ articlePath: '/tmp/article.md', config: enabled, source: 'manual' });
+  assert.deepEqual(events, ['email', 'translate', 'wechat']);
+  assert.equal(translatedPayload, wechatPayload);
+  assert.equal(Object.isFrozen(translatedPayload), true);
+  assert.equal(result.deliveries.find((item) => item.destination === 'wechat').mediaId, 'wx-media-1');
+});
+
 test('zero audience and failed audience preflight do not block configured test2 delivery', async () => {
   for (const fetchMode of ['zero', 'failed']) {
     const requests = [];

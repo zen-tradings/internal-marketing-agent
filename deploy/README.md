@@ -25,15 +25,15 @@ npm run deploy:digitalocean
 After reviewing the preflight output, activate the exact pushed commit:
 
 ```bash
-npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --activate
+npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --opening-digest-wechat-enabled true --activate
 ```
 
 The command requires a clean worktree and a commit present on the upstream
 branch. It creates a local archive, stages and tests a separate release on the
-Droplet, runs the SQLite backup service, requires an idle queue, updates the
-writer and planner models plus their independent reasoning effort, pins routing
-and review to GLM 5.2, switches the single
-systemd service, and verifies the marker, main PID and `/ready`. A failed activation restores
+Droplet, runs the SQLite backup service, requires an idle queue, changes only
+`OPENING_DIGEST_WECHAT_ENABLED` in the protected environment file (verified by
+an excluding-line checksum), switches the single systemd service, and verifies
+the marker, main PID and `/ready`. A failed activation restores
 the previous release and protected environment file. The DigitalOcean metadata
 check is a deployment-target guard only; it is not an application startup,
 publishing or public-IP gate.
@@ -204,7 +204,7 @@ existing matching formal newsletter is reused and never duplicated. The same
 run also exercises the 72-ticker universe quote scan, grouped Exa research and
 the reusable OIC artifact. The final JSON line reports the deployed commit,
 content mode, source count, quote coverage, price-mover/OIC/IV counts, both
-Customer.io IDs, trace path, and any soft diagnostics. Soft diagnostics do not
+Customer.io IDs, both WeChat media IDs/readback states, trace path, and any soft diagnostics. Soft diagnostics do not
 produce Slack warnings; a hard gate or execution failure exits non-zero and is
 handled as a release failure.
 

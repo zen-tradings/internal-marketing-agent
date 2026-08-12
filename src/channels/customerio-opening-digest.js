@@ -10,6 +10,8 @@ import { captureTrendingOptionsTable, validateTrendingOptionsData } from '../lib
 import { collectOpeningMetrics, normalizeOpeningMetrics, renderMetricsHtml } from '../lib/opening-digest-metrics.js';
 import { easternDateKey } from '../lib/us-equity-calendar.js';
 import { auditOpeningDigestArticle } from '../lib/opening-digest-content.js';
+import { translateOpeningDigestPayload } from '../lib/opening-digest-translation.js';
+import { makeWechatOpeningDigestChannel } from './wechat-opening-digest.js';
 
 const SENDER = 'support@zentradings.com';
 const CUSTOMERIO_MIN_SCHEDULE_LEAD_MS = 5 * 60 * 1000;
@@ -19,19 +21,22 @@ export function makeChannel({
   now = () => new Date(), captureOptions = captureTrendingOptionsTable,
   renderCover = renderOpeningDigestCover, uploadAsset = uploadCustomerIoAsset,
   collectMetrics = collectOpeningMetrics,
+  translatePayload = translateOpeningDigestPayload,
+  wechatChannel = makeWechatOpeningDigestChannel(),
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 } = {}) {
   return {
     id: 'customerio-opening-digest',
     templateId: NEWSLETTER_TEMPLATE_ID,
     templateLocked: true,
-    async publish({ articlePath, config, workflow, source = 'manual', existingRemoteId = '', onCreated, contentMode = 'editorial', acceptanceId = '' }) {
+    async publish({ articlePath, config, workflow, source = 'manual', existingRemoteId = '', existingDeliveries = [], onCreated, onDelivery, contentMode = 'editorial', acceptanceId = '' }) {
       const cio = config.customerio || {};
       const digest = config.openingDigest || {};
       assertDigestConfig(cio, digest);
       const current = now();
       const dateKey = easternDateKey(current);
       const diagnostics = [];
+      const traceMetadata = {};
       try {
         const articleSource = await readArticle(articlePath);
         const articleAudit = auditOpeningDigestArticle({ article: articleSource, asOf: current });
@@ -75,12 +80,11 @@ export function makeChannel({
           newsletterId = Number(remote?.id) || 0;
           if (newsletterId) await onCreated?.({ remoteId: String(newsletterId), title: name });
         }
-        if (remote?.sent_at != null) {
-          return publishResult({ newsletterId, name, digest, audience });
-        }
+        const emailAlreadySent = remote?.sent_at != null;
 
         let headerImageUrl = '';
         try {
+          if (emailAlreadySent) throw new Error('skip-existing-email-cover');
           const coverKey = acceptance ? `${dateKey}-${acceptanceId}` : dateKey;
           const cover = await renderCover({
             dateLabel: displayDate(dateKey),
@@ -101,7 +105,11 @@ export function makeChannel({
           if (/^https:\/\//i.test(candidate)) headerImageUrl = candidate;
           else diagnostics.push('Customer.io 未返回 Opening Digest 封面 HTTPS URL，已使用无封面版');
         } catch (error) {
+          if (error.message === 'skip-existing-email-cover') {
+            // 已发送邮件无需重复上传 Customer.io 封面；微信仍会消费同一数据 payload。
+          } else {
           diagnostics.push(`Opening Digest 封面已省略:${error.message}`);
+          }
         }
 
         const metricResult = await loadOrCollectMetrics({
@@ -119,6 +127,14 @@ export function makeChannel({
           throw publishError('Opening Digest 数据版无可用正文、行情或期权数据，拒绝发送空邮件');
         }
 
+        const openingPayload = deepFreeze({
+          schemaVersion: 1,
+          dateKey,
+          article: { title: article.title, preheader: article.preheader, body: article.body },
+          metrics: metricResult.metrics,
+          options: options || null,
+          cover: { label: 'Opening Digest', dateLabel: displayDate(dateKey) },
+        });
         const contentHtml = [
           renderMetricsHtml(metricResult.metrics),
           renderMarkdown(article.body),
@@ -166,20 +182,54 @@ export function makeChannel({
           await onCreated?.({ remoteId: String(newsletterId), title: name });
         }
 
-        const target = openingSendTarget(current, digest.timezone || 'America/New_York');
-        if (source === 'cron' && target.getTime() > current.getTime() + CUSTOMERIO_MIN_SCHEDULE_LEAD_MS) {
-          await customerIoRequestWithRetry({
-            baseUrl: cio.baseUrl, appApiKey: cio.appApiKey,
-            path: `/v1/newsletters/${newsletterId}/schedule`, method: 'POST',
-            body: { scheduled_at: Math.floor(target.getTime() / 1000), timezone: digest.timezone || 'America/New_York', tz_match_enabled: false },
-            fetchFn, timeoutMs: cio.timeoutMs, sleep, idempotent: true,
-          });
-        } else {
-          await sendNewsletterSafely({ cio, newsletterId, fetchFn, sleep, diagnostics });
+        if (!emailAlreadySent) {
+          const target = openingSendTarget(current, digest.timezone || 'America/New_York');
+          if (source === 'cron' && target.getTime() > current.getTime() + CUSTOMERIO_MIN_SCHEDULE_LEAD_MS) {
+            await customerIoRequestWithRetry({
+              baseUrl: cio.baseUrl, appApiKey: cio.appApiKey,
+              path: `/v1/newsletters/${newsletterId}/schedule`, method: 'POST',
+              body: { scheduled_at: Math.floor(target.getTime() / 1000), timezone: digest.timezone || 'America/New_York', tz_match_enabled: false },
+              fetchFn, timeoutMs: cio.timeoutMs, sleep, idempotent: true,
+            });
+          } else {
+            await sendNewsletterSafely({ cio, newsletterId, fetchFn, sleep, diagnostics });
+          }
         }
-        return publishResult({ newsletterId, name, digest, audience });
+        const deliveries = [{ destination: 'customerio', status: emailAlreadySent ? 'existing' : 'delivered', mediaId: `customerio-newsletter:${newsletterId}`, title: name }];
+        await onDelivery?.(deliveries[0]);
+        const deliveryWarnings = [];
+        if (digest.wechatEnabled) {
+          try {
+            const translated = await translatePayload(openingPayload, {
+              writer: config.writer, fetchFn, cacheDir: path.dirname(articlePath),
+            });
+            traceMetadata.translation = {
+              model: translated.model, payloadHash: translated.payloadHash, blockCount: translated.blockCount,
+              repairs: translated.repairs,
+              invariants: { blockIdsAndOrder: true, numbersTickersTimesAndUrls: true },
+            };
+            const prior = existingDeliveries.find((item) => item.destination === 'wechat' && item.media_id);
+            const wechat = prior
+              ? { mediaId: prior.media_id, title: prior.title, status: prior.status || 'existing', errors: [], attempts: [] }
+              : await wechatChannel.publish({ payload: openingPayload, translation: translated, config, acceptance });
+            const delivery = { destination: 'wechat', status: wechat.status, mediaId: wechat.mediaId, title: wechat.title, details: { errors: wechat.errors, attempts: wechat.attempts } };
+            deliveries.push(delivery);
+            await onDelivery?.(delivery);
+            traceMetadata.wechat = { ...wechat, html: undefined };
+            if (wechat.status !== 'verified' && wechat.status !== 'existing') {
+              deliveryWarnings.push(`Opening Digest 邮件已成功，但微信草稿${wechat.status === 'unverified' ? '未能回读验证' : '第三次回读仍不一致'}。Media ID:${wechat.mediaId}；${wechat.errors.join('；')}`);
+            }
+          } catch (error) {
+            const delivery = { destination: 'wechat', status: 'failed', mediaId: '', title: '', error: error.message };
+            deliveries.push(delivery);
+            await onDelivery?.(delivery);
+            traceMetadata.wechat = { status: 'failed', error: error.message };
+            deliveryWarnings.push(`Opening Digest 邮件已成功，但中文微信草稿创建失败:${error.message}`);
+          }
+        }
+        return publishResult({ newsletterId, name, digest, audience, deliveries, deliveryWarnings });
       } finally {
-        await appendOpeningDiagnostics(articlePath, diagnostics, { contentMode });
+        await appendOpeningDiagnostics(articlePath, diagnostics, { contentMode, ...traceMetadata });
       }
     },
   };
@@ -404,7 +454,7 @@ function sanitizeUnsubscribeTags(value) {
 }
 
 async function appendOpeningDiagnostics(articlePath, diagnostics, metadata = {}) {
-  if (!articlePath || !diagnostics.length) return;
+  if (!articlePath || (!diagnostics.length && !Object.keys(metadata).length)) return;
   const tracePath = `${articlePath.slice(0, articlePath.lastIndexOf('/') + 1)}research-trace.json`;
   try {
     let trace = {};
@@ -419,14 +469,23 @@ async function appendOpeningDiagnostics(articlePath, diagnostics, metadata = {})
   } catch {}
 }
 
-function publishResult({ newsletterId, name, digest, audience }) {
+function publishResult({ newsletterId, name, digest, audience, deliveries = [], deliveryWarnings = [] }) {
   return {
     mediaId: `customerio-newsletter:${newsletterId}`,
     title: name,
     audienceStage: 'test2',
     audienceSegmentId: digest.segmentId,
     audienceRecipientCount: audience.count,
+    deliveries,
+    deliveryWarnings,
   };
+}
+
+function deepFreeze(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  Object.values(value).forEach(deepFreeze);
+  return value;
 }
 
 function isAmbiguousCustomerIoFailure(error) {

@@ -157,7 +157,7 @@ export function makeHandler(deps) {
         setPhase('generate');
       }
 
-      const { title, mediaId, sourceCount, completeness } = await runWithRetry(async () => {
+      const { title, mediaId, sourceCount, completeness, deliveryWarnings = [] } = await runWithRetry(async () => {
         throwIfTaskCancelled(signal);
         // 发布幂等:已有 media_id 说明上一轮(重试循环内或重启后重投)已经发布成功过,
         // 跳过重新生成/发布,避免产生重复草稿。
@@ -246,7 +246,7 @@ export function makeHandler(deps) {
         }
         setPhase('publish');
         throwIfTaskCancelled(signal);
-        const { mediaId, title } = await channel.publish({
+        const { mediaId, title, deliveryWarnings = [] } = await channel.publish({
           articlePath: res.articlePath,
           config,
           workflow: runtimeWorkflow,
@@ -254,7 +254,9 @@ export function makeHandler(deps) {
           notifier: deps.notifier,
           runId: run.id,
           existingRemoteId: store.getRun(run.id)?.remote_id || '',
+          existingDeliveries: store.listDeliveries?.(run.id) || [],
           onCreated: ({ remoteId }) => store.setRemoteId(run.id, remoteId),
+          onDelivery: (delivery) => store.upsertDelivery?.(run.id, delivery),
           resumeFromCheckpoint,
           contentPolicy: res.contentPolicy || {},
           contentMode: res.contentMode,
@@ -262,7 +264,7 @@ export function makeHandler(deps) {
         });
         store.setMediaId(run.id, mediaId, title); // 早写,发布成功后立刻落库,支撑上面的幂等判断
         setPhase('published');
-        return { mediaId, title, sourceCount: res.sources?.length || 0, completeness: res.completeness };
+        return { mediaId, title, sourceCount: res.sources?.length || 0, completeness: res.completeness, deliveryWarnings };
       },
       runtimeWorkflow.retries,
       runtimeWorkflow.retryDelayMs,
@@ -273,6 +275,9 @@ export function makeHandler(deps) {
       store.setStatus(run.id, 'done', { title, mediaId, finishedAt: Date.now() });
       if (deps.notifier) await notifyBestEffort(deps.notifier, 'success', notify, { title, mediaId, channelId: runtimeWorkflow.channel, sourceCount, completeness });
       else console.error('[hub] notifier 未就绪,跳过 success 通知(启动窗口期竞态)', { runId: run.id, title, mediaId });
+      for (const warning of deliveryWarnings) {
+        if (deps.notifier) await notifyBestEffort(deps.notifier, 'warn', notify, warning);
+      }
     } catch (e) {
       if (isTaskCancelled(e, signal)) {
         const cleanup = cleanupRunArtifacts(workflows, run);

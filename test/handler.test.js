@@ -239,6 +239,35 @@ test('Opening Digest 可发送降级只写 trace，不发送 Slack warning', asy
   assert.equal(notifier.successCalls.length, 1);
 });
 
+test('Opening Digest 微信异常不改变邮件 done，成功通知后另发精确 warning', async () => {
+  const workflows = {
+    'opening-digest': {
+      id: 'opening-digest', mode: 'newsletter', channel: 'customerio-opening-digest', retries: 0,
+    },
+  };
+  const channels = {
+    'customerio-opening-digest': {
+      templateId: FIXED_DRAFT_TEMPLATE_IDS['customerio-opening-digest'],
+      templateLocked: true,
+      async publish() {
+        return {
+          mediaId: 'customerio-newsletter:8', title: 'Zen Opening Digest',
+          deliveryWarnings: ['Opening Digest 邮件已成功，但微信草稿第三次回读仍不一致。Media ID:wx-8；OIC NVDA 字段 6 缺失'],
+        };
+      },
+    },
+  };
+  const runWriter = async () => ({ ok: true, articlePath: '/tmp/opening.md' });
+  const { deps, store, notifier } = baseDeps({ workflows, channels, runWriter });
+  await makeHandler(deps)({ id: 'opening-wechat-warning', workflowId: 'opening-digest', input: 'opening', source: 'cron' });
+  assert.equal(store._row().status, 'done');
+  assert.equal(store._row().media_id, 'customerio-newsletter:8');
+  assert.equal(notifier.successCalls.length, 1);
+  assert.equal(notifier.warnCalls.length, 1);
+  assert.match(notifier.warnCalls[0].message, /wx-8.*NVDA 字段 6/);
+  assert.equal(notifier.failureCalls.length, 0);
+});
+
 test('Opening Digest 硬失败发送 Slack failure，但不发送 warning', async () => {
   const workflows = {
     'opening-digest': {

@@ -142,6 +142,7 @@ export function loadConfig(env = process.env) {
     },
     openingDigest: {
       enabled: booleanFlag(env.OPENING_DIGEST_ENABLED),
+      wechatEnabled: booleanFlag(env.OPENING_DIGEST_WECHAT_ENABLED),
       timezone: env.OPENING_DIGEST_TIMEZONE || 'America/New_York',
       optionsUrl: env.OIC_TRENDING_OPTIONS_URL
         || 'https://www.optionseducation.org/toolsoptionquotes/trending-options-volume',

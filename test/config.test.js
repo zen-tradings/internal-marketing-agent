@@ -49,8 +49,18 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.match(c.cover.generatorDir, /tools\/cover-generator$/);
   assert.equal('claudeBin' in c, false);
   assert.equal(c.wechat.appId, 'wx');
+  assert.equal(c.openingDigest.wechatEnabled, false);
   assert.match(c.assets.surveyImage, /assets\/zen-survey-qr\.jpg$/);
   assert.match(c.assets.footerImage, /assets\/zen-footer-qr\.png$/);
+});
+
+test('Opening Digest 微信同步只有显式开关才启用', () => {
+  const base = {
+    SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
+    WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec', OPENROUTER_API_KEY: 'or-key',
+  };
+  assert.equal(loadConfig({ ...base, OPENING_DIGEST_WECHAT_ENABLED: 'true' }).openingDigest.wechatEnabled, true);
+  assert.equal(loadConfig({ ...base, OPENING_DIGEST_WECHAT_ENABLED: 'false' }).openingDigest.wechatEnabled, false);
 });
 
 test('结构化直译抓取、浏览器、PDF、图片、Notion 与 Datalab 配置可由 env 覆盖', () => {
