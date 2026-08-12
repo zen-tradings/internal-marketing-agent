@@ -79,6 +79,7 @@ test('Opening Digest 专用直译保持块 ID、顺序、数字、Ticker、时�
   assert.deepEqual(result.translations.map((item) => item.id), translationUnits(payload()).map((item) => item.id));
   assert.match(result.translations.find((item) => item.id === 'body-2').text, /SPY.*10:15 EDT.*10\.25%/);
   assert.equal(result.translations.find((item) => item.id === 'oic-company-1').text, 'NVIDIA 公司');
+  assert.equal(result.translations.find((item) => item.id === 'oic-company-2').text, 'Company 2');
   await translateOpeningDigestPayload(payload(), { cacheDir: directory, writer: { model: 'test' }, complete: async () => { throw new Error('cache miss'); } });
   assert.equal(calls, 1, '同一英文 payload 的测试稿和正式稿必须复用中文译文');
 });
@@ -129,7 +130,24 @@ test('中文直译在两轮局部修复后仍拒绝缺块、重复和乱序', as
   await assert.rejects(translateOpeningDigestPayload(payload(), {
     writer: { model: 'test' },
     complete: async ({ units }) => ({ translations: [...units].reverse().map((unit) => ({ id: unit.id, text: unit.text })) }),
-  }), /块 ID 数量或顺序不一致/);
+  }), /块 ID 重复、乱序或含未知项/);
+});
+
+test('局部修复漏一块时保留已合格块，下一轮只重试缺失块', async () => {
+  const source = payload();
+  const mapping = new Map(translated(source).translations.map((item) => [item.id, item.text]));
+  const calls = [];
+  const result = await translateOpeningDigestPayload(source, {
+    writer: { model: 'test' },
+    complete: async ({ units, round }) => {
+      calls.push(units.map((unit) => unit.id));
+      const items = units.map((unit) => ({ id: unit.id, text: mapping.get(unit.id) }));
+      return { translations: round === 0 ? items.slice(0, -1) : items };
+    },
+  });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1], [calls[0].at(-1)]);
+  assert.deepEqual(result.translations.map((item) => item.id), translationUnits(source).map((item) => item.id));
 });
 
 test('中文微信 HTML 锁定 @4、9 格行情、OIC 20×8 且低于官方大小限制', () => {

@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 2;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 3;
 
 const FIXED_TERMS = new Map([
   ['Market snapshot', '市场快照'],
@@ -41,7 +41,9 @@ export async function translateOpeningDigestPayload(payload, {
   const modelUnits = [];
   for (const unit of units) {
     const fixed = FIXED_TERMS.get(unit.text);
+    const company = unit.kind === 'company_name' ? translateCompanyName(unit.text) : '';
     if (fixed) translations.set(unit.id, fixed);
+    else if (company) translations.set(unit.id, company);
     else modelUnits.push(unit);
   }
   const repairs = [];
@@ -52,12 +54,18 @@ export async function translateOpeningDigestPayload(payload, {
       const returnedItems = Array.isArray(result?.translations) ? result.translations : [];
       const expectedIds = pending.map((unit) => unit.id);
       const returnedIds = returnedItems.map((item) => String(item.id));
-      const responseMappingValid = JSON.stringify(returnedIds) === JSON.stringify(expectedIds);
+      const responseMappingError = mappingResponseError(expectedIds, returnedIds);
       const returned = new Map(returnedItems.map((item) => [String(item.id), String(item.text || '').trim()]));
       const next = [];
       for (const unit of pending) {
-        if (!responseMappingValid) {
-          const issues = [`模型返回的块 ID 数量或顺序不一致:期望 ${expectedIds.join(',')}，实际 ${returnedIds.join(',')}`];
+        if (responseMappingError) {
+          const issues = [responseMappingError];
+          next.push({ ...unit, issues });
+          repairs.push({ round: round + 1, id: unit.id, issues });
+          continue;
+        }
+        if (!returned.has(unit.id)) {
+          const issues = [`模型未返回文本块:${unit.id}`];
           next.push({ ...unit, issues });
           repairs.push({ round: round + 1, id: unit.id, issues });
           continue;
@@ -166,6 +174,25 @@ function brandTokens(value, kind) {
 function stripLegalSuffix(value) {
   return String(value || '').replace(/['’]s$/i, '')
     .replace(/(?:,?\s+)(?:Corporation|Corp\.?|Incorporated|Inc\.?|Limited|Ltd\.?|LLC|PLC|Company|Co\.?)$/i, '').trim();
+}
+
+function translateCompanyName(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const suffix = /(?:,?\s+)(Corporation|Corp\.?|Incorporated|Inc\.?|Limited|Ltd\.?|LLC|PLC|Company|Co\.?)$/i.exec(text);
+  if (!suffix) return text;
+  return `${text.slice(0, suffix.index).trim()} 公司`;
+}
+
+function mappingResponseError(expectedIds, returnedIds) {
+  const expected = new Set(expectedIds);
+  const unexpected = returnedIds.filter((id) => !expected.has(id));
+  const duplicates = returnedIds.filter((id, index) => returnedIds.indexOf(id) !== index);
+  const expectedSubsetOrder = expectedIds.filter((id) => returnedIds.includes(id));
+  const returnedExpectedOrder = returnedIds.filter((id) => expected.has(id));
+  if (!unexpected.length && !duplicates.length
+    && JSON.stringify(returnedExpectedOrder) === JSON.stringify(expectedSubsetOrder)) return '';
+  return `模型返回的块 ID 重复、乱序或含未知项:期望 ${expectedIds.join(',')}，实际 ${returnedIds.join(',')}`;
 }
 
 async function completeTranslation({ units, writer, fetchFn, round, timeoutMs }) {
