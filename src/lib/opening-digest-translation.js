@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 3;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 4;
 
 const FIXED_TERMS = new Map([
   ['Market snapshot', '市场快照'],
@@ -50,7 +50,9 @@ export async function translateOpeningDigestPayload(payload, {
   if (modelUnits.length) {
     let pending = modelUnits;
     for (let round = 0; round < 3 && pending.length; round++) {
-      const result = await complete({ units: pending, writer, fetchFn, round, timeoutMs });
+      const protectedUnits = pending.map(protectTranslationUnit);
+      const protectionById = new Map(protectedUnits.map((item) => [item.unit.id, item]));
+      const result = await complete({ units: protectedUnits.map((item) => item.unit), writer, fetchFn, round, timeoutMs });
       const returnedItems = Array.isArray(result?.translations) ? result.translations : [];
       const expectedIds = pending.map((unit) => unit.id);
       const returnedIds = returnedItems.map((item) => String(item.id));
@@ -70,7 +72,7 @@ export async function translateOpeningDigestPayload(payload, {
           repairs.push({ round: round + 1, id: unit.id, issues });
           continue;
         }
-        const text = returned.get(unit.id) || '';
+        const text = restoreTranslationUnit(returned.get(unit.id) || '', protectionById.get(unit.id)?.tokens || []);
         const assessment = assessUnit(unit, text, round > 0);
         if (!assessment.hardErrors.length) translations.set(unit.id, text);
         else {
@@ -193,6 +195,45 @@ function mappingResponseError(expectedIds, returnedIds) {
   if (!unexpected.length && !duplicates.length
     && JSON.stringify(returnedExpectedOrder) === JSON.stringify(expectedSubsetOrder)) return '';
   return `模型返回的块 ID 重复、乱序或含未知项:期望 ${expectedIds.join(',')}，实际 ${returnedIds.join(',')}`;
+}
+
+export function protectTranslationUnit(unit) {
+  const source = String(unit.text || '');
+  const candidates = [
+    ...(source.match(/https?:\/\/[^\s)\]}>"']+/gi) || []),
+    ...(source.match(/\b\d{1,2}:\d{2}(?:\s*(?:a\.m\.|p\.m\.|AM|PM))?(?:\s+(?:ET|EST|EDT|PT|PST|PDT|UTC|GMT))?/gi) || []),
+    ...(source.match(/(?<![A-Za-z0-9])[-+]?\d+(?:[,.]\d+)*(?:%|‰)?/g) || []),
+    ...brandTokens(source, unit.kind),
+    ...(source.match(/\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+\b/g) || []),
+    ...(source.match(/\b(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z][A-Za-z0-9]{2,}\b/g) || []),
+  ];
+  const values = [...new Set(candidates.filter(Boolean))].sort((a, b) => b.length - a.length);
+  let text = source;
+  const tokens = [];
+  values.forEach((value, index) => {
+    if (!text.includes(value)) return;
+    const marker = `⟦ZEN_KEEP_${alphaMarker(index)}⟧`;
+    text = text.replaceAll(value, marker);
+    tokens.push({ marker, value });
+  });
+  return { unit: { ...unit, text }, tokens };
+}
+
+function alphaMarker(index) {
+  let value = Number(index) + 1;
+  let output = '';
+  while (value > 0) {
+    value -= 1;
+    output = String.fromCharCode(65 + (value % 26)) + output;
+    value = Math.floor(value / 26);
+  }
+  return output.padStart(3, 'A');
+}
+
+export function restoreTranslationUnit(value, tokens) {
+  let text = String(value || '');
+  for (const { marker, value: original } of tokens) text = text.replaceAll(marker, original);
+  return text;
 }
 
 async function completeTranslation({ units, writer, fetchFn, round, timeoutMs }) {

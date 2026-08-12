@@ -150,6 +150,32 @@ test('局部修复漏一块时保留已合格块，下一轮只重试缺失块',
   assert.deepEqual(result.translations.map((item) => item.id), translationUnits(source).map((item) => item.id));
 });
 
+test('模型翻译前用占位符保护 URL、Ticker、时间和数字并无损还原', async () => {
+  const source = {
+    article: {
+      preheader: 'Market signals.',
+      body: `## Today's catalysts
+- **July CPI** — SPCX was 68.54% at 8:30 a.m. ET ([Barron’s](https://example.com/cpi-2026)).`,
+    },
+    metrics: [],
+  };
+  let protectedText = '';
+  const result = await translateOpeningDigestPayload(source, {
+    writer: { model: 'test' },
+    complete: async ({ units }) => ({ translations: units.map((unit) => {
+      if (unit.id === 'body-2') {
+        protectedText = unit.text;
+        return { id: unit.id, text: unit.text.replace(' was ', ' 为 ').replace(' at ', ' 于 ') };
+      }
+      return { id: unit.id, text: unit.id === 'preheader' ? '市场信号。' : unit.text };
+    }) }),
+  });
+  assert.doesNotMatch(protectedText, /SPCX|68\.54%|8:30 a\.m\. ET|https:\/\/example\.com/);
+  assert.match(protectedText, /⟦ZEN_KEEP_[A-Z]{3}⟧/);
+  const translatedBody = result.translations.find((unit) => unit.id === 'body-2').text;
+  assert.match(translatedBody, /SPCX.*68\.54%.*8:30 a\.m\. ET.*https:\/\/example\.com\/cpi-2026/);
+});
+
 test('中文微信 HTML 锁定 @4、9 格行情、OIC 20×8 且低于官方大小限制', () => {
   const source = payload(); const translation = translated(source);
   const html = renderWechatOpeningDigestHtml({ source, payload: source, translation, images: { header: 'https://img/h', survey: 'https://img/s', footer: 'https://img/f' } });
