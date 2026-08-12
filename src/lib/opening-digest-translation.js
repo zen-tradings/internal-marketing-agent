@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 6;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 7;
 
 const FIXED_TERMS = new Map([
   ['Market snapshot', '市场快照'],
@@ -224,6 +224,7 @@ export function protectTranslationUnit(unit) {
     ...(source.match(/https?:\/\/[^\s)\]}>"']+/gi) || []),
     ...(source.match(/\b\d{1,2}:\d{2}(?:\s*(?:a\.m\.|p\.m\.|AM|PM))?(?:\s+(?:ET|EST|EDT|PT|PST|PDT|UTC|GMT))?/gi) || []),
     ...(source.match(/\b(?:ET|EST|EDT|PT|PST|PDT|UTC|GMT)\b/g) || []),
+    ...(source.match(/(?:[$€£¥]\s*)?[-+]?\d+(?:[,.]\d+)*\s+(?:thousand|million|billion|trillion)(?:\s+(?:U\.S\.\s+)?dollars?)?/gi) || []),
     ...(source.match(/(?<![A-Za-z0-9])[-+]?\d+(?:[,.]\d+)*(?:%|‰)?/g) || []),
     ...brandTokens(source, unit.kind),
     ...(source.match(/\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+\b/g) || []),

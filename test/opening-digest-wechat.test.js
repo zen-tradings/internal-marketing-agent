@@ -142,6 +142,20 @@ test('标准 Markdown 来源链接标签在模型翻译前被原样保护', asyn
   assert.match(restored, /\[Barron’s]\(https:\/\/example\.com\/cpi\)/);
 });
 
+test('英文金额的数字与量级作为一个不可变 token 保护', () => {
+  const unit = {
+    id: 'body-2', kind: 'list_item',
+    text: 'Revenue doubled to $2.58 billion and backlog reached $104 billion.',
+  };
+  const protectedUnit = protectTranslationUnit(unit);
+  assert.doesNotMatch(protectedUnit.unit.text, /\$2\.58 billion|\$104 billion/);
+  assert.ok(protectedUnit.tokens.some((token) => token.value === '$2.58 billion'));
+  assert.ok(protectedUnit.tokens.some((token) => token.value === '$104 billion'));
+  const restored = restoreTranslationUnit('收入增长至 ⟦ZEN_KEEP_AAA⟧，积压订单达 ⟦ZEN_KEEP_AAB⟧。', protectedUnit.tokens);
+  assert.match(restored, /\$2\.58 billion/);
+  assert.match(restored, /\$104 billion/);
+});
+
 test('中文直译在两轮局部修复后仍拒绝缺块、重复和乱序', async () => {
   await assert.rejects(translateOpeningDigestPayload(payload(), {
     writer: { model: 'test' },
