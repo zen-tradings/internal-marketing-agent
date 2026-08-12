@@ -156,6 +156,21 @@ test('英文金额的数字与量级作为一个不可变 token 保护', () => {
   assert.match(restored, /\$104 billion/);
 });
 
+test('模型输入不泄露未保护原文且重叠缩写 token 可无损还原', () => {
+  const unit = {
+    id: 'body-4', kind: 'paragraph',
+    text: '**July CPI due 8:30 AM ET; consensus 0.1% MoM, 3.4% YoY.** AI revenue rose 25% YoY without EPS dilution.',
+    markdown: '- **July CPI due 8:30 AM ET; consensus 0.1% MoM, 3.4% YoY.** AI revenue rose 25% YoY without EPS dilution.',
+  };
+  const protectedUnit = protectTranslationUnit(unit);
+  assert.equal('markdown' in protectedUnit.unit, false);
+  assert.doesNotMatch(protectedUnit.unit.text, /8:30 AM ET|MoM|YoY|EPS|25%/);
+  assert.equal(protectedUnit.unit.text.includes(' AI '), false);
+  assert.equal((protectedUnit.unit.text.match(/⟦ZEN_KEEP_[A-Z]{3}⟧/g) || []).length, protectedUnit.tokens.length);
+  assert.doesNotMatch(protectedUnit.unit.text, /⟦ZEN_KEEP_[A-Z]*⟦/);
+  assert.equal(restoreTranslationUnit(protectedUnit.unit.text, protectedUnit.tokens), unit.text);
+});
+
 test('中文直译在两轮局部修复后仍拒绝缺块、重复和乱序', async () => {
   await assert.rejects(translateOpeningDigestPayload(payload(), {
     writer: { model: 'test' },
