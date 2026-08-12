@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 4;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 5;
 
 const FIXED_TERMS = new Map([
   ['Market snapshot', '市场快照'],
@@ -42,8 +42,10 @@ export async function translateOpeningDigestPayload(payload, {
   for (const unit of units) {
     const fixed = FIXED_TERMS.get(unit.text);
     const company = unit.kind === 'company_name' ? translateCompanyName(unit.text) : '';
+    const note = deterministicNoteTranslation(unit);
     if (fixed) translations.set(unit.id, fixed);
     else if (company) translations.set(unit.id, company);
+    else if (note) translations.set(unit.id, note);
     else modelUnits.push(unit);
   }
   const repairs = [];
@@ -170,8 +172,10 @@ function brandTokens(value, kind) {
     const brand = stripLegalSuffix(text);
     if (brand && brand !== text) tokens.push(brand);
   }
-  return [...new Set(tokens)].filter((token) => token.length > 1);
+  return [...new Set(tokens)].filter((token) => token.length > 1 && !TIMEZONE_TOKENS.has(token));
 }
+
+const TIMEZONE_TOKENS = new Set(['ET', 'EST', 'EDT', 'PT', 'PST', 'PDT', 'UTC', 'GMT']);
 
 function stripLegalSuffix(value) {
   return String(value || '').replace(/['’]s$/i, '')
@@ -184,6 +188,16 @@ function translateCompanyName(value) {
   const suffix = /(?:,?\s+)(Corporation|Corp\.?|Incorporated|Inc\.?|Limited|Ltd\.?|LLC|PLC|Company|Co\.?)$/i.exec(text);
   if (!suffix) return text;
   return `${text.slice(0, suffix.index).trim()} 公司`;
+}
+
+function deterministicNoteTranslation(unit) {
+  const text = String(unit.text || '').trim();
+  if (unit.id === 'oic-asof') return `截至 ${text.replace(/^As of\s+/i, '')}`;
+  if (unit.id === 'oic-attribution') {
+    const provided = /^Data provided by\s+(.+)$/i.exec(text);
+    return provided ? `数据由 ${provided[1]} 提供` : `数据来源：${text}`;
+  }
+  return '';
 }
 
 function mappingResponseError(expectedIds, returnedIds) {
@@ -202,6 +216,7 @@ export function protectTranslationUnit(unit) {
   const candidates = [
     ...(source.match(/https?:\/\/[^\s)\]}>"']+/gi) || []),
     ...(source.match(/\b\d{1,2}:\d{2}(?:\s*(?:a\.m\.|p\.m\.|AM|PM))?(?:\s+(?:ET|EST|EDT|PT|PST|PDT|UTC|GMT))?/gi) || []),
+    ...(source.match(/\b(?:ET|EST|EDT|PT|PST|PDT|UTC|GMT)\b/g) || []),
     ...(source.match(/(?<![A-Za-z0-9])[-+]?\d+(?:[,.]\d+)*(?:%|‰)?/g) || []),
     ...brandTokens(source, unit.kind),
     ...(source.match(/\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+\b/g) || []),

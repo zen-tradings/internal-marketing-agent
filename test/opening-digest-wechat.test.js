@@ -176,6 +176,23 @@ test('模型翻译前用占位符保护 URL、Ticker、时间和数字并无损�
   assert.match(translatedBody, /SPCX.*68\.54%.*8:30 a\.m\. ET.*https:\/\/example\.com\/cpi-2026/);
 });
 
+test('OIC 时点与归属用确定性中文前缀保留原始数字、时区和机构', async () => {
+  const source = payload();
+  const seen = [];
+  const mapping = new Map(translated(source).translations.map((item) => [item.id, item.text]));
+  const result = await translateOpeningDigestPayload(source, {
+    writer: { model: 'test' },
+    complete: async ({ units }) => {
+      seen.push(...units.map((unit) => unit.id));
+      return { translations: units.map((unit) => ({ id: unit.id, text: mapping.get(unit.id) })) };
+    },
+  });
+  assert.ok(!seen.includes('oic-asof'));
+  assert.ok(!seen.includes('oic-attribution'));
+  assert.equal(result.translations.find((unit) => unit.id === 'oic-asof').text, '截至 10 Aug 2026, 10:15:00 EDT');
+  assert.equal(result.translations.find((unit) => unit.id === 'oic-attribution').text, '数据由 IVolatility 提供');
+});
+
 test('中文微信 HTML 锁定 @4、9 格行情、OIC 20×8 且低于官方大小限制', () => {
   const source = payload(); const translation = translated(source);
   const html = renderWechatOpeningDigestHtml({ source, payload: source, translation, images: { header: 'https://img/h', survey: 'https://img/s', footer: 'https://img/f' } });
