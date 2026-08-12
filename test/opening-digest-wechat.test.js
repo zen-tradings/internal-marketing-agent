@@ -11,7 +11,12 @@ import {
   WECHAT_DRAFT_MAX_CHARS,
   WECHAT_OPENING_DIGEST_TEMPLATE_ID,
 } from '../src/channels/wechat-opening-digest.js';
-import { translateOpeningDigestPayload, translationUnits } from '../src/lib/opening-digest-translation.js';
+import {
+  protectTranslationUnit,
+  restoreTranslationUnit,
+  translateOpeningDigestPayload,
+  translationUnits,
+} from '../src/lib/opening-digest-translation.js';
 
 const BODY = `## Today's catalysts
 - [NVIDIA Corporation update](https://example.com/a) moved SPY 10.25% at 10:15 EDT.
@@ -124,6 +129,17 @@ test('Opening Digest 品牌门禁不把英文标题短语误判为机构名', as
   assert.equal(calls, 1);
   assert.match(result.translations.find((unit) => unit.id === 'body-2').text, /OIC 前 20 名/);
   assert.match(result.translations.find((unit) => unit.id === 'body-3').text, /7 月 CPI.*8:30 ET/);
+});
+
+test('标准 Markdown 来源链接标签在模型翻译前被原样保护', async () => {
+  const unit = {
+    id: 'body-2', kind: 'list_item',
+    text: '**July CPI** — [Barron’s](https://example.com/cpi) reports the release.',
+  };
+  const protectedUnit = protectTranslationUnit(unit);
+  assert.doesNotMatch(protectedUnit.unit.text, /Barron’s|https:\/\/example\.com\/cpi/);
+  const restored = restoreTranslationUnit(protectedUnit.unit.text.replace('reports the release', '报道了该数据发布'), protectedUnit.tokens);
+  assert.match(restored, /\[Barron’s]\(https:\/\/example\.com\/cpi\)/);
 });
 
 test('中文直译在两轮局部修复后仍拒绝缺块、重复和乱序', async () => {

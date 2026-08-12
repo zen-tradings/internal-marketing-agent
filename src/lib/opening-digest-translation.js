@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 5;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 6;
 
 const FIXED_TERMS = new Map([
   ['Market snapshot', '市场快照'],
@@ -158,8 +158,9 @@ function compareBrandTokens(source, translated, kind) {
 
 function brandTokens(value, kind) {
   const text = String(value || '');
-  const linkedSources = kind === 'company_name' ? [] : [...text.matchAll(/\(\[([^\]]+)]\(https?:\/\//gi)]
-    .map((match) => match[1].trim());
+  const linkedSources = kind === 'company_name' ? [] : [...text.matchAll(/\[([^\]]+)]\(https?:\/\//gi)]
+    .map((match) => match[1].trim())
+    .filter(isInstitutionLabel);
   const tickerCompanies = kind === 'company_name' ? [] : [...text.matchAll(/\*\*([^*()]+?)\s*\(([A-Z]{1,6})\)\*\*/g)]
     .map((match) => stripLegalSuffix(match[1].replace(/^[^A-Za-z]+|[^A-Za-z.&'\-]+$/g, '').trim()));
   const tokens = [
@@ -173,6 +174,12 @@ function brandTokens(value, kind) {
     if (brand && brand !== text) tokens.push(brand);
   }
   return [...new Set(tokens)].filter((token) => token.length > 1 && !TIMEZONE_TOKENS.has(token));
+}
+
+function isInstitutionLabel(value) {
+  const words = String(value || '').match(/[A-Za-z][A-Za-z’'.&-]*/g) || [];
+  return words.length > 0 && words.length <= 5
+    && words.every((word) => /^[A-Z]/.test(word) || /^[A-Z]{2,}$/.test(word));
 }
 
 const TIMEZONE_TOKENS = new Set(['ET', 'EST', 'EDT', 'PT', 'PST', 'PDT', 'UTC', 'GMT']);
