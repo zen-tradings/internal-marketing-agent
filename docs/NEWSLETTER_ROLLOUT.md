@@ -22,7 +22,7 @@
 
 内容检索使用上一交易日 16:00 ET 到当前时刻的专用美股开盘窗口，保留市场和宏观查询，并对固定 72 个 ticker 按七组检索重大公司事件、明确升降级及剩余本周财报。财报日程使用 Exa best-effort 检索，只有日期仍在当前 ET 周且来源可验证时才作为候选；日程公告可早于上一交易日收盘，该例外不适用于普通新闻。Opening Digest 保留每个检索来源及链接，但把普通来源摘录限制为 1,200 字符；若总 prompt 仍逼近全局上限，会按固定档位继续压缩摘录，并把实际预算写入 trace，避免十条额外查询把正常正文误降级为数据版。两个标准区块、3-5 条 catalyst、链接去重、检索匹配和发布日期仍是写作与软审计要求；池内候选优先，宏观项最多一条。偏差只写入 `research-trace.json`，不阻止发送。零研究结果或正文生成失败时发送带中性提示的数据版。仅当事实问题同时具备高置信度、影响核心结论和具体来源证据，且两轮局部修复仍失败时，才 fail closed。
 
-生产环境在 DigitalOcean 的 Chrome 会从 OIC/iVolatility iframe 提取 20 行、8 个字段，截图仅用于同会话前后数据一致性校验并立即丢弃。开盘研究阶段同时抓取 72 个 ticker 的当日最新价和昨收，绝对涨跌幅达 5% 时生成结构化候选；单标的失败不影响其他标的。OIC 同次结果会被 run 内 artifact 复用于正文表格，并仅对进入 OIC Top 20 的池内标的判断 `IVX30 >= 60%` 或反推单日增加至少 5 个波动率点。这是受限的 Top 20 覆盖，不得表述为全池 IV 扫描。SQLite 保留最近 60 个成功交易日的池内入榜历史。OIC 授权、会话、浏览器、页面、报价或历史写入失败均只记录 trace；无预采集 artifact 时发布阶段仍会尝试原有 OIC 抓取。市场快照始终渲染固定 9 格，不可用项显示 `—`；2Y UST 使用美国财政部最新可用的 daily par yield。受众名称成功读取且不是 `test2` 时仍硬停；预检失败或人数为 0 只记 trace，最终以 Customer.io 请求结果为准。
+生产环境在 DigitalOcean 的 Chrome 会从 OIC/iVolatility iframe 提取 20 行、8 个字段，截图仅用于同会话前后数据一致性校验并立即丢弃。开盘研究阶段同时抓取 72 个 ticker 的当日最新价和昨收，绝对涨跌幅达 5% 时生成结构化候选；单标的失败不影响其他标的。OIC 同次结果会被 run 内 artifact 复用于正文表格，并仅对进入 OIC Top 20 的池内标的判断 `IVX30 >= 60%` 或反推单日增加至少 5 个波动率点。这是受限的 Top 20 覆盖，不得表述为全池 IV 扫描。SQLite 保留最近 60 个成功交易日的池内入榜历史。OIC 授权、会话、浏览器、页面、报价或历史写入失败均只记录 trace；无预采集 artifact 时发布阶段仍会尝试原有 OIC 抓取。市场快照始终渲染固定 9 格，不可用项显示 `—`；2Y UST 使用美国财政部最新可用的 daily par yield。受众名称成功读取且标准化后不是 `test1` 时仍硬停；预检失败或人数为 0 只记 trace，最终以 Customer.io 请求结果为准。
 
 封面固定以 `assets/zen-opening-digest-background.png` 为唯一底图；源图尺寸、SHA-256 和输出 1240×620 尺寸在渲染器内仍严格校验。Chrome 只在底图中部留白区叠加 `OPENING DIGEST` 和当日美东日期。底图、浏览器渲染或 Customer.io 上传失败时，渠道改为发送无封面版并把原因写入 trace。
 
@@ -35,9 +35,9 @@ API 创建的邮件会被 Customer.io workspace layout 包裹。Opening Digest �
 Customer.io 的 App API 不能改写由 Design Studio 创建的邮件正文，因此保留两条发布路径：
 
 1. 现有 `Vol. 1` 使用 Customer.io Design Studio 模板，人工替换内容并试发。
-2. Slack `email:` 工作流固定使用仓库内 `zen-customerio/zen-research@4` 邮件 HTML 模板创建新的 Customer.io 草稿；移动端外壳左右留白为 4px、正文左右留白为 8px，适合数据表格较宽的稳定自动化内容。
+2. Slack `email:` 工作流固定使用仓库内 `zen-customerio/zen-research@5` 邮件 HTML 模板创建新的 Customer.io 草稿；移动端外壳左右留白为 4px、正文左右留白为 8px，固定页脚包含公司 LinkedIn，适合数据表格较宽的稳定自动化内容。
 
-这两条常规 `email:` 路径都必须经过 Customer.io Review 页，任何发送或排期都由人工确认；`opening-digest` 是前文定义的独立受控例外，只能向配置的 `test2` 受众按其专用门禁发送或排期。
+这两条常规 `email:` 路径都必须经过 Customer.io Review 页，任何发送或排期都由人工确认；`opening-digest` 是前文定义的独立受控例外，只能向配置的 `test1` 受众按其专用门禁发送或排期。
 
 Bot 自动化路径不接受单次任务或工作流覆盖模板。真实渠道会在调用 Customer.io 前核对中央登记的模板 ID、锁定状态和最终 HTML 模板标识；任一不匹配都会拒绝创建草稿。后续改版必须升级模板版本并更新离线渲染测试。
 
@@ -102,7 +102,7 @@ CUSTOMERIO_NEWSLETTER_CONTACT_EMAIL=
 NEWSLETTER_EDITION="Vol. 1"
 ```
 
-`CUSTOMERIO_NEWSLETTER_HEADER_IMAGE_URL` 是开头品牌图的公开图片 URL(用 Customer.io 图床里的 https 地址,不要用仓库本地图);留空则不渲染顶部图。`CUSTOMERIO_NEWSLETTER_CONTACT_EMAIL` 是页脚展示的联系邮件，也是没有公开反馈页时满意度按钮的 `mailto:` 目标。配置 `CUSTOMERIO_NEWSLETTER_FEEDBACK_URL` 后，满意/不满意按钮会改为带 `rating=positive|negative` 和 `edition` 的网页链接。仓库模板保留法律强制的 `{% unsubscribe_url %}`，公司实体地址固定为 `700 Leahy St, Redwood City, CA 94061`。发送前可用 `npm run preview:newsletter` 生成本地 HTML 预览(不调用外部 API、不创建草稿)核对排版。
+`CUSTOMERIO_NEWSLETTER_HEADER_IMAGE_URL` 是开头品牌图的公开图片 URL(用 Customer.io 图床里的 https 地址,不要用仓库本地图);留空则不渲染顶部图。`CUSTOMERIO_NEWSLETTER_CONTACT_EMAIL` 是页脚展示的联系邮件，也是没有公开反馈页时满意度按钮的 `mailto:` 目标。配置 `CUSTOMERIO_NEWSLETTER_FEEDBACK_URL` 后，满意/不满意按钮会改为带 `rating=positive|negative` 和 `edition` 的网页链接。仓库模板保留法律强制的 `{% unsubscribe_url %}`，公司实体地址固定为 `700 Leahy St, Redwood City, CA 94061`，公司 LinkedIn 固定为 `https://www.linkedin.com/company/110921483`。发送前可用 `npm run preview:newsletter` 生成本地 HTML 预览(不调用外部 API、不创建草稿)核对排版。
 
 所有新建 Newsletter 的可见发件人固定为 `Zen Trading <support@zentradings.com>`；发布渠道会在创建草稿前校验邮箱，防止环境变量漂移到其他发件地址。
 

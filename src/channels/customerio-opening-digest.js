@@ -54,8 +54,8 @@ export function makeChannel({
           fetchFn, timeoutMs: cio.timeoutMs, sleep,
         });
         diagnostics.push(...audience.diagnostics);
-        if (audience.name && normalizedSegmentName(audience.name) !== 'test2') {
-          throw publishError(`Opening Digest 测试版只能发送到 Customer.io segment test2，当前为 ${audience.name}`);
+        if (audience.name && normalizedSegmentName(audience.name) !== 'test1') {
+          throw publishError(`Opening Digest 测试版只能发送到 Customer.io segment test1，当前为 ${audience.name}`);
         }
         const acceptance = source === 'acceptance';
         if (acceptance && !/^[a-z0-9-]{8,80}$/i.test(acceptanceId)) {
@@ -339,7 +339,7 @@ async function audiencePreflightFor({ baseUrl, appApiKey, segmentId, fetchFn, ti
   const count = Number.isInteger(countData?.count) ? countData.count : undefined;
   if (!name && segmentResult.status === 'fulfilled') diagnostics.push('Customer.io segment 预检未返回名称');
   if (count === undefined && countResult.status === 'fulfilled') diagnostics.push('Customer.io 受众预检返回无效人数');
-  if (count === 0) diagnostics.push('Customer.io test2 受众预检人数为 0');
+  if (count === 0) diagnostics.push('Customer.io test1 受众预检人数为 0');
   return { name, count, diagnostics };
 }
 
@@ -474,7 +474,7 @@ function publishResult({ newsletterId, name, digest, audience, deliveries = [], 
   return {
     mediaId: `customerio-newsletter:${newsletterId}`,
     title: name,
-    audienceStage: 'test2',
+    audienceStage: 'test1',
     audienceSegmentId: digest.segmentId,
     audienceRecipientCount: audience.count,
     deliveries,
