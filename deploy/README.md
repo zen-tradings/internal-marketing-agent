@@ -36,9 +36,11 @@ npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --activate --ope
 
 The command requires a clean worktree and a commit present on the upstream
 branch. It creates a local archive, stages and tests a separate release on the
-Droplet, runs the SQLite backup service, requires an idle queue, changes only
-`OPENING_DIGEST_WECHAT_ENABLED` in the protected environment file (verified by
-an excluding-line checksum), switches the single systemd service, and verifies
+Droplet, runs the SQLite backup service, requires an idle queue, reasserts the
+approved model and QDII runtime values and rejects drift with an
+excluding-flag checksum, then changes the explicit
+`OPENING_DIGEST_WECHAT_ENABLED` flag (and, only when supplied, the protected
+Opening Digest segment ID). It switches the single systemd service and verifies
 the marker, main PID and `/ready`. A failed activation restores
 the previous release and protected environment file. The DigitalOcean metadata
 check is a deployment-target guard only; it is not an application startup,
