@@ -144,6 +144,14 @@ export function loadConfig(env = process.env) {
       enabled: booleanFlag(env.OPENING_DIGEST_ENABLED),
       wechatEnabled: booleanFlag(env.OPENING_DIGEST_WECHAT_ENABLED),
       timezone: env.OPENING_DIGEST_TIMEZONE || 'America/New_York',
+      earningsPythonPath: env.OPENING_DIGEST_EARNINGS_PYTHON_PATH || env.QDII_PYTHON_PATH || 'python3',
+      earningsWorkerPath: env.OPENING_DIGEST_EARNINGS_WORKER_PATH
+        || path.join(REPO_ROOT, 'python', 'opening_digest_worker.py'),
+      earningsWorkerTimeoutMs: positiveNumber(
+        env.OPENING_DIGEST_EARNINGS_WORKER_TIMEOUT_MS,
+        15000,
+        'OPENING_DIGEST_EARNINGS_WORKER_TIMEOUT_MS',
+      ),
       optionsUrl: env.OIC_TRENDING_OPTIONS_URL
         || 'https://www.optionseducation.org/toolsoptionquotes/trending-options-volume',
       storageStatePath: env.OIC_STORAGE_STATE_PATH || '/etc/zen-content-hub/oic-storage-state.json',

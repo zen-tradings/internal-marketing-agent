@@ -41,6 +41,7 @@ test('embedded remote preflight and activation scripts are valid Bash', () => {
   assert.match(ACTIVATE_SCRIPT, /python3 -m venv "\$stage\/\.venv"/);
   assert.match(ACTIVATE_SCRIPT, /requirements-qdii\.lock/);
   assert.match(ACTIVATE_SCRIPT, /check-qdii-python\.mjs/);
+  assert.match(ACTIVATE_SCRIPT, /check-opening-digest-python\.mjs/);
   assert.match(ACTIVATE_SCRIPT, /update_env OPENING_DIGEST_WECHAT_ENABLED/);
   assert.match(ACTIVATE_SCRIPT, /env_without_flag_after/);
   assert.match(ACTIVATE_SCRIPT, /update_env QDII_ENABLED true/);

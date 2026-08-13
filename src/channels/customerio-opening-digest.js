@@ -1,9 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  NEWSLETTER_COMPANY_ADDRESS, NEWSLETTER_TEMPLATE_ID, parseNewsletterArticle, renderMarkdown, renderNewsletterEmail,
+  NEWSLETTER_COMPANY_ADDRESS, parseNewsletterArticle, renderMarkdown, renderNewsletterEmail,
 } from '../lib/newsletter-email.js';
-import { assertRenderedTemplateMarker } from '../lib/draft-template.js';
+import { assertRenderedTemplateMarker, FIXED_DRAFT_TEMPLATE_IDS } from '../lib/draft-template.js';
 import { uploadCustomerIoAsset } from '../lib/customerio-assets.js';
 import { renderOpeningDigestCover } from '../lib/opening-digest-cover.js';
 import { captureTrendingOptionsTable, validateTrendingOptionsData } from '../lib/options-volume.js';
@@ -15,6 +15,7 @@ import { makeWechatOpeningDigestChannel } from './wechat-opening-digest.js';
 
 const SENDER = 'support@zentradings.com';
 const CUSTOMERIO_MIN_SCHEDULE_LEAD_MS = 5 * 60 * 1000;
+export const CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['customerio-opening-digest'];
 
 export function makeChannel({
   readArticle = (file) => fs.readFile(file, 'utf8'), fetchFn = globalThis.fetch,
@@ -27,7 +28,7 @@ export function makeChannel({
 } = {}) {
   return {
     id: 'customerio-opening-digest',
-    templateId: NEWSLETTER_TEMPLATE_ID,
+    templateId: CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID,
     templateLocked: true,
     async publish({ articlePath, config, workflow, source = 'manual', existingRemoteId = '', existingDeliveries = [], onCreated, onDelivery, contentMode = 'editorial', acceptanceId = '' }) {
       const cio = config.customerio || {};
@@ -142,8 +143,9 @@ export function makeChannel({
         ].filter(Boolean).join('\n');
         const body = renderNewsletterEmail({ ...article, edition: dateKey }, {
           ...cio, headerImageUrl, contentHtml, includeUnsubscribe: false,
+          templateId: CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID,
         });
-        assertRenderedTemplateMarker(body, NEWSLETTER_TEMPLATE_ID);
+        assertRenderedTemplateMarker(body, CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID);
         if (!body.includes(`Zen Trading · ${NEWSLETTER_COMPANY_ADDRESS}`)) {
           throw publishError(`Opening Digest 固定地址缺失:${NEWSLETTER_COMPANY_ADDRESS}`);
         }
@@ -408,7 +410,7 @@ async function readPreparedOptions(articlePath, current) {
   const artifactPath = path.join(path.dirname(articlePath), 'opening-digest-universe.json');
   try {
     const artifact = JSON.parse(await fs.readFile(artifactPath, 'utf8'));
-    if (artifact?.schemaVersion !== 1 || artifact?.dateKey !== easternDateKey(current)
+    if (![1, 2].includes(artifact?.schemaVersion) || artifact?.dateKey !== easternDateKey(current)
       || !artifact?.options?.data || !artifact?.options?.capturedAt) return null;
     return {
       data: validateTrendingOptionsData(artifact.options.data),

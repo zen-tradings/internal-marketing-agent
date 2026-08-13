@@ -196,6 +196,10 @@ sudo -u zenbot env \
   QDII_PYTHON_PATH="$stage/.venv/bin/python" \
   QDII_WORKER_PATH="$stage/python/qdii_worker.py" \
   node "$stage/scripts/check-qdii-python.mjs"
+sudo -u zenbot env \
+  OPENING_DIGEST_EARNINGS_PYTHON_PATH="$stage/.venv/bin/python" \
+  OPENING_DIGEST_EARNINGS_WORKER_PATH="$stage/python/opening_digest_worker.py" \
+  node "$stage/scripts/check-opening-digest-python.mjs"
 sudo -u zenbot npm --prefix "$stage" run check
 
 before_backup_manifest=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 -type f -name 'runs-*.db' -printf '%f\n' 2>/dev/null | sort | sha256sum | awk '{ print $1 }')

@@ -50,6 +50,9 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal('claudeBin' in c, false);
   assert.equal(c.wechat.appId, 'wx');
   assert.equal(c.openingDigest.wechatEnabled, false);
+  assert.equal(c.openingDigest.earningsPythonPath, 'python3');
+  assert.match(c.openingDigest.earningsWorkerPath, /python\/opening_digest_worker\.py$/);
+  assert.equal(c.openingDigest.earningsWorkerTimeoutMs, 15000);
   assert.match(c.assets.surveyImage, /assets\/zen-survey-qr\.jpg$/);
   assert.match(c.assets.footerImage, /assets\/zen-footer-qr\.png$/);
 });
@@ -61,6 +64,24 @@ test('Opening Digest 微信同步只有显式开关才启用', () => {
   };
   assert.equal(loadConfig({ ...base, OPENING_DIGEST_WECHAT_ENABLED: 'true' }).openingDigest.wechatEnabled, true);
   assert.equal(loadConfig({ ...base, OPENING_DIGEST_WECHAT_ENABLED: 'false' }).openingDigest.wechatEnabled, false);
+});
+
+test('Opening Digest 财报 worker 默认复用 QDII Python 且允许独立覆盖', () => {
+  const base = {
+    SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
+    WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec', OPENROUTER_API_KEY: 'or-key',
+    QDII_PYTHON_PATH: '/release/.venv/bin/python',
+  };
+  assert.equal(loadConfig(base).openingDigest.earningsPythonPath, '/release/.venv/bin/python');
+  const configured = loadConfig({
+    ...base,
+    OPENING_DIGEST_EARNINGS_PYTHON_PATH: '/custom/python',
+    OPENING_DIGEST_EARNINGS_WORKER_PATH: '/custom/worker.py',
+    OPENING_DIGEST_EARNINGS_WORKER_TIMEOUT_MS: '22000',
+  }).openingDigest;
+  assert.equal(configured.earningsPythonPath, '/custom/python');
+  assert.equal(configured.earningsWorkerPath, '/custom/worker.py');
+  assert.equal(configured.earningsWorkerTimeoutMs, 22000);
 });
 
 test('结构化直译抓取、浏览器、PDF、图片、Notion 与 Datalab 配置可由 env 覆盖', () => {

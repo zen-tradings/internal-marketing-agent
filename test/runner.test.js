@@ -959,18 +959,31 @@ test('company 专项调研:基础查询之外并行执行 extraQueries', async (
 });
 
 test('Opening Digest alone may run ten extra queries and persists collected universe context', async () => {
+  let extraQueryContext;
   const workflow = openingWorkflow({
     factReview: false,
+    validateArticle: () => ({
+      warnings: [],
+      links: ['https://example.com/1', 'https://example.com/2'],
+      earningsLinks: ['https://example.com/60'],
+      stats: {
+        links: ['https://example.com/1', 'https://example.com/2'],
+        earningsLinks: ['https://example.com/60'],
+      },
+    }),
     research: {
       prioritySources: [],
       extraQueryLimit: 10,
       maxSourceExcerptChars: 1200,
-      extraQueries: () => Array.from({ length: 12 }, (_, index) => ({
-        query: `universe-${index + 1}`,
-        kind: `universe-${index + 1}`,
-        numResults: index === 9 ? 12 : 6,
-        openingDigestKind: index === 9 ? 'earnings-schedule' : 'universe-news',
-      })),
+      extraQueries: (_subject, context) => {
+        extraQueryContext = context;
+        return Array.from({ length: 12 }, (_, index) => ({
+          query: `universe-${index + 1}`,
+          kind: `universe-${index + 1}`,
+          numResults: index === 9 ? 12 : 6,
+          openingDigestKind: index === 9 ? 'earnings-schedule' : 'universe-news',
+        }));
+      },
     },
     collectContext: async () => ({
       artifact: { schemaVersion: 1, dateKey: '2026-08-10', quotes: { coverage: { requested: 72, available: 72 } } },
@@ -1025,6 +1038,8 @@ The opening interpretation remains conditional on whether the initial breadth pe
   });
   assert.equal(result.ok, true);
   assert.equal(searchQueries.length, 11, 'one base search plus ten Opening Digest extras');
+  assert.equal(extraQueryContext.editorialContext.artifact.quotes.coverage.available, 72);
+  assert.equal(extraQueryContext.asOf instanceof Date, true);
   assert.deepEqual(searchQueries.slice(1), Array.from({ length: 10 }, (_, index) => `universe-${index + 1}`));
   assert.match(completionPrompt, /TRACKED-CONTEXT META \+6\.00%/);
   assert.ok(completionPrompt.length < 60_000, `prompt should stay under the configured global limit: ${completionPrompt.length}`);
@@ -1039,6 +1054,9 @@ The opening interpretation remains conditional on whether the initial breadth pe
   assert.equal(trace.openingDigestResearchBudget.promptChars, completionPrompt.length);
   assert.equal(trace.openingDigestResearchBudget.maxPromptChars, 60_000);
   assert.equal(trace.openingDigestResearchBudget.withinLimit, true);
+  assert.ok(trace.openingDigestSelection.selected.some((source) => (
+    source.type === 'earnings-schedule' && source.url === 'https://example.com/60'
+  )));
 });
 
 test('company 财报深搜:传递 deep/financial report 参数,展开 subpages 并写调研轨迹', async () => {

@@ -12,6 +12,8 @@
     "setup:qdii": "node scripts/setup-qdii-python.mjs",
     "check:qdii-python": "node scripts/check-qdii-python.mjs",
     "check:qdii": "node scripts/check-qdii.mjs",
+    "check:earnings-python": "node scripts/check-opening-digest-python.mjs",
+    "check:earnings-calendar": "node scripts/check-earnings-calendar.mjs",
     "check:translation": "node scripts/check-translation.mjs",
     "requeue:translation": "node scripts/requeue-translation.mjs",
     "requeue:analysis-gate": "node scripts/requeue-analysis-gate.mjs",

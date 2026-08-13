@@ -152,14 +152,17 @@ test('opening digest research uses the prior regular close window', () => {
   assert.equal(previousRegularClose(now).toISOString(), '2026-08-07T20:00:00.000Z');
   assert.equal(previousRegularClose(new Date('2026-07-06T14:15:00.000Z')).toISOString(), '2026-07-02T20:00:00.000Z');
   assert.match(openingDigestSearchInput(now), /US equity opening digest for 2026-08-10/);
-  const queries = openingDigestResearchQueries(now);
+  const queries = openingDigestResearchQueries(now, {
+    status: 'ok', startDate: '2026-08-10', endDate: '2026-08-14',
+    shortlist: [{ symbol: 'NVDA', company: 'NVIDIA' }],
+  });
   assert.equal(queries.length, 10);
   assert.equal(queries.filter((query) => query.openingDigestKind === 'universe-news').length, 7);
-  assert.equal(queries.filter((query) => query.openingDigestKind === 'earnings-schedule').length, 1);
+  assert.equal(queries.filter((query) => query.openingDigestKind === 'earnings-verification').length, 1);
   assert.ok(queries.slice(0, -1).every((query) => query.startPublishedDate === '2026-08-07T20:00:00.000Z'));
   assert.equal(queries.at(-1).startPublishedDate, undefined);
   assert.match(queries.at(-1).query, /2026-08-10 through 2026-08-14/);
-  assert.ok(queries.every((query) => query.endPublishedDate === now.toISOString()));
+  assert.ok(queries.slice(0, -1).every((query) => query.endPublishedDate === now.toISOString()));
 });
 
 test('opening universe locks 72 unique tickers in seven groups and keeps Alphabet quote classes distinct', () => {
@@ -237,12 +240,17 @@ test('universe context emits prompt sources and a reusable OIC artifact without 
       } }] } }; } };
     },
     captureOptions: async () => capturedOptions({ data }),
+    collectEarnings: async () => ({
+      schemaVersion: 1, status: 'unavailable', provider: 'yfinance-yahoo',
+      startDate: '2026-08-10', endDate: '2026-08-14', candidates: [], shortlist: [],
+      listingChecks: [], sources: [], diagnostics: [],
+    }),
     history: {
       recordCapture: (entry) => recorded.push(entry),
       listHistory: () => ({ sessions: ['2026-08-10'], rows: [{ session_date: '2026-08-10', ticker: 'NVDA' }] }),
     },
   });
-  assert.equal(context.artifact.schemaVersion, 1);
+  assert.equal(context.artifact.schemaVersion, 2);
   assert.equal(context.artifact.quotes.coverage.available, 72);
   assert.equal(context.artifact.options.data.rows.length, 20);
   assert.deepEqual(context.sources.map((source) => source.openingDigestKind), ['universe-price', 'universe-iv']);
@@ -340,7 +348,7 @@ test('complete digest renders template, address, options and schedules without c
   assert.equal(result.mediaId, 'customerio-newsletter:99');
   assert.deepEqual(uploads, ['opening-digest-cover-2026-08-10.png']);
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
-  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@5"/);
+  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@6"/);
   assert.match(create.body.body, /href="https:\/\/www\.linkedin\.com\/company\/110921483"[^>]*>LinkedIn<\/a>/);
   assert.match(create.body.body, /\.zen-email-content \{ padding:20px 8px !important; \}/);
   assert.match(create.body.body, /Zen Trading · 700 Leahy St, Redwood City, CA 94061/);

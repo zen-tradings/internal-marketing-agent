@@ -3,11 +3,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 11;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 12;
 const MODEL_TRANSLATION_BATCH_SIZE = 1;
 
 const FIXED_TERMS = new Map([
   ['Market snapshot', '市场快照'],
+  ['Earnings ahead', '财报预告'],
   ["Today's catalysts", '今日催化'],
   ['Market read', '市场解读'],
   ['Trending options volume', '期权成交量趋势'],
@@ -20,6 +21,7 @@ const FIXED_TERMS = new Map([
   ['Data delayed 20 minutes', '数据延迟 20 分钟'],
   ['Opening capture', '开盘时点采集'],
   ['Latest available capture', '最新可用时点采集'],
+  ['No major U.S.-listed earnings events were selected for the remainder of this week.', '本周余下时间暂无重点美股财报事件入选。'],
 ]);
 
 export async function translateOpeningDigestPayload(payload, {
@@ -44,9 +46,11 @@ export async function translateOpeningDigestPayload(payload, {
     const fixed = FIXED_TERMS.get(unit.text);
     const company = unit.kind === 'company_name' ? translateCompanyName(unit.text) : '';
     const note = deterministicNoteTranslation(unit);
+    const earnings = deterministicEarningsTranslation(unit);
     if (fixed) translations.set(unit.id, fixed);
     else if (company) translations.set(unit.id, company);
     else if (note) translations.set(unit.id, note);
+    else if (earnings) translations.set(unit.id, earnings);
     else modelUnits.push(unit);
   }
   const repairs = [];
@@ -217,6 +221,35 @@ function deterministicNoteTranslation(unit) {
     return provided ? `数据由 ${provided[1]} 提供` : `数据来源：${text}`;
   }
   return '';
+}
+
+function deterministicEarningsTranslation(unit) {
+  const source = String(unit.text || '').trim();
+  if (unit.kind !== 'paragraph' || !/\[[A-Z0-9.\-]+]\(https?:\/\//.test(source)
+    || !/(?:before open|after close|timing not supplied)/.test(source)) return '';
+  const links = [];
+  let text = source.replace(/\[[^\]]+]\(https?:\/\/[^\s)]+\)/g, (link) => {
+    links.push(link);
+    return `ZEN_EARNINGS_LINK_${links.length - 1}`;
+  });
+  const weekdays = { Sun: '周日', Mon: '周一', Tue: '周二', Wed: '周三', Thu: '周四', Fri: '周五', Sat: '周六' };
+  const months = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12 };
+  text = text.replace(/\*\*(Sun|Mon|Tue|Wed|Thu|Fri|Sat),\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}):\*\*/g,
+    (_match, weekday, month, day) => `**${months[month]}月${Number(day)}日 ${weekdays[weekday]}：**`);
+  text = text
+    .replace(/before open \(expected\); call /g, '盘前（预计）；电话会 ')
+    .replace(/after close \(expected\); call /g, '盘后（预计）；电话会 ')
+    .replace(/timing not supplied \(expected\); call /g, '披露时段未提供（预计）；电话会 ')
+    .replace(/before open; call /g, '盘前披露；电话会 ')
+    .replace(/after close; call /g, '盘后披露；电话会 ')
+    .replace(/timing not supplied; call /g, '披露时段未提供；电话会 ')
+    .replace(/before open \(expected\)/g, '盘前（预计）')
+    .replace(/after close \(expected\)/g, '盘后（预计）')
+    .replace(/timing not supplied \(expected\)/g, '披露时段未提供（预计）')
+    .replace(/;\s+/g, '；')
+    .replace(/\.\s+(?=\*\*)/g, '。 ');
+  links.forEach((link, index) => { text = text.replace(`ZEN_EARNINGS_LINK_${index}`, link); });
+  return text.endsWith('.') ? `${text.slice(0, -1)}。` : text;
 }
 
 function mappingResponseError(expectedIds, returnedIds) {

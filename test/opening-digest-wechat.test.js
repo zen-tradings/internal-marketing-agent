@@ -18,7 +18,10 @@ import {
   translationUnits,
 } from '../src/lib/opening-digest-translation.js';
 
-const BODY = `## Today's catalysts
+const BODY = `## Earnings ahead
+**Mon, Aug 10:** [NVDA](https://finance.yahoo.com/calendar/earnings) after close (expected)
+
+## Today's catalysts
 - [NVIDIA Corporation update](https://example.com/a) moved SPY 10.25% at 10:15 EDT.
 - OCC reported a second catalyst for QQQ.
 
@@ -55,11 +58,13 @@ function translated(source = payload()) {
       id: unit.id, kind: unit.kind, source: unit.text,
       text: ({
         preheader: '早盘市场信号。',
-        'body-1': '今日催化',
-        'body-2': '[NVIDIA 公司动态](https://example.com/a) 使 SPY 在 10:15 EDT 变动 10.25%。',
-        'body-3': 'OCC 报告了影响 QQQ 的第二项催化。',
-        'body-4': '市场解读',
-        'body-5': 'NVIDIA 公司仍是核心条件；2026 年指引保持不变。',
+        'body-1': '财报预告',
+        'body-2': '**8月10日 周一：** [NVDA](https://finance.yahoo.com/calendar/earnings) 盘后（预计）',
+        'body-3': '今日催化',
+        'body-4': '[NVIDIA 公司动态](https://example.com/a) 使 SPY 在 10:15 EDT 变动 10.25%。',
+        'body-5': 'OCC 报告了影响 QQQ 的第二项催化。',
+        'body-6': '市场解读',
+        'body-7': 'NVIDIA 公司仍是核心条件；2026 年指引保持不变。',
         'metric-note-1': '2Y UST 是最新可用的 U.S. Treasury 每日票面收益率。',
         'oic-asof': '截至 10 Aug 2026, 10:15:00 EDT',
         'oic-attribution': '数据由 IVolatility 提供',
@@ -82,7 +87,7 @@ test('Opening Digest 专用直译保持块 ID、顺序、数字、Ticker、时�
     },
   });
   assert.deepEqual(result.translations.map((item) => item.id), translationUnits(payload()).map((item) => item.id));
-  assert.match(result.translations.find((item) => item.id === 'body-2').text, /SPY.*10:15 EDT.*10\.25%/);
+  assert.match(result.translations.find((item) => item.id === 'body-4').text, /SPY.*10:15 EDT.*10\.25%/);
   assert.equal(result.translations.find((item) => item.id === 'oic-company-1').text, 'NVIDIA 公司');
   assert.equal(result.translations.find((item) => item.id === 'oic-company-2').text, 'Company 2');
   const callsBeforeCacheRead = calls;
@@ -232,7 +237,7 @@ test('局部修复漏一块时保留已合格块，下一轮只重试缺失块',
   const source = payload();
   const mapping = new Map(translated(source).translations.map((item) => [item.id, item.text]));
   const calls = new Map();
-  const retryId = 'body-2';
+  const retryId = 'body-4';
   const result = await translateOpeningDigestPayload(source, {
     writer: { model: 'test' },
     complete: async ({ units }) => {
@@ -290,7 +295,7 @@ test('OIC 时点与归属用确定性中文前缀保留原始数字、时区和�
   assert.equal(result.translations.find((unit) => unit.id === 'oic-attribution').text, '数据由 IVolatility 提供');
 });
 
-test('中文微信 HTML 锁定 @4、9 格行情、OIC 20×8 且低于官方大小限制', () => {
+test('中文微信 HTML 锁定 @5、9 格行情、OIC 20×8 且低于官方大小限制', () => {
   const source = payload(); const translation = translated(source);
   const html = renderWechatOpeningDigestHtml({ source, payload: source, translation, images: { header: 'https://img/h', survey: 'https://img/s', footer: 'https://img/f' } });
   assert.match(html, new RegExp(`data-zen-draft-template="${WECHAT_OPENING_DIGEST_TEMPLATE_ID.replace('/', '\\/')}"`));

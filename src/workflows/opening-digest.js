@@ -6,6 +6,7 @@ import {
   validateOpeningDigestArticle,
 } from '../lib/opening-digest-content.js';
 import { collectOpeningDigestUniverseContext } from '../lib/opening-digest-universe.js';
+import { decorateOpeningDigestWithEarnings } from '../lib/opening-digest-earnings.js';
 
 const MARKET_PRIORITY_SOURCES = [
   'reuters.com', 'apnews.com', 'ft.com', 'wsj.com', 'bloomberg.com', 'cnbc.com',
@@ -18,14 +19,14 @@ function promptTemplate() {
   return `You are writing the editorial section of Zen Opening Digest for ${date}.
 
 Write in English. This is a short US market opening digest, not investment advice.
-Use 3 to 5 sourced market-moving items. Prioritize the supplied tracked-universe signals and current-window company developments; use at most one macro item, only when it materially affects the broad market or several tracked names. Each non-price item needs one direct source link and one concise reason it matters. A supplied price move may be reported as a timestamped price fact. When no supplied source establishes a catalyst, write one factual price sentence only: omit a Reason clause entirely, and never comment that a cause is missing, unknown, or unasserted. Combine standalone supplied IV signals into at most one item and state that coverage is limited to tracked names appearing in the OIC Top 20. Then write one restrained, falsifiable “Market read” paragraph. Do not invent price levels, options activity, causes, or macro values.
-Do not use evergreen background, previously disclosed items, unconfirmed rumors, price-target-only notes, or sources without a verifiable publication date as today's catalysts. Explicit upgrades or downgrades are allowed. A still-upcoming earnings event in the current ET week may use an older verifiable schedule source; this exception does not apply to ordinary news. Never pad the digest with stale material; use only the number of supported items available.
+Use 3 to 5 sourced market-moving items. Prioritize the supplied tracked-universe signals and current-window company developments; use at most one macro item, only when it materially affects the broad market or several tracked names. Each non-price item needs one direct source link and one concise reason it matters. A supplied price move may be reported as a timestamped price fact. When no supplied source establishes a catalyst, write one factual price sentence only: omit a Reason clause entirely, and never comment that a cause is missing, unknown, or unasserted. Combine standalone supplied IV signals into at most one item and state that coverage is limited to tracked names appearing in the OIC Top 20. Then write one restrained, falsifiable “Market read” paragraph. Do not invent price levels, options activity, causes, macro values, earnings dates, or conference-call times.
+Do not use evergreen background, previously disclosed items, unconfirmed rumors, price-target-only notes, or sources without a verifiable publication date as today's catalysts. Explicit upgrades or downgrades are allowed. The schedule itself is inserted later as Earnings ahead, so do not create that heading and do not repeat a merely upcoming earnings date as a catalyst. Never pad the digest with stale material; use only the number of supported items available.
 
 Return Markdown only with this frontmatter:
 ---
 title: Zen Opening Digest
 subject: Zen Opening Digest · ${date}
-preheader: Market signals, today’s catalysts, and options volume.
+preheader: Market signals, earnings ahead, today’s catalysts, and options volume.
 edition: ${date}
 ---
 Then use exactly these headings:
@@ -55,7 +56,10 @@ export default {
       ...shared,
       minOfficialSources: 0,
       prioritySources: [...new Set([...MARKET_PRIORITY_SOURCES, ...shared.prioritySources])],
-      extraQueries: () => openingDigestResearchQueries(new Date()),
+      extraQueries: (_subject, context = {}) => openingDigestResearchQueries(
+        context.asOf || new Date(),
+        context.editorialContext?.artifact?.earningsCalendar,
+      ),
       extraQueryLimit: 10,
       // Ten search lanes can return far more material than a 3-5 item digest needs.
       // Keep every source/link available while bounding each excerpt so generation and
@@ -73,6 +77,14 @@ export default {
   validateArticle: ({ article, research, asOf }) => validateOpeningDigestArticle({
     article, research, asOf, requireFreshSources: true,
   }),
+  decorateArticle: ({ article, research, asOf, editorialContext }) => {
+    const calendar = editorialContext?.artifact?.earningsCalendar;
+    const decorated = decorateOpeningDigestWithEarnings(article, { calendar, research, asOf });
+    if (editorialContext?.trace?.earningsCalendar && calendar?.selection) {
+      editorialContext.trace.earningsCalendar.selection = calendar.selection;
+    }
+    return decorated;
+  },
   retries: 0,
   promptTemplate,
 };

@@ -15,6 +15,7 @@ idna==3.18
 jsonpath==0.82.2
 lxml==6.1.1
 mini-racer==0.14.1
+multitasking==0.0.13
 numpy==2.2.6
 opencv-python-headless==4.12.0.88
 openpyxl==3.1.5
@@ -22,6 +23,9 @@ pandas==2.3.2
 pdfminer.six==20250506
 pdfplumber==0.11.7
 pillow==12.3.0
+platformdirs==4.4.0
+peewee==3.19.0
+protobuf==6.33.6
 pycparser==3.0
 pypdf==5.9.0
 pypdfium2==5.12.1
@@ -36,4 +40,6 @@ typing_extensions==4.16.0
 tzdata==2026.3
 urllib3==2.7.0
 webencodings==0.5.1
+websockets==15.0.1
 xlrd==2.0.2
+yfinance==1.5.2

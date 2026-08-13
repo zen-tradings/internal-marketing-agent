@@ -119,6 +119,8 @@ export async function runWriter({
       },
     } : {}),
   };
+  let editorialContext = null;
+  let openingDigestResearch = [];
   try { fs.rmSync(articlePath, { force: true }); } catch {}
 
   try {
@@ -244,10 +246,18 @@ export async function runWriter({
           };
         })
       : Promise.resolve(null);
-    const [externalResearch, editorialContext] = await Promise.all([
-      searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy }),
-      contextPromise,
-    ]);
+    let externalResearch;
+    if (workflow.id === 'opening-digest') {
+      editorialContext = await contextPromise;
+      externalResearch = await searchExa({
+        input, writer, workflow, fetchFn, trace, sourcePolicy, editorialContext, asOf: researchAsOf,
+      });
+    } else {
+      [externalResearch, editorialContext] = await Promise.all([
+        searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy, asOf: researchAsOf }),
+        contextPromise,
+      ]);
+    }
     if (workflow.id === 'opening-digest' && editorialContext) {
       trace.openingDigestUniverse = editorialContext.trace || { diagnostics: editorialContext.diagnostics || [] };
       if (editorialContext.artifact) {
@@ -266,6 +276,7 @@ export async function runWriter({
       ...(Array.isArray(editorialContext?.sources) ? editorialContext.sources : []),
     ];
     const research = mergeInjectedSources(injectedSources, externalResearch);
+    if (workflow.id === 'opening-digest') openingDigestResearch = research;
     if (workflow.id === 'opening-digest' && research.length === 0) {
       throw new Error('Opening Digest 未检索到可用研究来源');
     }
@@ -339,12 +350,28 @@ export async function runWriter({
     if (sourcePolicy.referenceStyle === 'terminal-list') {
       article = canonicalizeTerminalReferences(article, research, sourcePolicy);
     }
+    if (typeof workflow.decorateArticle === 'function') {
+      article = workflow.decorateArticle({
+        article, research, asOf: researchAsOf, editorialContext,
+      });
+    }
     validateArticleSourceContract(article, research, sourcePolicy);
     if (typeof workflow.validateArticle === 'function') {
-      const validation = workflow.validateArticle({ article, research, asOf: new Date() });
+      const validation = workflow.validateArticle({ article, research, asOf: researchAsOf });
       if (workflow.id === 'opening-digest') {
         trace.openingDigestAudit = validation;
         trace.openingDigestSelection = openingDigestSelectionSummary(validation, research);
+      }
+    }
+    if (workflow.id === 'opening-digest' && editorialContext?.artifact) {
+      const artifactPath = path.join(workflow.workDir, 'opening-digest-universe.json');
+      try { fs.writeFileSync(artifactPath, `${JSON.stringify(editorialContext.artifact, null, 2)}\n`, { mode: 0o600 }); }
+      catch (error) {
+        trace.openingDigestUniverse ||= { diagnostics: [] };
+        trace.openingDigestUniverse.diagnostics = [
+          ...(trace.openingDigestUniverse.diagnostics || []),
+          `Opening Digest universe artifact 更新失败:${error.message}`,
+        ];
       }
     }
 
@@ -369,12 +396,25 @@ export async function runWriter({
       trace.factReview = e.openingDigestFactReview;
     }
     if (workflow.id === 'opening-digest' && !e?.openingDigestHardFailure) {
-      const fallback = openingDigestFallbackArticle(new Date());
+      const fallbackAsOf = new Date();
+      let fallback = openingDigestFallbackArticle(fallbackAsOf);
+      if (typeof workflow.decorateArticle === 'function') {
+        fallback = workflow.decorateArticle({
+          article: fallback,
+          research: openingDigestResearch,
+          asOf: fallbackAsOf,
+          editorialContext,
+        });
+      }
       trace.finishedAt = new Date().toISOString();
       trace.contentMode = 'data-only';
       trace.fallbackReason = describeFetchError(e).slice(0, 600);
       trace.diagnostics = [...(trace.diagnostics || []), trace.fallbackReason];
       try {
+        if (editorialContext?.artifact) {
+          const artifactPath = path.join(workflow.workDir, 'opening-digest-universe.json');
+          fs.writeFileSync(artifactPath, `${JSON.stringify(editorialContext.artifact, null, 2)}\n`, { mode: 0o600 });
+        }
         fs.writeFileSync(articlePath, fallback);
         writeResearchTrace(researchTracePath, trace);
         return {
@@ -1349,7 +1389,7 @@ function unquoteYamlTitle(value) {
 //    官方/一手来源、既定 prioritySources 一起归入第一优先级研究素材;
 // 2) 剩余文本(去掉 URL)作为 query,并行跑「优先信源」+「开放」两路 /search;
 // 3) 结果按 用户指定 > 官方/一手 > 既定优先源 > 专项深搜 > 开放搜索 顺序合并,按 URL 去重。
-async function searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy }) {
+async function searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy, editorialContext = null, asOf = new Date() }) {
   if (sourcePolicy.skipResearch) {
     // 欢迎、公告等关系型邮件不做市场搜索。若用户主动附了链接且 Exa 可用，
     // 只读取这些指定材料，不扩展检索，也不将其变成强制引用门禁。
@@ -1398,7 +1438,7 @@ async function searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy
   let searchResults = [];
   if (searchQuery) {
     const extraQueries = typeof workflow?.research?.extraQueries === 'function'
-      ? workflow.research.extraQueries(searchQuery).filter(Boolean).slice(0, extraQueryLimitFor(workflow))
+      ? workflow.research.extraQueries(searchQuery, { editorialContext, asOf }).filter(Boolean).slice(0, extraQueryLimitFor(workflow))
       : [];
     const [openSettled, prioritySettled, officialSettled, officialDiscoverySettled, legalSettled, ...extraSettled] = await Promise.allSettled([
       searchExaOpen({ query: searchQuery, writer, fetchFn, trace }),
@@ -1453,6 +1493,7 @@ async function searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy
         ...(typeof spec === 'object' && spec?.openingDigestKind
           ? { openingDigestKind: spec.openingDigestKind }
           : {}),
+        ...(typeof spec === 'object' && spec?.official ? { official: true } : {}),
       })))),
     ]);
     const openFailed = openSettled.status === 'rejected';
@@ -1706,7 +1747,9 @@ function sourcePriorityTier(source) {
 }
 
 function openingDigestSelectionSummary(audit, research) {
-  const links = new Set((audit?.links || audit?.stats?.links || []).map(normalizeUrl));
+  const catalystLinks = audit?.links || audit?.stats?.links || [];
+  const earningsLinks = audit?.earningsLinks || audit?.stats?.earningsLinks || [];
+  const links = new Set([...catalystLinks, ...earningsLinks].map(normalizeUrl));
   const candidates = (Array.isArray(research) ? research : [])
     .filter((source) => source?.openingDigestKind && source?.url)
     .map((source) => ({
@@ -1719,7 +1762,9 @@ function openingDigestSelectionSummary(audit, research) {
     selected: candidates.filter((item) => item.selected),
     notSelected: candidates.filter((item) => !item.selected).map((item) => ({
       ...item,
-      reason: 'lower-ranked, duplicate, unsupported, or outside the 3-5 item capacity',
+      reason: item.type.startsWith('earnings-')
+        ? 'not selected after listing, date, official-call, and balanced six-event filters'
+        : 'lower-ranked, duplicate, unsupported, or outside the 3-5 item capacity',
     })),
   };
 }

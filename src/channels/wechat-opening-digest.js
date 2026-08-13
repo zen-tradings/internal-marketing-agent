@@ -169,7 +169,9 @@ function renderNarrative(markdown, translated) {
     const id = `body-${index + 1}`; const unit = translated.get(id); if (!unit) return;
     const heading = /^#{1,6}\s+/.test(line); const list = /^\s*[-*+]\s+/.test(line);
     if (heading) {
-      section = unit.source === "Today's catalysts" ? 'catalysts' : unit.source === 'Market read' ? 'read' : `body-${index + 1}`;
+      section = unit.source === 'Earnings ahead' ? 'earnings'
+        : unit.source === "Today's catalysts" ? 'catalysts'
+          : unit.source === 'Market read' ? 'read' : `body-${index + 1}`;
       parts.push(`<h2 data-zen-section="${section}" data-block-id="${id}" style="margin:22px 0 9px;font-size:18px;color:#08272b">${inlineMarkup(unit.text)}</h2>`);
     } else if (list) parts.push(`<p data-block-id="${id}" style="margin:6px 0 6px 1em;text-indent:-1em">• ${inlineMarkup(unit.text)}</p>`);
     else parts.push(`<p data-block-id="${id}" style="margin:8px 0">${inlineMarkup(unit.text)}</p>`);

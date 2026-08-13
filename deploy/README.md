@@ -109,11 +109,15 @@ SLACK_ALLOWED_CHANNEL_IDS=C0123456789
 ```
 
 The immutable deploy command creates a release-local `.venv`, installs
-`python/requirements-qdii.lock`, and runs the worker self-test before the normal
-Node checks. The host must provide `python3`, `python3-venv`, Poppler, and the
-native libraries required by OpenCV/Camelot. The Python worker only accepts
-validated six-digit fund codes or local PDFs already downloaded through the
-Node safety gate; it never accepts arbitrary URLs.
+`python/requirements-qdii.lock`, and runs both restricted worker self-tests before
+the normal Node checks. The host must provide `python3`, `python3-venv`, Poppler,
+and the native libraries required by OpenCV/Camelot. The QDII worker only accepts
+validated six-digit fund codes or local PDFs already downloaded through the Node
+safety gate. The Opening Digest worker accepts only a bounded date range and limit,
+then calls the fixed yfinance earnings-calendar API; neither worker accepts an
+arbitrary URL. Run `npm run check:earnings-calendar` manually when a live Yahoo
+connectivity/schema check is required; it is intentionally excluded from offline
+`npm run check`.
 
 The Slack app's Bot Token Scopes must include `files:read` before it can
 download private PDF or text attachments from `files.slack.com`. After adding
