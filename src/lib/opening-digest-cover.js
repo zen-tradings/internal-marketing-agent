@@ -11,7 +11,7 @@ export const OPENING_COVER_BACKGROUND_URL = new URL('../../assets/zen-opening-di
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-export async function renderOpeningDigestCover({ dateLabel, executablePath, timeoutMs = 30000 }) {
+export async function renderOpeningDigestCover({ dateLabel, label = 'Opening Digest', executablePath, timeoutMs = 30000 }) {
   if (!executablePath) throw coverError('缺少 OPENING_DIGEST_BROWSER_EXECUTABLE');
   let browser;
   try {
@@ -27,6 +27,7 @@ export async function renderOpeningDigestCover({ dateLabel, executablePath, time
     });
     page.setDefaultTimeout(timeoutMs);
     await page.setContent(coverHtml(dateLabel, {
+      label,
       backgroundDataUrl: `data:image/png;base64,${background.toString('base64')}`,
     }), { waitUntil: 'load' });
     await page.locator('[data-cover-background]').evaluate((image) => {
@@ -66,7 +67,7 @@ export async function loadOpeningCoverBackground({ readFile = fs.readFile } = {}
   return background;
 }
 
-export function coverHtml(dateLabel, { backgroundDataUrl } = {}) {
+export function coverHtml(dateLabel, { backgroundDataUrl, label = 'Opening Digest' } = {}) {
   const normalizedDate = String(dateLabel || '').trim();
   if (!normalizedDate || normalizedDate.length > 40 || /[\r\n]/.test(normalizedDate)) {
     throw coverError('Opening Digest 封面日期无效');
@@ -75,6 +76,9 @@ export function coverHtml(dateLabel, { backgroundDataUrl } = {}) {
     throw coverError('Opening Digest 封面底图必须是内联 PNG');
   }
   const safeDate = escapeHtml(normalizedDate);
+  const normalizedLabel = String(label || '').trim();
+  if (!normalizedLabel || normalizedLabel.length > 40 || /[\r\n]/.test(normalizedLabel)) throw coverError('Opening Digest 封面标签无效');
+  const safeLabel = escapeHtml(normalizedLabel);
   const safeBackground = escapeHtml(backgroundDataUrl);
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     *{box-sizing:border-box}
@@ -83,7 +87,7 @@ export function coverHtml(dateLabel, { backgroundDataUrl } = {}) {
     .background{position:absolute;inset:0;display:block;width:1240px;height:620px;object-fit:fill}
     .edition{position:absolute;top:198px;left:0;right:0;display:flex;align-items:center;justify-content:center;gap:19px;white-space:nowrap;text-transform:uppercase;color:#f7f4ec;text-shadow:0 1px 8px rgba(0,12,28,.9);font-size:17px;font-weight:400;line-height:24px;letter-spacing:.31em}
     .signal{width:5px;height:5px;flex:0 0 5px;border-radius:50%;background:#bcecff;box-shadow:0 0 9px rgba(137,219,255,.95)}
-  </style></head><body><img class="background" data-cover-background src="${safeBackground}" alt=""><div class="edition"><span>Opening Digest</span><i class="signal"></i><span>${safeDate}</span></div></body></html>`;
+  </style></head><body><img class="background" data-cover-background src="${safeBackground}" alt=""><div class="edition"><span>${safeLabel}</span><i class="signal"></i><span>${safeDate}</span></div></body></html>`;
 }
 
 export function assertPng(buffer, { width, height, sha256 = '', label = 'PNG' }) {

@@ -1134,6 +1134,27 @@ test('b000067 回归：zero/one 可忠实译为 0/1，型号中的数字保持�
   assert.deepEqual(assessment.warnings, []);
 });
 
+test('Opening Digest 回归：一致预期中的一不得误判为新增数字', () => {
+  const source = {
+    id: 'body-11',
+    kind: 'paragraph',
+    text: 'EPS was -$0.68 against a consensus estimate of -$0.86, a 21% beat.',
+  };
+  const equivalent = assessTranslationUnit(
+    source,
+    'EPS 为 -$0.68，而一致预期为 -$0.86，超出预期 21%。',
+    { afterRepair: true },
+  );
+  assert.deepEqual(equivalent.hardErrors, []);
+
+  const actualNumber = assessTranslationUnit(
+    source,
+    'EPS 为 -$0.68，而一致预期为 -$0.86，超出预期 21%，记为 1。',
+    { afterRepair: true },
+  );
+  assert.match(actualNumber.hardErrors.join(' '), /译文新增不等值数字/);
+});
+
 test('b000036 回归：纯公式与引用占位符不被 ZEN_INLINE 名称误判为未翻译', () => {
   const assessment = assessTranslationUnit({
     id: 'b000036',

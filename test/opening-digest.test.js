@@ -14,7 +14,11 @@ import {
   OPENING_COVER_HEIGHT,
   OPENING_COVER_WIDTH,
 } from '../src/lib/opening-digest-cover.js';
-import { makeChannel, renderOptionsHtml } from '../src/channels/customerio-opening-digest.js';
+import {
+  makeChannel,
+  publishHistoricalOpeningDigestWechat,
+  renderOptionsHtml,
+} from '../src/channels/customerio-opening-digest.js';
 import { countTrendingRows, validateTrendingOptionsData } from '../src/lib/options-volume.js';
 import { collectOpeningMetrics, normalizeOpeningMetrics, validateOpeningMetrics } from '../src/lib/opening-digest-metrics.js';
 import {
@@ -148,14 +152,17 @@ test('opening digest research uses the prior regular close window', () => {
   assert.equal(previousRegularClose(now).toISOString(), '2026-08-07T20:00:00.000Z');
   assert.equal(previousRegularClose(new Date('2026-07-06T14:15:00.000Z')).toISOString(), '2026-07-02T20:00:00.000Z');
   assert.match(openingDigestSearchInput(now), /US equity opening digest for 2026-08-10/);
-  const queries = openingDigestResearchQueries(now);
+  const queries = openingDigestResearchQueries(now, {
+    status: 'ok', startDate: '2026-08-10', endDate: '2026-08-14',
+    shortlist: [{ symbol: 'NVDA', company: 'NVIDIA' }],
+  });
   assert.equal(queries.length, 10);
   assert.equal(queries.filter((query) => query.openingDigestKind === 'universe-news').length, 7);
-  assert.equal(queries.filter((query) => query.openingDigestKind === 'earnings-schedule').length, 1);
+  assert.equal(queries.filter((query) => query.openingDigestKind === 'earnings-verification').length, 1);
   assert.ok(queries.slice(0, -1).every((query) => query.startPublishedDate === '2026-08-07T20:00:00.000Z'));
   assert.equal(queries.at(-1).startPublishedDate, undefined);
   assert.match(queries.at(-1).query, /2026-08-10 through 2026-08-14/);
-  assert.ok(queries.every((query) => query.endPublishedDate === now.toISOString()));
+  assert.ok(queries.slice(0, -1).every((query) => query.endPublishedDate === now.toISOString()));
 });
 
 test('opening universe locks 72 unique tickers in seven groups and keeps Alphabet quote classes distinct', () => {
@@ -233,12 +240,17 @@ test('universe context emits prompt sources and a reusable OIC artifact without 
       } }] } }; } };
     },
     captureOptions: async () => capturedOptions({ data }),
+    collectEarnings: async () => ({
+      schemaVersion: 1, status: 'unavailable', provider: 'yfinance-yahoo',
+      startDate: '2026-08-10', endDate: '2026-08-14', candidates: [], shortlist: [],
+      listingChecks: [], sources: [], diagnostics: [],
+    }),
     history: {
       recordCapture: (entry) => recorded.push(entry),
       listHistory: () => ({ sessions: ['2026-08-10'], rows: [{ session_date: '2026-08-10', ticker: 'NVDA' }] }),
     },
   });
-  assert.equal(context.artifact.schemaVersion, 1);
+  assert.equal(context.artifact.schemaVersion, 2);
   assert.equal(context.artifact.quotes.coverage.available, 72);
   assert.equal(context.artifact.options.data.rows.length, 20);
   assert.deepEqual(context.sources.map((source) => source.openingDigestKind), ['universe-price', 'universe-iv']);
@@ -336,7 +348,7 @@ test('complete digest renders template, address, options and schedules without c
   assert.equal(result.mediaId, 'customerio-newsletter:99');
   assert.deepEqual(uploads, ['opening-digest-cover-2026-08-10.png']);
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
-  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@5"/);
+  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@6"/);
   assert.match(create.body.body, /href="https:\/\/www\.linkedin\.com\/company\/110921483"[^>]*>LinkedIn<\/a>/);
   assert.match(create.body.body, /\.zen-email-content \{ padding:20px 8px !important; \}/);
   assert.match(create.body.body, /Zen Trading · 700 Leahy St, Redwood City, CA 94061/);
@@ -392,6 +404,48 @@ test('cover and OIC failures degrade silently and persist diagnostics to trace',
   const trace = JSON.parse(await fs.readFile(path.join(directory, 'research-trace.json'), 'utf8'));
   assert.ok(trace.openingDigestDelivery.diagnostics.some((item) => /封面已省略/.test(item)));
   assert.ok(trace.openingDigestDelivery.diagnostics.some((item) => /期权区块已省略/.test(item)));
+});
+
+test('中文翻译失败不影响已成功的 Customer.io 邮件且绝不创建英文微信稿', async () => {
+  let wechatCreates = 0;
+  const { channel } = standardChannel({
+    channel: {
+      translatePayload: async () => { throw new Error('missing translated block body-2'); },
+      wechatChannel: { publish: async () => { wechatCreates += 1; throw new Error('must not run'); } },
+    },
+  });
+  const enabled = config();
+  enabled.openingDigest.wechatEnabled = true;
+  const result = await channel.publish({ articlePath: '/tmp/article.md', config: enabled, source: 'manual' });
+  assert.equal(result.mediaId, 'customerio-newsletter:99');
+  assert.equal(wechatCreates, 0);
+  assert.equal(result.deliveries.find((item) => item.destination === 'wechat').status, 'failed');
+  assert.match(result.deliveryWarnings[0], /邮件已成功.*中文微信草稿创建失败/);
+});
+
+test('双渠道严格先完成 Customer.io，再用同一冻结 payload 创建中文微信草稿', async () => {
+  const events = []; let translatedPayload; let wechatPayload;
+  const { channel } = standardChannel({
+    cio: { send: async () => { events.push('email'); return response({}); } },
+    channel: {
+      translatePayload: async (input) => {
+        events.push('translate'); translatedPayload = input;
+        return { model: 'test', payloadHash: 'hash', blockCount: 1, repairs: [], translations: [{ id: 'preheader', text: '早盘信号' }] };
+      },
+      wechatChannel: {
+        async publish({ payload: input }) {
+          events.push('wechat'); wechatPayload = input;
+          return { mediaId: 'wx-media-1', title: 'Zen 开市日报 · 2026-08-10', status: 'verified', errors: [], attempts: [{ status: 'verified' }] };
+        },
+      },
+    },
+  });
+  const enabled = config(); enabled.openingDigest.wechatEnabled = true;
+  const result = await channel.publish({ articlePath: '/tmp/article.md', config: enabled, source: 'manual' });
+  assert.deepEqual(events, ['email', 'translate', 'wechat']);
+  assert.equal(translatedPayload, wechatPayload);
+  assert.equal(Object.isFrozen(translatedPayload), true);
+  assert.equal(result.deliveries.find((item) => item.destination === 'wechat').mediaId, 'wx-media-1');
 });
 
 test('zero audience and failed audience preflight do not block configured test1 delivery', async () => {
@@ -569,6 +623,76 @@ test('production acceptance uses an explicit TEST identity and sends immediately
   assert.equal(requests.some((item) => item.path.endsWith('/schedule')), false);
 });
 
+test('历史迁移验收仅从同源隔离 payload 创建正式微信稿', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'zen-opening-acceptance-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  await fs.writeFile(path.join(directory, 'article.md'), ARTICLE);
+  await fs.writeFile(path.join(directory, 'article.md.opening-digest-state.json'), JSON.stringify({
+    dateKey: '2026-08-10', metrics: openingMetrics(), capturedAt: '2026-08-10T14:15:00.000Z',
+  }));
+  await fs.writeFile(path.join(directory, 'opening-digest-universe.json'), JSON.stringify({
+    schemaVersion: 1, dateKey: '2026-08-10',
+    options: { data: OPTIONS_DATA, capturedAt: '2026-08-10T14:15:00.000Z' },
+  }));
+  await fs.writeFile(path.join(directory, 'research-trace.json'), JSON.stringify({
+    startedAt: '2026-08-10T14:00:00.000Z', finishedAt: '2026-08-10T14:20:00.000Z',
+  }));
+  let translatedPayload; let wechatPayload;
+  const migratedConfig = config();
+  migratedConfig.openingDigest.wechatEnabled = true;
+  const result = await publishHistoricalOpeningDigestWechat({
+    sourceDir: directory,
+    newsletterId: 88,
+    historicalSegmentId: 21,
+    historicalSegmentName: 'test2',
+    config: migratedConfig,
+    now: () => new Date('2026-08-10T14:45:00.000Z'),
+    fetchFn: async (url) => {
+      const pathname = new URL(url).pathname;
+      if (pathname === '/v1/newsletters/88') return response({ newsletter: {
+        id: 88, name: 'Zen Opening Digest · 2026-08-10', created: 1786371000, sent_at: 1786372201,
+        recipient_segment_ids: [21], subscription_topic_id: 19,
+      } });
+      if (pathname === '/v1/segments/21') return response({ segment: { id: 21, name: 'test2' } });
+      throw new Error(`Unexpected URL ${url}`);
+    },
+    translatePayload: async (payload) => {
+      translatedPayload = payload;
+      return { model: 'test', payloadHash: 'hash', blockCount: 1, repairs: [], translations: [{ id: 'preheader', text: '早盘信号' }] };
+    },
+    wechatChannel: { async publish({ payload, acceptance }) {
+      wechatPayload = payload;
+      assert.equal(acceptance, false);
+      return { mediaId: 'wx-formal', title: 'Zen 开市日报 · 2026-08-10', status: 'verified', errors: [], attempts: [{ status: 'verified' }] };
+    } },
+  });
+  assert.equal(translatedPayload, wechatPayload);
+  assert.equal(Object.isFrozen(wechatPayload), true);
+  assert.equal(wechatPayload.article.body, parseArticleBody(ARTICLE));
+  assert.deepEqual(wechatPayload.metrics, normalizeOpeningMetrics(openingMetrics()).metrics);
+  assert.deepEqual(wechatPayload.options.data, OPTIONS_DATA);
+  assert.equal(result.mediaId, 'customerio-newsletter:88');
+  assert.equal(result.deliveries.find((item) => item.destination === 'wechat').mediaId, 'wx-formal');
+});
+
+test('历史迁移验收拒绝未发送邮件', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'zen-opening-acceptance-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  await fs.writeFile(path.join(directory, 'article.md'), ARTICLE);
+  await fs.writeFile(path.join(directory, 'article.md.opening-digest-state.json'), JSON.stringify({ dateKey: '2026-08-10', metrics: openingMetrics() }));
+  await fs.writeFile(path.join(directory, 'opening-digest-universe.json'), JSON.stringify({ schemaVersion: 1, dateKey: '2026-08-10' }));
+  await fs.writeFile(path.join(directory, 'research-trace.json'), JSON.stringify({ startedAt: '2026-08-10T14:00:00.000Z', finishedAt: '2026-08-10T14:20:00.000Z' }));
+  const migratedConfig = config(); migratedConfig.openingDigest.wechatEnabled = true;
+  await assert.rejects(publishHistoricalOpeningDigestWechat({
+    sourceDir: directory, newsletterId: 88, historicalSegmentId: 21, historicalSegmentName: 'test2',
+    config: migratedConfig, now: () => new Date('2026-08-10T14:45:00.000Z'),
+    fetchFn: async () => response({ newsletter: {
+      id: 88, name: 'Zen Opening Digest · 2026-08-10', created: 1786371000, sent_at: null,
+      recipient_segment_ids: [21], subscription_topic_id: 19,
+    } }),
+  }), /已发送历史 Opening Digest/);
+});
+
 test('options HTML reproduces all source values safely as text', () => {
   const data = structuredClone(OPTIONS_DATA);
   data.rows[0][2] = '<img src=x onerror=alert(1)>';
@@ -581,3 +705,7 @@ test('options HTML reproduces all source values safely as text', () => {
   assert.match(html, /color:#167a45/);
   assert.ok(Buffer.byteLength(html) < 70 * 1024);
 });
+
+function parseArticleBody(markdown) {
+  return String(markdown).replace(/^---\n[\s\S]*?\n---\n/, '').trim();
+}

@@ -16,6 +16,9 @@ run(path.join(venv, 'bin', 'python'), [
 run(path.join(venv, 'bin', 'python'), [path.join(ROOT, 'python', 'qdii_worker.py')], {
   input: JSON.stringify({ action: 'self_test' }),
 });
+run(path.join(venv, 'bin', 'python'), [path.join(ROOT, 'python', 'opening_digest_worker.py')], {
+  input: JSON.stringify({ action: 'self_test' }),
+});
 console.log(`QDII Python environment is ready: ${venv}`);
 
 function selectBootstrapPython() {

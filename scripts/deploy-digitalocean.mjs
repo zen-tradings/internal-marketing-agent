@@ -21,12 +21,13 @@ export function parseDeployArgs(argv) {
     reasoning: DEFAULT_REASONING,
     plannerModel: DEFAULT_PLANNER_MODEL,
     plannerReasoning: DEFAULT_PLANNER_REASONING,
+    openingDigestWechatEnabled: false,
     openingDigestSegmentId: 0,
   };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === '--activate') parsed.activate = true;
-    else if (['--commit', '--target', '--model', '--reasoning', '--planner-model', '--planner-reasoning', '--opening-digest-segment-id'].includes(arg)) {
+    else if (['--commit', '--target', '--model', '--reasoning', '--planner-model', '--planner-reasoning', '--opening-digest-wechat-enabled', '--opening-digest-segment-id'].includes(arg)) {
       const value = argv[++index];
       if (!value) throw new Error(`${arg} requires a value`);
       const key = arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
@@ -51,7 +52,7 @@ export function loadDeployTarget({ target = '', targetFile = TARGET_FILE } = {})
   return config.ZEN_DEPLOY_SSH_TARGET;
 }
 
-export function validateDeployInputs({ target, commit, model, reasoning, plannerModel, plannerReasoning, openingDigestSegmentId = 0 }) {
+export function validateDeployInputs({ target, commit, model, reasoning, plannerModel, plannerReasoning, openingDigestWechatEnabled, openingDigestSegmentId = 0 }) {
   if (!/^[a-z_][a-z0-9_-]*@[a-z0-9_.:-]+$/i.test(target)) {
     throw new Error('Invalid SSH target; expected user@host with no shell metacharacters');
   }
@@ -63,6 +64,9 @@ export function validateDeployInputs({ target, commit, model, reasoning, planner
   }
   if (!['low', 'medium', 'high'].includes(plannerReasoning)) {
     throw new Error('Planner reasoning must be low, medium, or high');
+  }
+  if (![true, false, 'true', 'false'].includes(openingDigestWechatEnabled)) {
+    throw new Error('Opening Digest WeChat enabled must be true or false');
   }
   if (!Number.isInteger(Number(openingDigestSegmentId)) || Number(openingDigestSegmentId) < 0) {
     throw new Error('Opening Digest segment ID must be a non-negative integer');
@@ -117,7 +121,7 @@ process.stdin.on("end", () => {
   console.log("queue_active=" + Number(value.queue?.active || 0));
   console.log("queue_pending=" + Number(value.queue?.pending || 0));
 });'
-for key in OPENROUTER_MODEL OPENROUTER_ROUTER_MODEL OPENROUTER_PLANNER_MODEL OPENROUTER_REVIEW_MODEL OPENROUTER_REASONING_EFFORT OPENROUTER_PLANNER_REASONING_EFFORT OPENROUTER_REVIEW_REASONING_EFFORT OPENROUTER_ROUTER_REASONING_EFFORT CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID; do
+for key in OPENROUTER_MODEL OPENROUTER_ROUTER_MODEL OPENROUTER_PLANNER_MODEL OPENROUTER_REVIEW_MODEL OPENROUTER_REASONING_EFFORT OPENROUTER_PLANNER_REASONING_EFFORT OPENROUTER_REVIEW_REASONING_EFFORT OPENROUTER_ROUTER_REASONING_EFFORT CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID OPENING_DIGEST_WECHAT_ENABLED; do
   value=$(sudo awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
   printf '%s=%s\n' "env_$key" "$value"
 done
@@ -129,7 +133,8 @@ model=$2
 reasoning=$3
 planner_model=$4
 planner_reasoning=$5
-opening_digest_segment_id=$6
+opening_digest_wechat_enabled=$6
+opening_digest_segment_id=$7
 short=$(printf '%.12s' "$sha")
 active=/opt/zen-content-hub
 stage="/opt/zen-content-hub.release-$short"
@@ -142,6 +147,7 @@ rollback="/opt/zen-content-hub.rollback-$old_short"
 failed="/opt/zen-content-hub.failed-$short"
 switch_started=0
 env_changed=0
+env_without_flag_before=$(sudo awk '$0 !~ /^OPENING_DIGEST_WECHAT_ENABLED=/' "$env_file" | sha256sum | awk '{ print $1 }')
 
 restore_on_error() {
   status=$?
@@ -190,6 +196,10 @@ sudo -u zenbot env \
   QDII_PYTHON_PATH="$stage/.venv/bin/python" \
   QDII_WORKER_PATH="$stage/python/qdii_worker.py" \
   node "$stage/scripts/check-qdii-python.mjs"
+sudo -u zenbot env \
+  OPENING_DIGEST_EARNINGS_PYTHON_PATH="$stage/.venv/bin/python" \
+  OPENING_DIGEST_EARNINGS_WORKER_PATH="$stage/python/opening_digest_worker.py" \
+  node "$stage/scripts/check-opening-digest-python.mjs"
 sudo -u zenbot npm --prefix "$stage" run check
 
 before_backup_manifest=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 -type f -name 'runs-*.db' -printf '%f\n' 2>/dev/null | sort | sha256sum | awk '{ print $1 }')
@@ -223,6 +233,7 @@ update_env() {
 }
 sudo cp -a "$env_file" "$env_backup"
 env_changed=1
+update_env OPENING_DIGEST_WECHAT_ENABLED "$opening_digest_wechat_enabled"
 update_env OPENROUTER_MODEL "$model"
 update_env OPENROUTER_ROUTER_MODEL z-ai/glm-5.2
 update_env OPENROUTER_PLANNER_MODEL "$planner_model"
@@ -244,6 +255,8 @@ update_env QDII_MAX_REPORT_CANDIDATES 3
 if [ "$opening_digest_segment_id" -gt 0 ]; then
   update_env CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID "$opening_digest_segment_id"
 fi
+env_without_flag_after=$(sudo awk '$0 !~ /^OPENING_DIGEST_WECHAT_ENABLED=/' "$env_file" | sha256sum | awk '{ print $1 }')
+test "$env_without_flag_after" = "$env_without_flag_before"
 
 switch_started=1
 sudo systemctl stop zen-content-hub
@@ -270,6 +283,7 @@ test "$(systemctl is-active zen-content-hub)" = active
 main_pid=$(systemctl show -p MainPID --value zen-content-hub)
 test "$main_pid" -gt 0
 test "$(ps -o comm= -p "$main_pid" | tr -d ' ')" = node
+test "$(sudo awk -F= '$1 == "OPENING_DIGEST_WECHAT_ENABLED" { print $2 }' "$env_file" | tail -n 1)" = "$opening_digest_wechat_enabled"
 test "$(sudo awk -F= '$1 == "OPENROUTER_MODEL" { print $2 }' "$env_file" | tail -n 1)" = "$model"
 test "$(sudo awk -F= '$1 == "OPENROUTER_REASONING_EFFORT" { print $2 }' "$env_file" | tail -n 1)" = "$reasoning"
 test "$(sudo awk -F= '$1 == "OPENROUTER_PLANNER_MODEL" { print $2 }' "$env_file" | tail -n 1)" = "$planner_model"
@@ -320,7 +334,7 @@ export function assertLocalRelease(commit, run = runCommand) {
   run('git', ['merge-base', '--is-ancestor', commit, '@{upstream}'], { quiet: true });
 }
 
-export function activateRemote({ target, commit, model, reasoning, plannerModel, plannerReasoning, openingDigestSegmentId = 0 }, run = runCommand) {
+export function activateRemote({ target, commit, model, reasoning, plannerModel, plannerReasoning, openingDigestWechatEnabled, openingDigestSegmentId = 0 }, run = runCommand) {
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-content-hub-deploy-'));
   const short = commit.slice(0, 12);
   const archive = path.join(temporaryDir, `zen-content-hub-${short}.tar.gz`);
@@ -330,7 +344,7 @@ export function activateRemote({ target, commit, model, reasoning, plannerModel,
     return run('ssh', [
       ...SSH_OPTIONS,
       target,
-      `bash -s -- ${commit} ${model} ${reasoning} ${plannerModel} ${plannerReasoning} ${openingDigestSegmentId}`,
+      `bash -s -- ${commit} ${model} ${reasoning} ${plannerModel} ${plannerReasoning} ${openingDigestWechatEnabled} ${openingDigestSegmentId}`,
     ], { input: ACTIVATE_SCRIPT, quiet: true });
   } finally {
     fs.rmSync(temporaryDir, { recursive: true, force: true });
@@ -364,6 +378,7 @@ export async function main(argv = process.argv.slice(2)) {
     reasoning: options.reasoning,
     plannerModel: options.plannerModel,
     plannerReasoning: options.plannerReasoning,
+    openingDigestWechatEnabled: options.openingDigestWechatEnabled,
     openingDigestSegmentId: options.openingDigestSegmentId,
   });
   console.log(output.trim());

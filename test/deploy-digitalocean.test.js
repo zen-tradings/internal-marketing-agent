@@ -24,10 +24,12 @@ test('DigitalOcean deploy defaults to read-only preflight and Qwen writer settin
     reasoning: 'high',
     plannerModel: 'moonshotai/kimi-k3',
     plannerReasoning: 'high',
+    openingDigestWechatEnabled: false,
     openingDigestSegmentId: 0,
   });
   assert.equal(parseDeployArgs(['--activate', '--commit', SHA]).activate, true);
   assert.equal(parseDeployArgs(['--opening-digest-segment-id', '19']).openingDigestSegmentId, '19');
+  assert.equal(parseDeployArgs(['--opening-digest-wechat-enabled', 'true']).openingDigestWechatEnabled, 'true');
   assert.throws(() => parseDeployArgs(['--unknown']), /Unknown argument/);
 });
 
@@ -39,6 +41,9 @@ test('embedded remote preflight and activation scripts are valid Bash', () => {
   assert.match(ACTIVATE_SCRIPT, /python3 -m venv "\$stage\/\.venv"/);
   assert.match(ACTIVATE_SCRIPT, /requirements-qdii\.lock/);
   assert.match(ACTIVATE_SCRIPT, /check-qdii-python\.mjs/);
+  assert.match(ACTIVATE_SCRIPT, /check-opening-digest-python\.mjs/);
+  assert.match(ACTIVATE_SCRIPT, /update_env OPENING_DIGEST_WECHAT_ENABLED/);
+  assert.match(ACTIVATE_SCRIPT, /env_without_flag_after/);
   assert.match(ACTIVATE_SCRIPT, /update_env QDII_ENABLED true/);
   assert.match(ACTIVATE_SCRIPT, /QDII_PYTHON_PATH \/opt\/zen-content-hub\/\.venv\/bin\/python/);
   assert.match(ACTIVATE_SCRIPT, /QDII_WORKER_PATH \/opt\/zen-content-hub\/python\/qdii_worker\.py/);
@@ -58,15 +63,19 @@ test('deploy target must come from an explicit DigitalOcean target file', () => 
 test('deployment inputs reject shell injection and invalid reasoning', () => {
   assert.doesNotThrow(() => validateDeployInputs({
     target: 'root@203.0.113.8', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
-    plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high', openingDigestSegmentId: '19',
+    plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
+    openingDigestWechatEnabled: true,
+    openingDigestSegmentId: '19',
   }));
   assert.throws(() => validateDeployInputs({
     target: 'root@example.com;touch /tmp/x', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
     plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
+    openingDigestWechatEnabled: true,
   }), /Invalid SSH target/);
   assert.throws(() => validateDeployInputs({
     target: 'root@example.com', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'none',
     plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
+    openingDigestWechatEnabled: true,
   }), /Reasoning must be/);
   assert.throws(() => validateDeployInputs({
     target: 'root@example.com', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
@@ -75,10 +84,12 @@ test('deployment inputs reject shell injection and invalid reasoning', () => {
   assert.throws(() => validateDeployInputs({
     target: 'root@example.com', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
     plannerReasoning: 'high',
+    openingDigestWechatEnabled: true,
   }), /Invalid OpenRouter planner model id/);
   assert.throws(() => validateDeployInputs({
     target: 'root@example.com', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
-    plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high', openingDigestSegmentId: '-1',
+    plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
+    openingDigestWechatEnabled: true, openingDigestSegmentId: '-1',
   }), /segment ID must be/);
 });
 

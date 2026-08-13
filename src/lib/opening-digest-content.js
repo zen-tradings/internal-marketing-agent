@@ -1,8 +1,10 @@
 import { easternDateKey, isUsEquitySession } from './us-equity-calendar.js';
-import { OPENING_DIGEST_UNIVERSE, OPENING_DIGEST_UNIVERSE_GROUPS } from './opening-digest-universe.js';
+import { OPENING_DIGEST_UNIVERSE_GROUPS } from './opening-digest-universe.js';
+import { openingDigestEarningsResearchQuery } from './opening-digest-earnings.js';
 
 const FRONTMATTER_RE = /^---\n[\s\S]*?\n---\n?/;
 const REQUIRED_HEADINGS = ["Today's catalysts", 'Market read'];
+const EARNINGS_HEADING = 'Earnings ahead';
 const STALE_ADMISSION_RE = /\b(?:not\s+(?:a\s+)?new\s+(?:overnight|today|current)|background\s+rather\s+than|no\s+fresh\s+(?:official[- ]source\s+)?items?|previously\s+disclosed|not\s+(?:a\s+)?current[- ]window\s+catalyst)\b/i;
 
 export function validateOpeningDigestArticle({
@@ -23,8 +25,9 @@ export function auditOpeningDigestArticle({
   const warnings = [];
   const body = String(article || '').replace(FRONTMATTER_RE, '').trim();
   const headings = [...body.matchAll(/^##\s+(.+?)\s*$/gm)].map((match) => match[1]);
-  if (JSON.stringify(headings) !== JSON.stringify(REQUIRED_HEADINGS)) {
-    warnings.push(`Opening Digest 正文应按顺序只包含 ${REQUIRED_HEADINGS.map((item) => `## ${item}`).join('、')}`);
+  const expectedHeadings = headings[0] === EARNINGS_HEADING ? [EARNINGS_HEADING, ...REQUIRED_HEADINGS] : REQUIRED_HEADINGS;
+  if (JSON.stringify(headings) !== JSON.stringify(expectedHeadings)) {
+    warnings.push(`Opening Digest 正文应按顺序包含可选 ## ${EARNINGS_HEADING}、## ${REQUIRED_HEADINGS[0]}、## ${REQUIRED_HEADINGS[1]}`);
   }
 
   const catalystsHeadingAt = body.indexOf(`## ${REQUIRED_HEADINGS[0]}`);
@@ -36,6 +39,20 @@ export function auditOpeningDigestArticle({
   const marketRead = marketReadStart < 0
     ? ''
     : body.slice(marketReadStart + `## ${REQUIRED_HEADINGS[1]}`.length).trim();
+  const earningsStart = body.indexOf(`## ${EARNINGS_HEADING}`);
+  const earningsSection = earningsStart < 0 ? '' : body.slice(
+    earningsStart + `## ${EARNINGS_HEADING}`.length,
+    catalystsHeadingAt < 0 ? body.length : catalystsHeadingAt,
+  ).trim();
+  const earningsLines = earningsSection.split('\n').map((line) => line.trim()).filter(Boolean);
+  const earningsLinks = [...earningsSection.matchAll(/\[[^\]]+]\((https?:\/\/[^\s)]+)\)/g)].map((match) => match[1]);
+  if (earningsStart >= 0 && earningsLines.length !== 1) {
+    warnings.push(`Opening Digest Earnings ahead 应为一个紧凑段落，当前非空行 ${earningsLines.length}`);
+  }
+  if (earningsLinks.length > 6) warnings.push(`Opening Digest Earnings ahead 最多展示 6 家，当前 ${earningsLinks.length}`);
+  if (/(?:before open|after close|timing not supplied)(?!\s*(?:\(expected\)|;\s*call))/i.test(earningsSection)) {
+    warnings.push('Opening Digest Yahoo-only 财报时段必须标记 expected');
+  }
   const catalystItems = catalystSection.split('\n').map((line) => line.trim()).filter((line) => /^[-*]\s+/.test(line));
   if (catalystItems.length < 3 || catalystItems.length > 5) {
     warnings.push(`Opening Digest Today's catalysts 建议包含 3-5 条，当前为 ${catalystItems.length} 条`);
@@ -96,14 +113,24 @@ export function auditOpeningDigestArticle({
 
   return {
     warnings,
-    stats: { catalystCount: catalystItems.length, links, marketReadLength: marketRead.length },
+    stats: {
+      earningsPresent: earningsStart >= 0,
+      earningsCount: earningsLinks.length,
+      earningsLinks,
+      catalystCount: catalystItems.length,
+      links,
+      marketReadLength: marketRead.length,
+    },
+    earningsPresent: earningsStart >= 0,
+    earningsCount: earningsLinks.length,
+    earningsLinks,
     catalystCount: catalystItems.length,
     links,
     marketReadLength: marketRead.length,
   };
 }
 
-export function openingDigestResearchQueries(asOf = new Date()) {
+export function openingDigestResearchQueries(asOf = new Date(), earningsCalendar = null) {
   const date = easternDateKey(asOf);
   const startPublishedDate = previousRegularClose(asOf).toISOString();
   const endPublishedDate = asOf.toISOString();
@@ -120,8 +147,7 @@ export function openingDigestResearchQueries(asOf = new Date()) {
       systemPrompt: 'Return only exact-company, current-window developments with plausible material market impact: filings, earnings or guidance, M&A, financing, major orders or customers, products, supply constraints, outages or cybersecurity, management, legal or regulatory actions, and explicit analyst upgrades or downgrades. Exclude unconfirmed rumors, price-target-only notes, maintained ratings, routine commentary, similarly named entities, and stale background.',
     };
   });
-  const earnings = remainingEarningsWindow(asOf);
-  const earningsTickers = OPENING_DIGEST_UNIVERSE.map((item) => item.ticker).join(', ');
+  const earningsVerification = openingDigestEarningsResearchQuery(earningsCalendar);
   return [
     {
       ...common,
@@ -138,15 +164,7 @@ export function openingDigestResearchQueries(asOf = new Date()) {
       systemPrompt: 'Return current-window macro, rates, currency, commodity, and policy catalysts for the US equity open. Prefer primary releases and independently reported market-moving developments.',
     },
     ...groupQueries,
-    {
-      type: 'deep',
-      numResults: 12,
-      endPublishedDate,
-      kind: 'opening-digest-universe-earnings',
-      openingDigestKind: 'earnings-schedule',
-      query: `Verified earnings dates from ${earnings.startDate} through ${earnings.endDate} for these tickers only: ${earningsTickers}`,
-      systemPrompt: 'Return verifiable schedules only for earnings events that have not yet occurred in the stated ET date window. Prefer issuer investor-relations announcements, exchange calendars, and reliable financial calendars. Each result must identify the exact issuer or ticker and explicit event date; older schedule announcements are allowed. Exclude estimates without a scheduled event, already-reported results, similarly named entities, and dates outside the window.',
-    },
+    ...(earningsVerification ? [earningsVerification] : []),
   ];
 }
 
@@ -192,14 +210,4 @@ function uniqueIssuers(members) {
     seen.add(item.issuerKey);
     return true;
   });
-}
-
-function remainingEarningsWindow(asOf) {
-  const startDate = easternDateKey(asOf);
-  const cursor = new Date(`${startDate}T12:00:00Z`);
-  const day = cursor.getUTCDay();
-  if (day === 6) return { startDate, endDate: startDate };
-  const daysToFriday = day === 0 ? 5 : Math.max(0, 5 - day);
-  cursor.setUTCDate(cursor.getUTCDate() + daysToFriday);
-  return { startDate, endDate: cursor.toISOString().slice(0, 10) };
 }

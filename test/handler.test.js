@@ -239,6 +239,68 @@ test('Opening Digest 可发送降级只写 trace，不发送 Slack warning', asy
   assert.equal(notifier.successCalls.length, 1);
 });
 
+test('Opening Digest 的 Slack 人工触发使用独立 TEST 身份，cron 保持正式身份', async () => {
+  const workflows = {
+    'opening-digest': {
+      id: 'opening-digest', mode: 'newsletter', channel: 'customerio-opening-digest', retries: 0,
+    },
+  };
+  const publishCalls = [];
+  const channels = {
+    'customerio-opening-digest': {
+      templateId: FIXED_DRAFT_TEMPLATE_IDS['customerio-opening-digest'],
+      templateLocked: true,
+      async publish(args) {
+        publishCalls.push(args);
+        return { mediaId: `customerio-newsletter:${publishCalls.length}`, title: 'Zen Opening Digest' };
+      },
+    },
+  };
+
+  const slack = baseDeps({ workflows, channels });
+  await makeHandler(slack.deps)({
+    id: '1786583588981-k167z', workflowId: 'opening-digest', input: "Create today's test digest.", source: 'slack',
+  });
+  assert.equal(publishCalls[0].source, 'acceptance');
+  assert.equal(publishCalls[0].acceptanceId, '1786583588981-k167z');
+
+  const cron = baseDeps({ workflows, channels });
+  await makeHandler(cron.deps)({
+    id: '1786544100013-hy20i', workflowId: 'opening-digest', input: 'Create the scheduled digest.', source: 'cron',
+  });
+  assert.equal(publishCalls[1].source, 'cron');
+  assert.equal(publishCalls[1].acceptanceId, '');
+});
+
+test('Opening Digest 微信异常不改变邮件 done，成功通知后另发精确 warning', async () => {
+  const workflows = {
+    'opening-digest': {
+      id: 'opening-digest', mode: 'newsletter', channel: 'customerio-opening-digest', retries: 0,
+    },
+  };
+  const channels = {
+    'customerio-opening-digest': {
+      templateId: FIXED_DRAFT_TEMPLATE_IDS['customerio-opening-digest'],
+      templateLocked: true,
+      async publish() {
+        return {
+          mediaId: 'customerio-newsletter:8', title: 'Zen Opening Digest',
+          deliveryWarnings: ['Opening Digest 邮件已成功，但微信草稿第三次回读仍不一致。Media ID:wx-8；OIC NVDA 字段 6 缺失'],
+        };
+      },
+    },
+  };
+  const runWriter = async () => ({ ok: true, articlePath: '/tmp/opening.md' });
+  const { deps, store, notifier } = baseDeps({ workflows, channels, runWriter });
+  await makeHandler(deps)({ id: 'opening-wechat-warning', workflowId: 'opening-digest', input: 'opening', source: 'cron' });
+  assert.equal(store._row().status, 'done');
+  assert.equal(store._row().media_id, 'customerio-newsletter:8');
+  assert.equal(notifier.successCalls.length, 1);
+  assert.equal(notifier.warnCalls.length, 1);
+  assert.match(notifier.warnCalls[0].message, /wx-8.*NVDA 字段 6/);
+  assert.equal(notifier.failureCalls.length, 0);
+});
+
 test('Opening Digest 硬失败发送 Slack failure，但不发送 warning', async () => {
   const workflows = {
     'opening-digest': {

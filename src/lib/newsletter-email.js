@@ -31,6 +31,7 @@ export function parseNewsletterArticle(markdown, defaultEdition = 'Vol. 1') {
 }
 
 export function renderNewsletterEmail(article, options = {}) {
+  const templateId = String(options.templateId || NEWSLETTER_TEMPLATE_ID);
   const siteUrl = safeUrl(options.siteUrl) || 'https://zentradings.com';
   const siteLabel = siteUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '');
   const feedbackUrl = safeUrl(options.feedbackUrl);
@@ -62,7 +63,7 @@ export function renderNewsletterEmail(article, options = {}) {
     }
   </style>
 </head>
-<body data-zen-draft-template="${NEWSLETTER_TEMPLATE_ID}" style="margin:0;background:#f0edeb;color:#08272b;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-weight:300">
+<body data-zen-draft-template="${escapeAttr(templateId)}" style="margin:0;background:#f0edeb;color:#08272b;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-weight:300">
   <div style="display:none;max-height:0;overflow:hidden;opacity:0">${escapeHtml(article.preheader)}</div>
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f0edeb"><tr><td class="zen-email-shell" align="center" style="padding:16px 6px">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#fffdf8;border:1px solid #dcd8d5;border-radius:12px">

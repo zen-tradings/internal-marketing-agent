@@ -25,7 +25,7 @@ npm run deploy:digitalocean
 After reviewing the preflight output, activate the exact pushed commit:
 
 ```bash
-npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --activate
+npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --opening-digest-wechat-enabled true --activate
 ```
 
 需要同时切换 Opening Digest 的受控测试受众时，必须通过同一事务化部署命令传入已在 Customer.io 核验的 segment ID；部署失败会连同受保护环境文件一起回滚：
@@ -36,10 +36,12 @@ npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --activate --ope
 
 The command requires a clean worktree and a commit present on the upstream
 branch. It creates a local archive, stages and tests a separate release on the
-Droplet, runs the SQLite backup service, requires an idle queue, updates the
-writer and planner models plus their independent reasoning effort, pins routing
-and review to GLM 5.2, switches the single
-systemd service, and verifies the marker, main PID and `/ready`. A failed activation restores
+Droplet, runs the SQLite backup service, requires an idle queue, reasserts the
+approved model and QDII runtime values and rejects drift with an
+excluding-flag checksum, then changes the explicit
+`OPENING_DIGEST_WECHAT_ENABLED` flag (and, only when supplied, the protected
+Opening Digest segment ID). It switches the single systemd service and verifies
+the marker, main PID and `/ready`. A failed activation restores
 the previous release and protected environment file. The DigitalOcean metadata
 check is a deployment-target guard only; it is not an application startup,
 publishing or public-IP gate.
@@ -107,11 +109,15 @@ SLACK_ALLOWED_CHANNEL_IDS=C0123456789
 ```
 
 The immutable deploy command creates a release-local `.venv`, installs
-`python/requirements-qdii.lock`, and runs the worker self-test before the normal
-Node checks. The host must provide `python3`, `python3-venv`, Poppler, and the
-native libraries required by OpenCV/Camelot. The Python worker only accepts
-validated six-digit fund codes or local PDFs already downloaded through the
-Node safety gate; it never accepts arbitrary URLs.
+`python/requirements-qdii.lock`, and runs both restricted worker self-tests before
+the normal Node checks. The host must provide `python3`, `python3-venv`, Poppler,
+and the native libraries required by OpenCV/Camelot. The QDII worker only accepts
+validated six-digit fund codes or local PDFs already downloaded through the Node
+safety gate. The Opening Digest worker accepts only a bounded date range and limit,
+then calls the fixed yfinance earnings-calendar API; neither worker accepts an
+arbitrary URL. Run `npm run check:earnings-calendar` manually when a live Yahoo
+connectivity/schema check is required; it is intentionally excluded from offline
+`npm run check`.
 
 The Slack app's Bot Token Scopes must include `files:read` before it can
 download private PDF or text attachments from `files.slack.com`. After adding
@@ -210,7 +216,7 @@ existing matching formal newsletter is reused and never duplicated. The same
 run also exercises the 72-ticker universe quote scan, grouped Exa research and
 the reusable OIC artifact. The final JSON line reports the deployed commit,
 content mode, source count, quote coverage, price-mover/OIC/IV counts, both
-Customer.io IDs, trace path, and any soft diagnostics. Soft diagnostics do not
+Customer.io IDs, both WeChat media IDs/readback states, trace path, and any soft diagnostics. Soft diagnostics do not
 produce Slack warnings; a hard gate or execution failure exits non-zero and is
 handled as a release failure.
 

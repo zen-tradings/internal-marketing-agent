@@ -26,7 +26,9 @@ export function createNotifier(postMessage) {
       );
     },
     success(notify, { title, mediaId, channelId, sourceCount, completeness }) {
-      const destination = channelId === 'customerio-draft' ? 'Customer.io Newsletter 草稿' : '微信公众号草稿';
+      const destination = channelId === 'customerio-draft'
+        ? 'Customer.io Newsletter 草稿'
+        : channelId === 'customerio-opening-digest' ? 'Opening Digest 邮件' : '微信公众号草稿';
       const sources = Number.isFinite(sourceCount) ? `\n来源数量:${sourceCount}` : '';
       const coveredPages = Number(completeness?.pagesProcessed || completeness?.pagesFound?.length || 0);
       const complete = completeness

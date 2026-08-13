@@ -13,10 +13,11 @@ console.log(`syntax ok: ${files.length} files`);
 
 const qdiiPython = process.env.QDII_PYTHON_PATH || path.resolve('.venv/bin/python');
 if (fs.existsSync(qdiiPython)) {
-  const worker = path.resolve('python/qdii_worker.py');
-  const result = spawnSync(qdiiPython, ['-c', 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))', worker], { stdio: 'inherit' });
-  if (result.status !== 0) process.exit(result.status || 1);
-  console.log('syntax ok: python/qdii_worker.py');
+  for (const worker of ['python/qdii_worker.py', 'python/opening_digest_worker.py'].map((file) => path.resolve(file))) {
+    const result = spawnSync(qdiiPython, ['-c', 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))', worker], { stdio: 'inherit' });
+    if (result.status !== 0) process.exit(result.status || 1);
+    console.log(`syntax ok: ${path.relative(process.cwd(), worker)}`);
+  }
 } else {
   console.log('python syntax skipped: run npm run setup:qdii to create .venv');
 }

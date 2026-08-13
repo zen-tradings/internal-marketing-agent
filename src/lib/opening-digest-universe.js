@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { captureTrendingOptionsTable, validateTrendingOptionsData } from './options-volume.js';
 import { easternDateKey } from './us-equity-calendar.js';
+import { collectOpeningDigestEarnings } from './opening-digest-earnings.js';
 
 export const OPENING_DIGEST_UNIVERSE_GROUPS = Object.freeze([
   group('cloud-data-centers-software', [
@@ -78,22 +79,33 @@ export async function collectOpeningDigestUniverseContext({
   signal,
   history,
   captureOptions = captureTrendingOptionsTable,
+  collectEarnings = collectOpeningDigestEarnings,
   quoteConcurrency = 8,
   quoteTimeoutMs = 8000,
 } = {}) {
   const dateKey = easternDateKey(asOf);
   const diagnostics = [];
-  const [quotes, options] = await Promise.all([
+  const [quotes, options, earnings] = await Promise.all([
     collectUniverseQuotes({ fetchFn, asOf, signal, concurrency: quoteConcurrency, timeoutMs: quoteTimeoutMs }),
     collectUniverseOptions({ config, asOf, captureOptions, history }),
+    collectEarnings({
+      config, fetchFn, asOf, signal,
+      trackedTickers: OPENING_DIGEST_UNIVERSE.map((item) => item.ticker),
+    }),
   ]);
-  diagnostics.push(...quotes.diagnostics, ...options.diagnostics);
+  const {
+    sources: earningsSources = [],
+    diagnostics: earningsDiagnostics = [],
+    ...earningsCalendar
+  } = earnings || {};
+  diagnostics.push(...quotes.diagnostics, ...options.diagnostics, ...earningsDiagnostics);
   const sources = [
     ...quotes.movers.map(quoteSource),
     ...(options.triggers.length ? [optionsSource(options)] : []),
+    ...earningsSources,
   ];
   const artifact = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     dateKey,
     universeHash: OPENING_DIGEST_UNIVERSE_HASH,
     capturedAt: asOf.toISOString(),
@@ -105,6 +117,7 @@ export async function collectOpeningDigestUniverseContext({
       history: options.history,
       coverageNote: 'IV coverage is limited to universe tickers appearing in the OIC Trending Options Volume Top 20.',
     },
+    earningsCalendar,
     diagnostics,
   };
   return {
@@ -121,9 +134,18 @@ export async function collectOpeningDigestUniverseContext({
       oicUniverseMatches: options.matches,
       ivTriggers: options.triggers,
       ivHistory: options.history,
+      earningsCalendar: {
+        status: earningsCalendar.status || 'unavailable',
+        provider: earningsCalendar.provider || 'yfinance-yahoo',
+        startDate: earningsCalendar.startDate || null,
+        endDate: earningsCalendar.endDate || null,
+        candidateCount: earningsCalendar.candidates?.length || 0,
+        shortlist: earningsCalendar.shortlist || [],
+        listingChecks: earningsCalendar.listingChecks || [],
+      },
       diagnostics,
     },
-    promptText: universePromptText({ quotes, options }),
+    promptText: universePromptText({ quotes, options, earningsCalendar }),
   };
 }
 
@@ -336,14 +358,16 @@ function optionsSource(options) {
   };
 }
 
-function universePromptText({ quotes, options }) {
+function universePromptText({ quotes, options, earningsCalendar }) {
   return `【Opening Digest tracked-universe signals】
 Universe size: ${OPENING_DIGEST_UNIVERSE.length}. Price coverage: ${quotes.coverage.available}/${quotes.coverage.requested}.
 Price movers at or above 5% versus prior regular close: ${JSON.stringify(quotes.movers)}
 OIC universe matches: ${JSON.stringify(options.matches)}
 OIC IV triggers (IVX30 >= 60% or derived one-day increase >= 5 volatility points): ${JSON.stringify(options.triggers)}
 IV limitation: this is not a full-universe IV scan; it only covers tracked tickers that appear in the OIC Top 20.
-Selection rules: prioritize material tracked-universe events; a price-only mover may be used as a timestamped fact, without causal interpretation or commentary about the absence of one; combine standalone IV signals into at most one catalyst; allow at most one genuinely material macro catalyst; accept explicit upgrades/downgrades but not price-target-only notes or unconfirmed rumors; current-week earnings schedules may use an older verifiable schedule source.`;
+Earnings calendar status: ${earningsCalendar.status || 'unavailable'}. Verification shortlist: ${JSON.stringify(earningsCalendar.shortlist || [])}
+The Earnings ahead section is rendered deterministically after writing. Do not create that heading, repeat its schedule as a catalyst, or infer an exact conference-call time from Yahoo BMO/AMC timing.
+Selection rules: prioritize material tracked-universe events; a price-only mover may be used as a timestamped fact, without causal interpretation or commentary about the absence of one; combine standalone IV signals into at most one catalyst; allow at most one genuinely material macro catalyst; accept explicit upgrades/downgrades but not price-target-only notes or unconfirmed rumors.`;
 }
 
 function group(id, tuples) {

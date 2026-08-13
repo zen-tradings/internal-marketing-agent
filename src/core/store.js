@@ -26,6 +26,21 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
 CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at);
 
+CREATE TABLE IF NOT EXISTS run_deliveries (
+  run_id TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  status TEXT NOT NULL,
+  media_id TEXT,
+  title TEXT,
+  error TEXT,
+  details_json TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (run_id, destination),
+  FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_run_deliveries_run ON run_deliveries(run_id);
+
 CREATE TABLE IF NOT EXISTS slack_threads (
   thread_key TEXT PRIMARY KEY,
   channel_id TEXT NOT NULL,
@@ -107,6 +122,28 @@ export function openStore(dbPath) {
     },
     setRemoteId(id, remoteId) {
       db.prepare('UPDATE runs SET remote_id = ? WHERE id = ?').run(remoteId, id);
+    },
+    upsertDelivery(runId, delivery) {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO run_deliveries
+          (run_id, destination, status, media_id, title, error, details_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(run_id, destination) DO UPDATE SET
+          status = excluded.status,
+          media_id = COALESCE(excluded.media_id, run_deliveries.media_id),
+          title = COALESCE(excluded.title, run_deliveries.title),
+          error = excluded.error,
+          details_json = excluded.details_json,
+          updated_at = excluded.updated_at
+      `).run(
+        runId, delivery.destination, delivery.status, delivery.mediaId || null,
+        delivery.title || null, delivery.error || null,
+        delivery.details ? JSON.stringify(delivery.details) : null, now, now,
+      );
+    },
+    listDeliveries(runId) {
+      return db.prepare('SELECT * FROM run_deliveries WHERE run_id = ? ORDER BY destination').all(runId);
     },
     setOutputKind(id, outputKind) {
       db.prepare('UPDATE runs SET output_kind = ? WHERE id = ?').run(outputKind || null, id);
