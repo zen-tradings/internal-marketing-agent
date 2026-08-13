@@ -183,6 +183,34 @@ test('arXiv PDF 链接在未指定页码时优先读取官方 HTML', async () =>
   assert.ok(document.acquisition.attempts.includes('arxiv-html'));
 });
 
+test('alphaXiv 论文链接映射到同 ID 官方 arXiv，正文讨论 CAPTCHA 时不误判挑战页', async () => {
+  const calls = [];
+  const paragraph = [
+    'This paper studies CAPTCHA systems and records access denied responses as experimental evidence.',
+    'The phrase verify you are human appears in the evaluated model trace, not in a browser challenge.',
+  ].join(' ').repeat(12);
+  const document = await acquireSourceDocument({
+    sourceUrl: 'https://www.alphaxiv.org/abs/2608.09867',
+    workDir: tempDir(),
+    fetchFn: async (url) => {
+      calls.push(String(url));
+      return new Response(
+        `<article class="ltx_document"><h1>CAPTCHA Research Paper</h1><p>${paragraph}</p></article>`,
+        { status: 200, headers: { 'content-type': 'text/html' } },
+      );
+    },
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+    config: { browserEnabled: false },
+    dnsLookup: PUBLIC_DNS,
+    scope: { kind: 'all', requestedText: '' },
+  });
+
+  assert.equal(calls[0], 'https://arxiv.org/html/2608.09867');
+  assert.equal(document.sourceUrl, 'https://www.alphaxiv.org/abs/2608.09867');
+  assert.ok(document.acquisition.attempts.includes('arxiv-html'));
+  assert.match(document.blocks.map((block) => block.text || '').join(' '), /CAPTCHA systems/);
+});
+
 test('HTML 保留标题、段落、图片图注、表格、代码和列表结构', async () => {
   const paragraph = 'This is a complete article paragraph with enough body text for deterministic extraction and translation. '.repeat(4);
   const html = `<!doctype html><html><head><title>Text source</title></head><body>
@@ -1657,6 +1685,21 @@ test('验证码页面拒绝产稿', async () => {
       status: 200,
       headers: { 'content-type': 'text/html' },
     }),
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+    config: { browserEnabled: false },
+    dnsLookup: PUBLIC_DNS,
+  }), /验证码或反机器人/);
+
+  await assert.rejects(() => acquireSourceDocument({
+    sourceUrl: 'https://example.com/cloudflare-challenge',
+    workDir: tempDir(),
+    fetchFn: async () => new Response(
+      `<html><head><title>Just a moment...</title></head><body>
+        <script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>
+        <div>${'challenge bootstrap '.repeat(200)}</div>
+      </body></html>`,
+      { status: 200, headers: { 'content-type': 'text/html' } },
+    ),
     fetchWithRetry: async (fetch, url, options) => fetch(url, options),
     config: { browserEnabled: false },
     dnsLookup: PUBLIC_DNS,

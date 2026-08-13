@@ -3417,7 +3417,7 @@ function runCommand(command, args, { timeout = 30000 } = {}) {
 function assertUsableArticleResponse(html, url) {
   const text = cleanText(html).slice(0, 12000);
   if (!text) throw new Error('网页响应为空');
-  if (/(?:captcha|verify you are human|checking your browser|access denied|cf-chl-|请输入验证码)/i.test(html)) {
+  if (looksLikeAntiBotPage(html)) {
     throw new Error('网页需要验证码或反机器人验证');
   }
   if (/(?:subscribe to continue|sign in to continue|log in to continue|订阅后继续|登录后查看全文)/i.test(text)
@@ -3427,6 +3427,35 @@ function assertUsableArticleResponse(html, url) {
   if (/\/(?:login|signin)(?:[/?#]|$)/i.test(new URL(url).pathname) && text.length < 5000) {
     throw new Error('原文链接重定向到登录页');
   }
+}
+
+function looksLikeAntiBotPage(html) {
+  const raw = String(html || '');
+  const challengeWords = /(?:captcha|verify (?:you are|that you are) human|checking your browser|access denied|just a moment|attention required|security check|请输入验证码)/i;
+  const challengeInfrastructureHint = /(?:challenges\.cloudflare\.com|google\.com\/recaptcha|recaptcha\.net|hcaptcha\.com\/1\/api\.js|cf-chl-[a-z_-]+|__cf_chl_)/i;
+  if (!challengeWords.test(raw) && !challengeInfrastructureHint.test(raw)) return false;
+  let document;
+  try { document = new JSDOM(raw).window.document; } catch {}
+  const title = cleanText(document?.title || '');
+  const visibleText = cleanText(document?.body?.textContent || raw);
+  const articleText = cleanText(document?.querySelector(
+    'article,main,[role="main"],.ltx_document',
+  )?.textContent || '');
+  const challengeInfrastructure = Boolean(document?.querySelector([
+    'script[src*="challenges.cloudflare.com"]',
+    'script[src*="recaptcha"]',
+    'script[src*="hcaptcha.com"]',
+    'iframe[src*="recaptcha"]',
+    'iframe[src*="hcaptcha.com"]',
+    '[id^="cf-chl-"]',
+    'form[action*="challenge"]',
+  ].join(','))) || /__cf_chl_/i.test(raw);
+  const challengeTitle = /^(?:just a moment(?:\.{1,3})?|attention required!?|access denied!?|verify (?:you are|that you are) human!?|security check|captcha)$/i
+    .test(title);
+  const shortChallengePrompt = challengeWords.test(`${title} ${visibleText}`)
+    && visibleText.length < 1500
+    && articleText.length < 500;
+  return challengeInfrastructure || challengeTitle || shortChallengePrompt;
 }
 
 function metadata(document, selectors, ...attributes) {
@@ -3512,7 +3541,12 @@ function extractInputUrls(text) {
 function arxivSourceUrls(rawUrl) {
   let url;
   try { url = new URL(rawUrl); } catch { return undefined; }
-  if (!['arxiv.org', 'www.arxiv.org'].includes(url.hostname.toLowerCase())) return undefined;
+  if (![
+    'arxiv.org',
+    'www.arxiv.org',
+    'alphaxiv.org',
+    'www.alphaxiv.org',
+  ].includes(url.hostname.toLowerCase())) return undefined;
   const match = /^\/(?:abs|pdf|html)\/(\d{4}\.\d{4,5}(?:v\d+)?)(?:\.pdf)?(?:\/|$)/i.exec(url.pathname);
   if (!match) return undefined;
   const id = match[1];
