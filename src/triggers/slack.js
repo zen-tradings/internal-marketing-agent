@@ -220,7 +220,7 @@ export function workflowRouteLabel(workflowId) {
   return ({
     translate: '完整直译 → 微信草稿箱',
     email: 'Newsletter → Customer.io 草稿',
-    'opening-digest': 'Zen Opening Digest → Customer.io 发送',
+    'opening-digest': 'Zen Opening Digest 测试 → Customer.io + 微信草稿',
     earnings: '原创财报分析 → 微信草稿箱',
     sector: '原创行业分析 → 微信草稿箱',
     morning: '原创晨报 → 微信草稿箱',

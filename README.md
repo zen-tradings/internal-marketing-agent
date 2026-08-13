@@ -213,6 +213,8 @@ npm run requeue:analysis-gate -- <run-id>
 
 `opening-digest` 在 `OPENING_DIGEST_WECHAT_ENABLED=true` 时先完成英文 Customer.io 发送或排期，再使用冻结的同一份行情、正文和 OIC 数据生成完整简体中文直译，并创建 `Zen 开市日报 · YYYY-MM-DD` 微信草稿。微信稿固定使用 `zen-wechat/zen-trading@4`、九格行情和 OIC 20×8 两行记录块；站外链接只保留可见文字。微信翻译、创建或回读失败不会撤销邮件，主任务仍以邮件结果完成并另发精确 Slack 警告。
 
+`opening-digest` 的 Slack 人工触发固定为隔离测试运行：Customer.io 名称和主题带唯一 `[TEST]` 标识，微信标题带 `[测试]`，不会查找、复用或覆盖当天正式稿。只有工作日 cron 可以创建或复用不带测试标识的正式 Opening Digest。
+
 需要改版时，必须集中修改模板实现、升级注册表中的版本号，并同步渠道测试、渲染 golden 与本文档；不能在单个任务里绕过。标题、正文、链接、期号和受众等内容进入模板预留槽位，不改变模板本身。
 
 `src/channels/wechat-draft.js` 按固定顺序执行：

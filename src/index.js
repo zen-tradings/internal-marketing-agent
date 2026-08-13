@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from './config/index.js';
@@ -79,6 +80,18 @@ export async function runWithRetry(
     }
   }
   throw last;
+}
+
+export function openingDigestPublishContext(run) {
+  if (run?.workflowId !== 'opening-digest' || run?.source !== 'slack') {
+    return { source: run?.source, acceptanceId: '' };
+  }
+  const raw = String(run.id || '');
+  const normalized = raw.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  const acceptanceId = /^[a-z0-9-]{8,80}$/.test(normalized)
+    ? normalized
+    : `slack-${normalized.slice(0, 54) || 'run'}-${crypto.createHash('sha256').update(raw).digest('hex').slice(0, 12)}`.slice(0, 80);
+  return { source: 'acceptance', acceptanceId };
 }
 
 // 队列处理器工厂,便于注入 stub 做单测(store/runWriter/channels 均可替换)。
@@ -246,6 +259,7 @@ export function makeHandler(deps) {
         }
         setPhase('publish');
         throwIfTaskCancelled(signal);
+        const publishContext = openingDigestPublishContext(run);
         const { mediaId, title, deliveryWarnings = [] } = await channel.publish({
           articlePath: res.articlePath,
           config,
@@ -260,7 +274,8 @@ export function makeHandler(deps) {
           resumeFromCheckpoint,
           contentPolicy: res.contentPolicy || {},
           contentMode: res.contentMode,
-          source: run.source,
+          source: publishContext.source,
+          acceptanceId: publishContext.acceptanceId,
         });
         store.setMediaId(run.id, mediaId, title); // 早写,发布成功后立刻落库,支撑上面的幂等判断
         setPhase('published');
