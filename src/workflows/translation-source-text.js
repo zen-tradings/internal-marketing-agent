@@ -2884,15 +2884,6 @@ async function localizeFigureAssets(blocks, {
 
   for (const [index, image] of images.entries()) {
     const mapped = mappedAssetPath(image.src, assetMap);
-    if (mapped) {
-      const size = fs.statSync(mapped).size;
-      totalBytes += size;
-      if (totalBytes > limits.maxAssetBytes) {
-        throw new Error(`原文图片总量超过上限:${totalBytes}/${limits.maxAssetBytes}`);
-      }
-      image.localPath = mapped;
-      continue;
-    }
     if (cache.has(image.src)) {
       image.localPath = cache.get(image.src);
       continue;
@@ -2900,7 +2891,13 @@ async function localizeFigureAssets(blocks, {
 
     let buffer;
     let contentType = '';
-    if (/^data:image\//i.test(image.src)) {
+    if (mapped) {
+      const mappedSize = fs.statSync(mapped).size;
+      if (mappedSize > limits.maxSingleAssetBytes) {
+        throw new Error(`原文单张图片超过上限:${mappedSize}/${limits.maxSingleAssetBytes}`);
+      }
+      buffer = fs.readFileSync(mapped);
+    } else if (/^data:image\//i.test(image.src)) {
       const decoded = decodeDataImage(image.src);
       buffer = decoded.buffer;
       contentType = decoded.contentType;
@@ -2920,10 +2917,6 @@ async function localizeFigureAssets(blocks, {
     if (buffer.length > limits.maxSingleAssetBytes) {
       throw new Error(`原文单张图片超过上限:${buffer.length}/${limits.maxSingleAssetBytes}`);
     }
-    totalBytes += buffer.length;
-    if (totalBytes > limits.maxAssetBytes) {
-      throw new Error(`原文图片总量超过上限:${totalBytes}/${limits.maxAssetBytes}`);
-    }
     const kind = detectImageKind(buffer, contentType);
     if (!kind) throw new Error(`原文图片格式不受支持:${image.src}`);
     const basename = `figure-${String(index + 1).padStart(3, '0')}`;
@@ -2940,12 +2933,23 @@ async function localizeFigureAssets(blocks, {
       if (!fs.existsSync(target) || fs.statSync(target).size <= 0) {
         throw new Error(`原文图片转 PNG 失败:${image.src}`);
       }
-      if (fs.statSync(target).size > limits.maxSingleAssetBytes) {
-        throw new Error(`原文图片转 PNG 后超过上限:${fs.statSync(target).size}/${limits.maxSingleAssetBytes}`);
+      const rasterized = fs.readFileSync(target);
+      if (detectImageKind(rasterized, '')?.extension !== '.png') {
+        throw new Error(`原文图片转 PNG 结果格式无效:${image.src}`);
       }
+    } else if (mapped) {
+      target = mapped;
     } else {
       target = path.join(assetDir, `${basename}${kind.extension}`);
       fs.writeFileSync(target, buffer, { mode: 0o600 });
+    }
+    const finalSize = fs.statSync(target).size;
+    if (finalSize > limits.maxSingleAssetBytes) {
+      throw new Error(`原文图片处理后超过上限:${finalSize}/${limits.maxSingleAssetBytes}`);
+    }
+    totalBytes += finalSize;
+    if (totalBytes > limits.maxAssetBytes) {
+      throw new Error(`原文图片总量超过上限:${totalBytes}/${limits.maxAssetBytes}`);
     }
     image.localPath = target;
     cache.set(image.src, target);
@@ -2995,8 +2999,8 @@ async function localizeTableAssets(blocks, {
     if (totalBytes > limits.maxAssetBytes) {
       throw new Error(`原文图表总量超过上限:${totalBytes}/${limits.maxAssetBytes}`);
     }
-    const kind = detectImageKind(fs.readFileSync(target), 'image/png');
-    if (!kind) throw new Error(`原文表格图片格式无效:${table.id}`);
+    const kind = detectImageKind(fs.readFileSync(target), '');
+    if (kind?.extension !== '.png') throw new Error(`原文表格图片不是有效 PNG:${table.id}`);
     table.localPath = target;
   }
 }
@@ -3129,7 +3133,7 @@ async function rasterizeImageToPng({ buffer, contentType, target, config }) {
         image.addEventListener('error', () => reject(new Error('图片解码失败')), { once: true });
       });
     });
-    await page.locator('#asset').screenshot({ path: target, omitBackground: false });
+    await page.locator('#asset').screenshot({ path: target, type: 'png', omitBackground: false });
   } finally {
     await browser.close();
   }

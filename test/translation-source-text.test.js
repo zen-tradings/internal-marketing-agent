@@ -487,6 +487,58 @@ test('WebP 原图在本地化时转为微信支持的 PNG', async () => {
   assert.equal(fs.readFileSync(imagePath).subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
 });
 
+test('映射得到的 WebP 资产也会转为微信支持的 PNG', async () => {
+  const workDir = tempDir();
+  const mappedWebp = path.join(workDir, 'mapped.webp');
+  fs.writeFileSync(mappedWebp, Buffer.concat([
+    Buffer.from('RIFF', 'ascii'),
+    Buffer.alloc(4),
+    Buffer.from('WEBPVP8 ', 'ascii'),
+    Buffer.alloc(32),
+  ]));
+  const document = await sourceDocumentFromHtml({
+    html: `<article><h1>Mapped report</h1>
+      <p>${'Body text for a complete source document. '.repeat(10)}</p>
+      <figure><img src="asset:mapped.webp" alt="Chart"><figcaption>Chart</figcaption></figure>
+      </article>`,
+    sourceUrl: 'https://example.com/report',
+    workDir,
+    assetMap: { 'asset:mapped.webp': mappedWebp },
+    dnsLookup: PUBLIC_DNS,
+    config: {
+      imageRasterizer: async ({ contentType, target }) => {
+        assert.equal(contentType, 'image/webp');
+        fs.writeFileSync(target, Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'));
+      },
+    },
+  });
+
+  const imagePath = document.blocks.find((block) => block.type === 'figure').images[0].localPath;
+  assert.match(imagePath, /figure-001\.png$/);
+  assert.equal(fs.readFileSync(imagePath).subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+});
+
+test('图片转换器输出伪装成 PNG 的 SVG 时立即失败', async () => {
+  const workDir = tempDir();
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>');
+  await assert.rejects(() => sourceDocumentFromHtml({
+    html: `<article><h1>SVG report</h1>
+      <p>${'Body text for a complete source document. '.repeat(10)}</p>
+      <figure><img src="/chart.svg" alt="Chart"><figcaption>Chart</figcaption></figure>
+      </article>`,
+    sourceUrl: 'https://example.com/report',
+    workDir,
+    dnsLookup: PUBLIC_DNS,
+    fetchFn: async () => new Response(svg, {
+      status: 200,
+      headers: { 'content-type': 'image/svg+xml' },
+    }),
+    config: {
+      imageRasterizer: async ({ target }) => fs.writeFileSync(target, svg),
+    },
+  }), /转 PNG 结果格式无效/);
+});
+
 test('章节范围先裁剪结构再下载该范围内的图片', async () => {
   const calls = [];
   const html = `<article>

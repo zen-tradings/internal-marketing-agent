@@ -142,6 +142,20 @@ test('微信最终 HTML:在调用微信 API 前拦截本地 WebP 和 SVG', () =>
   );
 });
 
+test('微信最终 HTML:PNG 元数据中的 SVG 字样不会被误判为 SVG 图片', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-wechat-png-metadata-'));
+  const pngWithSvgMetadata = Buffer.concat([
+    Buffer.from('89504e470d0a1a0a', 'hex'),
+    Buffer.from('binary metadata <svg xmlns="http://www.w3.org/2000/svg"></svg>'),
+  ]);
+  fs.writeFileSync(path.join(dir, 'metadata.png'), pngWithSvgMetadata);
+
+  assert.doesNotThrow(() => validatePreparedWechatHtml(
+    '<img src="metadata.png">',
+    { absoluteDirPath: dir },
+  ));
+});
+
 test('微信最终 HTML:合法浅色代码块通过，危险或损坏代码结构拦截', () => {
   assert.doesNotThrow(() => validatePreparedWechatHtml(
     '<pre style="background:#F6F7F9"><code class="hljs"><span>print</span>(1)</code></pre>',
