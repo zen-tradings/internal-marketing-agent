@@ -147,6 +147,10 @@ test('成功:Exa 调研 + OpenRouter 写作后写出带 title frontmatter 的 ar
   assert.match(calls[1].body.messages[0].content, /Zen Trading/);
   assert.match(calls[1].body.messages[1].content, /NVIDIA results/);
   assert.match(calls[1].body.messages[1].content, /写作任务:英伟达业绩/);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.models.writer, 'workflow/model');
+  assert.equal(trace.models.planner, 'workflow/model');
+  assert.equal(trace.models.review, 'workflow/model');
 });
 
 test('工作流确定性内容门禁在 article.md 落盘前执行并可 fail closed', async () => {
@@ -531,16 +535,21 @@ test('Opening Digest OpenRouter 失败时降级为数据版而不返回 generate
 });
 
 test('Opening Digest 普通审查问题只记录 trace，不修改或阻断稿件', async () => {
-  const workflow = openingWorkflow();
+  const workflow = openingWorkflow({ model: 'openai/gpt-oss-120b' });
+  const config = baseConfig();
+  config.writer.plannerModel = 'moonshotai/kimi-k3';
+  config.writer.reviewModel = 'z-ai/glm-5.2';
   const draft = '---\ntitle: Zen Opening Digest\n---\n## Today\nOne item.';
   let completion = 0;
+  const completionModels = [];
   const result = await runWriter({
     workflow,
     input: 'opening',
-    config: baseConfig(),
-    fetchFn: async (url) => {
+    config,
+    fetchFn: async (url, options) => {
       if (String(url).endsWith('/search')) return jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/a', text: 'Supported market fact.' }] });
       completion += 1;
+      completionModels.push(JSON.parse(options.body).model);
       return completion === 1
         ? jsonResponse({ choices: [{ message: { content: draft } }] })
         : jsonResponse({ choices: [{ message: { content: JSON.stringify({ issues: [{ category: 'freshness', confidence: 'high', core: false, message: 'old source' }], revised_markdown: '' }) } }] });
@@ -550,6 +559,12 @@ test('Opening Digest 普通审查问题只记录 trace，不修改或阻断稿�
   assert.equal(result.contentMode, 'editorial');
   assert.equal(fs.readFileSync(result.articlePath, 'utf8'), draft);
   const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.deepEqual(completionModels, ['openai/gpt-oss-120b', 'z-ai/glm-5.2']);
+  assert.deepEqual(trace.models, {
+    writer: 'openai/gpt-oss-120b',
+    planner: 'moonshotai/kimi-k3',
+    review: 'z-ai/glm-5.2',
+  });
   assert.equal(trace.factReview.policy, 'severe-only');
   assert.equal(trace.factReview.severeIssues.length, 0);
 });

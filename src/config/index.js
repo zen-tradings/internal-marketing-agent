@@ -143,6 +143,7 @@ export function loadConfig(env = process.env) {
     openingDigest: {
       enabled: booleanFlag(env.OPENING_DIGEST_ENABLED),
       wechatEnabled: booleanFlag(env.OPENING_DIGEST_WECHAT_ENABLED),
+      model: env.OPENING_DIGEST_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
       timezone: env.OPENING_DIGEST_TIMEZONE || 'America/New_York',
       earningsPythonPath: env.OPENING_DIGEST_EARNINGS_PYTHON_PATH || env.QDII_PYTHON_PATH || 'python3',
       earningsWorkerPath: env.OPENING_DIGEST_EARNINGS_WORKER_PATH

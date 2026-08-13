@@ -17,7 +17,7 @@ Slack 私聊自然语言 / 频道 @Bot / PDF/文本附件 / cron
   → QDII 查询以 Slack 回复为核心结果；草稿任务的状态通知仍为 best-effort
 ```
 
-Node.js 负责流程控制；正文模型由 `.env` 的 `OPENROUTER_MODEL` 指定，生产默认 `qwen/qwen3.8-max`。`OPENROUTER_ROUTER_MODEL`、`OPENROUTER_PLANNER_MODEL` 与 `OPENROUTER_REVIEW_MODEL` 分别控制路由、顶层任务规划/证据编排和逐句事实审计；生产由 `moonshotai/kimi-k3` 负责规划与方向把握，Qwen3.8-Max 负责正文，GLM 5.2 负责路由和审计。未单独设置角色模型时会继承正文模型。`OPENROUTER_REASONING_EFFORT` 与各角色的 `*_REASONING_EFFORT` 独立配置：Kimi 规划和 Qwen 正文使用 `high`，GLM 路由与审计使用 `none`。`OPENROUTER_MAX_TOKENS` 控制每次请求中 reasoning 与最终输出共享的预算。仓库内版本化的写作 skill 在运行时加载并注入提示词，不与特定模型绑定。Exa 只负责检索与正文抓取；`alphaxiv.org` 是内置优先检索域名之一，项目不连接 AlphaXiv MCP。
+Node.js 负责流程控制；通用正文模型由 `.env` 的 `OPENROUTER_MODEL` 指定，生产默认 `qwen/qwen3.8-max`。Opening Digest 英文主稿可由 `OPENING_DIGEST_MODEL` 独立覆盖，生产使用 `openai/gpt-oss-120b`；该变量未设置时回退到 `OPENROUTER_MODEL`，微信中文直译仍使用通用正文模型。`OPENROUTER_ROUTER_MODEL`、`OPENROUTER_PLANNER_MODEL` 与 `OPENROUTER_REVIEW_MODEL` 分别控制路由、顶层任务规划/证据编排和逐句事实审计；生产由 `moonshotai/kimi-k3` 负责规划与方向把握，GLM 5.2 负责路由、审计和 Opening Digest 压缩。未单独设置角色模型时会继承通用正文模型。`OPENROUTER_REASONING_EFFORT` 与各角色的 `*_REASONING_EFFORT` 独立配置：正文和 Kimi 规划使用 `high`，GLM 路由与审计使用 `none`。`OPENROUTER_MAX_TOKENS` 控制每次请求中 reasoning 与最终输出共享的预算。仓库内版本化的写作 skill 在运行时加载并注入提示词，不与特定模型绑定。Exa 只负责检索与正文抓取；`alphaxiv.org` 是内置优先检索域名之一，项目不连接 AlphaXiv MCP。
 
 ## 目录
 

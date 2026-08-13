@@ -15,7 +15,7 @@ import {
 
 const SHA = 'a'.repeat(40);
 
-test('DigitalOcean deploy defaults to read-only preflight and Qwen writer settings', () => {
+test('DigitalOcean deploy defaults to read-only preflight with isolated Opening Digest writer settings', () => {
   assert.deepEqual(parseDeployArgs([]), {
     activate: false,
     commit: 'HEAD',
@@ -24,12 +24,14 @@ test('DigitalOcean deploy defaults to read-only preflight and Qwen writer settin
     reasoning: 'high',
     plannerModel: 'moonshotai/kimi-k3',
     plannerReasoning: 'high',
+    openingDigestModel: 'openai/gpt-oss-120b',
     openingDigestWechatEnabled: false,
     openingDigestSegmentId: 0,
   });
   assert.equal(parseDeployArgs(['--activate', '--commit', SHA]).activate, true);
   assert.equal(parseDeployArgs(['--opening-digest-segment-id', '19']).openingDigestSegmentId, '19');
   assert.equal(parseDeployArgs(['--opening-digest-wechat-enabled', 'true']).openingDigestWechatEnabled, 'true');
+  assert.equal(parseDeployArgs(['--opening-digest-model', 'openai/gpt-oss-20b']).openingDigestModel, 'openai/gpt-oss-20b');
   assert.throws(() => parseDeployArgs(['--unknown']), /Unknown argument/);
 });
 
@@ -43,7 +45,9 @@ test('embedded remote preflight and activation scripts are valid Bash', () => {
   assert.match(ACTIVATE_SCRIPT, /check-qdii-python\.mjs/);
   assert.match(ACTIVATE_SCRIPT, /check-opening-digest-python\.mjs/);
   assert.match(ACTIVATE_SCRIPT, /update_env OPENING_DIGEST_WECHAT_ENABLED/);
-  assert.match(ACTIVATE_SCRIPT, /env_without_flag_after/);
+  assert.match(ACTIVATE_SCRIPT, /update_env OPENING_DIGEST_MODEL/);
+  assert.match(ACTIVATE_SCRIPT, /env_without_managed_opening_after/);
+  assert.match(ACTIVATE_SCRIPT, /\^\(OPENING_DIGEST_MODEL\|OPENING_DIGEST_WECHAT_ENABLED\)=/);
   assert.match(ACTIVATE_SCRIPT, /update_env QDII_ENABLED true/);
   assert.match(ACTIVATE_SCRIPT, /QDII_PYTHON_PATH \/opt\/zen-content-hub\/\.venv\/bin\/python/);
   assert.match(ACTIVATE_SCRIPT, /QDII_WORKER_PATH \/opt\/zen-content-hub\/python\/qdii_worker\.py/);
@@ -64,9 +68,15 @@ test('deployment inputs reject shell injection and invalid reasoning', () => {
   assert.doesNotThrow(() => validateDeployInputs({
     target: 'root@203.0.113.8', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
     plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
+    openingDigestModel: 'openai/gpt-oss-120b',
     openingDigestWechatEnabled: true,
     openingDigestSegmentId: '19',
   }));
+  assert.throws(() => validateDeployInputs({
+    target: 'root@example.com', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
+    plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
+    openingDigestModel: 'openai/gpt-oss-120b;touch', openingDigestWechatEnabled: true,
+  }), /Invalid Opening Digest model id/);
   assert.throws(() => validateDeployInputs({
     target: 'root@example.com;touch /tmp/x', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
     plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',

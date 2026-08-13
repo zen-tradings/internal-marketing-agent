@@ -6,6 +6,7 @@ const key = process.env.OPENROUTER_API_KEY || '';
 const baseUrl = String(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
 const model = process.env.OPENROUTER_MODEL || 'qwen/qwen3.8-max';
 const reasoningEffort = process.env.OPENROUTER_REASONING_EFFORT || 'high';
+const openingDigestModel = process.env.OPENING_DIGEST_MODEL || model;
 const plannerModel = process.env.OPENROUTER_PLANNER_MODEL || model;
 const plannerReasoningEffort = process.env.OPENROUTER_PLANNER_REASONING_EFFORT || 'high';
 const timeoutMs = positiveInteger(process.env.OPENROUTER_CHECK_TIMEOUT_MS, 60000);
@@ -19,6 +20,7 @@ console.log(`OpenRouter key detected: len=${key.length}`);
 console.log(`OpenRouter base URL: ${baseUrl}`);
 console.log(`OpenRouter model: ${model}`);
 console.log(`OpenRouter reasoning effort: ${reasoningEffort}`);
+console.log(`Opening Digest writer model: ${openingDigestModel}`);
 console.log(`OpenRouter planner model: ${plannerModel}`);
 console.log(`OpenRouter planner reasoning effort: ${plannerReasoningEffort}`);
 
@@ -44,7 +46,7 @@ if (!models.ok) {
 }
 try {
   const available = JSON.parse(models.body)?.data || [];
-  for (const requiredModel of new Set([model, plannerModel])) {
+  for (const requiredModel of new Set([model, openingDigestModel, plannerModel])) {
     if (!available.some((item) => item?.id === requiredModel)) {
       console.error(`OpenRouter model is not available: ${requiredModel}`);
       process.exit(1);
@@ -57,6 +59,7 @@ try {
 
 for (const role of [
   { name: 'writer', model, reasoningEffort, json: false },
+  { name: 'opening-digest-writer', model: openingDigestModel, reasoningEffort, json: false, requireEnglish: true, maxTokens: 1024 },
   { name: 'planner', model: plannerModel, reasoningEffort: plannerReasoningEffort, json: true },
 ]) {
   const completion = await request(`${baseUrl}/chat/completions`, {
@@ -71,7 +74,7 @@ for (const role of [
           ]
         : [{ role: 'user', content: 'Reply with exactly: ok' }],
       // reasoning 模型会消耗隐藏 token；给连通性检查预留足够输出预算。
-      max_tokens: role.json ? 1024 : 256,
+      max_tokens: role.maxTokens || (role.json ? 1024 : 256),
       reasoning: { effort: role.reasoningEffort, exclude: true },
       temperature: 0,
       ...(role.json ? { response_format: { type: 'json_object' } } : {}),
@@ -88,6 +91,7 @@ for (const role of [
     const data = JSON.parse(completion.body);
     const content = data?.choices?.[0]?.message?.content;
     if (!content) throw new Error(`empty content, finish_reason=${data?.choices?.[0]?.finish_reason || 'missing'}`);
+    if (role.requireEnglish && !/[A-Za-z]/.test(content)) throw new Error('Opening Digest writer did not return English text');
     if (role.json && JSON.parse(content)?.ok !== true) throw new Error('planner JSON did not contain ok=true');
   } catch (e) {
     console.error(`OpenRouter ${role.name} completion response invalid: ${e.message}`);
@@ -95,7 +99,7 @@ for (const role of [
   }
 }
 
-console.log('OpenRouter writer and planner completion checks passed.');
+console.log('OpenRouter writer, Opening Digest writer, and planner completion checks passed.');
 
 async function request(url, options) {
   const controller = new AbortController();
