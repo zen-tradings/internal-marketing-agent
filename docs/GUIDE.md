@@ -35,7 +35,7 @@
    EvidenceMatrix；静态域名只用于发现，必须匹配发布主体、页面类型和目标实体才能
    判为一手来源。证据矩阵完成后，通用任务由 latepost-ai-writer 选择受控稿型、证据可支持的
    角度、核心矛盾和结尾约束；Slack Prompt、来源安全、用户指定结构和工作流方法始终
-   优先。正文模型只接收相关证据写作，生产由 Qwen3.8-Max 承担；GLM 5.2 的事实审计按影响、风险、来源和置信度返回精确原句与
+   优先。正文模型只接收相关证据写作，生产通用正文由 Qwen3.8-Max 承担，Opening Digest 英文主稿独立使用 GPT-OSS 120B；GLM 5.2 的事实审计按影响、风险、来源和置信度返回精确原句与
    局部动作，低风险/中低置信度/用户前提保留待复核，只有高置信度问题可自动修改，
    不能重写全文。缺资料和无支持句不再提问；只有用户材料与一手来源对核心前提
    形成双边、不可调和冲突时转 needs_input，同一线程回答后不重复询问。
@@ -50,7 +50,7 @@
    并使用确定性稿型回退，不作为日常运行模式。写作 skill 仅作用于微信原创、行业、
    公司、财报和 macro；翻译、晨报和 Newsletter 不加载它。macro 只有 Slack 触发器，
    没有 cron，且渠道固定沿用微信草稿，绝不自动发布。
-   调 OpenRouter chat completions(正文模型 = .env 的 OPENROUTER_MODEL),
+   调 OpenRouter chat completions(通用正文模型 = `.env` 的 `OPENROUTER_MODEL`；Opening Digest 英文主稿 = `OPENING_DIGEST_MODEL`，未设置时回退到通用模型),
    每个任务使用 `runWorkDir()` 计算的独立
    `workDir/runs/<readable-run-id>-<hash>/`，产出其中的 article.md
    (必须有 title frontmatter，这是硬契约，checkpoint 和生成素材也不得跨任务复用)。

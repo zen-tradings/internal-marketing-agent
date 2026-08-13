@@ -25,7 +25,7 @@ npm run deploy:digitalocean
 After reviewing the preflight output, activate the exact pushed commit:
 
 ```bash
-npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --opening-digest-wechat-enabled true --activate
+npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --opening-digest-model openai/gpt-oss-120b --opening-digest-wechat-enabled true --activate
 ```
 
 需要同时切换 Opening Digest 的受控测试受众时，必须通过同一事务化部署命令传入已在 Customer.io 核验的 segment ID；部署失败会连同受保护环境文件一起回滚：
@@ -37,9 +37,9 @@ npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --activate --ope
 The command requires a clean worktree and a commit present on the upstream
 branch. It creates a local archive, stages and tests a separate release on the
 Droplet, runs the SQLite backup service, requires an idle queue, reasserts the
-approved model and QDII runtime values and rejects drift with an
-excluding-flag checksum, then changes the explicit
-`OPENING_DIGEST_WECHAT_ENABLED` flag (and, only when supplied, the protected
+approved model and QDII runtime values and rejects drift with a checksum that
+excludes only the two explicitly managed Opening Digest values, then changes
+`OPENING_DIGEST_MODEL` and `OPENING_DIGEST_WECHAT_ENABLED` (and, only when supplied, the protected
 Opening Digest segment ID). It switches the single systemd service and verifies
 the marker, main PID and `/ready`. A failed activation restores
 the previous release and protected environment file. The DigitalOcean metadata
@@ -90,6 +90,7 @@ OPENROUTER_REASONING_EFFORT=high
 OPENROUTER_PLANNER_REASONING_EFFORT=high
 OPENROUTER_REVIEW_REASONING_EFFORT=none
 OPENROUTER_ROUTER_REASONING_EFFORT=none
+OPENING_DIGEST_MODEL=openai/gpt-oss-120b
 ANALYSIS_PIPELINE_VERSION=v2
 ANALYSIS_SEARCH_MAX_QUERIES=8
 ANALYSIS_RECENT_WINDOW_DAYS=60

@@ -50,6 +50,7 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal('claudeBin' in c, false);
   assert.equal(c.wechat.appId, 'wx');
   assert.equal(c.openingDigest.wechatEnabled, false);
+  assert.equal(c.openingDigest.model, 'deepseek/deepseek-chat');
   assert.equal(c.openingDigest.earningsPythonPath, 'python3');
   assert.match(c.openingDigest.earningsWorkerPath, /python\/opening_digest_worker\.py$/);
   assert.equal(c.openingDigest.earningsWorkerTimeoutMs, 15000);
@@ -64,6 +65,12 @@ test('Opening Digest 微信同步只有显式开关才启用', () => {
   };
   assert.equal(loadConfig({ ...base, OPENING_DIGEST_WECHAT_ENABLED: 'true' }).openingDigest.wechatEnabled, true);
   assert.equal(loadConfig({ ...base, OPENING_DIGEST_WECHAT_ENABLED: 'false' }).openingDigest.wechatEnabled, false);
+  assert.equal(loadConfig({ ...base, OPENROUTER_MODEL: 'global/writer' }).openingDigest.model, 'global/writer');
+  assert.equal(loadConfig({
+    ...base,
+    OPENROUTER_MODEL: 'global/writer',
+    OPENING_DIGEST_MODEL: 'openai/gpt-oss-120b',
+  }).openingDigest.model, 'openai/gpt-oss-120b');
 });
 
 test('Opening Digest 财报 worker 默认复用 QDII Python 且允许独立覆盖', () => {

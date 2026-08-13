@@ -48,7 +48,7 @@ export default {
   systemPrompt: 'You are the editor of Zen Opening Digest. Use only supplied research, keep claims sourced, and write concise English market commentary. Never provide investment advice.',
   outputInstruction: 'Return the Opening Digest Markdown contract only.',
   get workDir() { return workDirFor('opening-digest'); },
-  get model() { return envModel(); },
+  get model() { return process.env.OPENING_DIGEST_MODEL || envModel(); },
   channel: 'customerio-opening-digest',
   get timeoutMs() { return envTimeoutMs(); },
   get research() {
