@@ -53,6 +53,13 @@ import {
   selectFinalReferenceIds,
 } from './analysis-v2.js';
 import { easternDateKey } from '../lib/us-equity-calendar.js';
+import {
+  compactOpeningDigestArticle,
+  OPENING_DIGEST_CATALYST_MAX_WORDS,
+  OPENING_DIGEST_MARKET_READ_MAX_SENTENCES,
+  OPENING_DIGEST_MARKET_READ_MAX_WORDS,
+  OPENING_DIGEST_MARKET_READ_MIN_SENTENCES,
+} from '../lib/opening-digest-content.js';
 
 const DEFAULT_SYSTEM_PROMPT = `你是 Zen Trading 公众号分析师。你会基于系统提供的调研素材写中文金融分析文章。
 
@@ -345,6 +352,24 @@ export async function runWriter({
       trace.factReview = reviewed.review;
     } else if (sourcePolicy.skipResearch) {
       trace.factReview = { skipped: true, reason: 'non-research-newsletter' };
+    }
+
+    if (workflow.id === 'opening-digest') {
+      try {
+        const compacted = await compactOpeningDigestEditorial({
+          article, research, workflow, writer, fetchFn,
+        });
+        article = compacted.article;
+        trace.openingDigestCompaction = compacted.trace;
+      } catch (error) {
+        trace.openingDigestCompaction = {
+          attempted: true,
+          appliedCount: 0,
+          revertedCount: 0,
+          diagnostic: describeFetchError(error).slice(0, 500),
+          blocks: [],
+        };
+      }
     }
 
     if (sourcePolicy.referenceStyle === 'terminal-list') {
@@ -2028,6 +2053,84 @@ const OPENING_SEVERE_CATEGORIES = new Set([
   'core_fact_contradiction', 'fabricated_number_or_date', 'wrong_link',
 ]);
 
+async function compactOpeningDigestEditorial({ article, research, workflow, writer, fetchFn }) {
+  return compactOpeningDigestArticle({
+    article,
+    compactBlock: async ({ block, metrics, reasons }) => {
+      const allowedSources = openingCompactionSources(research, block.text);
+      const instruction = block.kind === 'catalyst'
+        ? `Rewrite this single Markdown list item in no more than ${OPENING_DIGEST_CATALYST_MAX_WORDS} visible English words. Keep exactly one direct source link. Retain only the essential fact and its concise market implication; if it is a price-only item, retain only the timestamped price fact.`
+        : `Rewrite this Market read as one paragraph of ${OPENING_DIGEST_MARKET_READ_MIN_SENTENCES} to ${OPENING_DIGEST_MARKET_READ_MAX_SENTENCES} sentences and no more than ${OPENING_DIGEST_MARKET_READ_MAX_WORDS} visible English words. Use an overview-details-optional synthesis structure: start with the overall interpretation, use the middle sentences for drivers, divergences, or validation conditions, and optionally end with a synthesis or invalidation condition.`;
+      return completeReviewJson({
+        prompt: `Compact exactly one Zen Opening Digest editorial block. ${instruction}
+
+Do not add facts, causes, advice, emphasis, or certainty. Do not change or remove any URL, number, percentage, ticker, date, or time. Preserve the original causal strength. Return strict JSON only: {"revised_text":"the complete revised block"}.
+
+Block kind: ${block.kind}
+Current metrics: ${JSON.stringify(metrics)}
+Repair reasons: ${JSON.stringify(reasons)}
+Allowed sources: ${JSON.stringify(allowedSources)}
+Original block:
+${block.text}`,
+        model: writer.reviewModel || writer.model,
+        writer: { ...writer, temperature: 0 },
+        fetchFn,
+        timeoutMs: workflow.timeoutMs,
+        systemPrompt: 'You are a concise financial copy editor. Preserve evidence, meaning, causal strength, and immutable tokens. Return valid JSON only.',
+        retryInstruction: 'The previous response was not valid JSON. Return one syntactically valid JSON object only, with escaped newlines inside strings and no code fence or explanation.',
+      });
+    },
+    verifyBlock: async ({ block, candidate, before, after }) => {
+      const allowedSources = openingCompactionSources(research, block.text);
+      const verification = await completeReviewJson({
+        prompt: `Verify a compacted Zen Opening Digest block against the original and supplied sources. Approve only if the revision preserves every supported fact, qualification, and causal strength; adds no fact, cause, advice, emphasis, or certainty; and satisfies the requested editorial structure. For Market read, structure_valid requires one overview sentence followed by supporting detail sentences and an optional final synthesis or invalidation sentence. For a catalyst, structure_valid requires one concise Markdown list item with one direct source link.
+
+Return strict JSON only:
+{"approved":true,"preserves_meaning":true,"preserves_causal_strength":true,"structure_valid":true,"issues":[]}
+
+Block kind: ${block.kind}
+Before metrics: ${JSON.stringify(before)}
+After metrics: ${JSON.stringify(after)}
+Allowed sources: ${JSON.stringify(allowedSources)}
+Original block:
+${block.text}
+
+Candidate block:
+${candidate}`,
+        model: writer.reviewModel || writer.model,
+        writer: { ...writer, temperature: 0 },
+        fetchFn,
+        timeoutMs: workflow.timeoutMs,
+        systemPrompt: 'You are a conservative financial copy verifier. Use only the original and supplied evidence. Return valid JSON only.',
+        retryInstruction: 'The previous response was not valid JSON. Return one syntactically valid JSON object only, with escaped newlines inside strings and no code fence or explanation.',
+      });
+      const issues = Array.isArray(verification.issues)
+        ? verification.issues.map((issue) => String(issue)).filter(Boolean)
+        : [];
+      const approved = verification.approved === true
+        && verification.preserves_meaning === true
+        && verification.preserves_causal_strength === true
+        && verification.structure_valid === true;
+      if (!approved && !issues.length) issues.push('semantic verification requirements were not all satisfied');
+      return { approved, issues, summary: approved ? 'meaning, causal strength, and structure verified' : 'rejected' };
+    },
+  });
+}
+
+function openingCompactionSources(research, blockText) {
+  const linked = new Set(extractArticleUrls(blockText).map(referenceUrlKey));
+  const sources = (Array.isArray(research) ? research : []).filter((source) => source?.url);
+  const selected = linked.size
+    ? sources.filter((source) => linked.has(referenceUrlKey(source.url)))
+    : sources.slice(0, 12);
+  return selected.slice(0, 12).map((source) => ({
+    title: String(source.title || '').slice(0, 200),
+    url: source.url,
+    excerpt: [source.summary, source.text, ...(source.highlights || [])]
+      .filter(Boolean).join('\n').slice(0, 700),
+  }));
+}
+
 async function reviewAndRepairOpeningDigest({ article, input, research, workflow, writer, fetchFn }) {
   const excerptLimit = sourceExcerptLimitFor(workflow);
   const allowed = research.filter((source) => source?.url).map((source) => ({
@@ -2524,7 +2627,7 @@ async function completeReviewJson(options) {
       },
       prompt: attempt === 0
         ? options.prompt
-        : `${options.prompt}\n\n上一次输出不是有效 JSON。本次只能返回一个语法有效的 JSON 对象，字符串内换行必须转义，不要代码围栏或解释。`,
+        : `${options.prompt}\n\n${options.retryInstruction || '上一次输出不是有效 JSON。本次只能返回一个语法有效的 JSON 对象，字符串内换行必须转义，不要代码围栏或解释。'}`,
       responseFormat: { type: 'json_object' },
     });
     try { return parseJsonObject(raw); }

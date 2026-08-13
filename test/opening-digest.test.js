@@ -29,10 +29,13 @@ import {
   OPENING_DIGEST_UNIVERSE_GROUPS,
 } from '../src/lib/opening-digest-universe.js';
 import {
+  compactOpeningDigestArticle,
   openingDigestResearchQueries,
   openingDigestSearchInput,
   previousRegularClose,
   validateOpeningDigestArticle,
+  visibleEnglishSentenceCount,
+  visibleEnglishWordCount,
 } from '../src/lib/opening-digest-content.js';
 
 const ARTICLE = `---
@@ -47,7 +50,7 @@ edition: 2026-08-10
 - [Third catalyst](https://example.com/c) has a distinct and sufficiently detailed implication for today's US equity opening session.
 
 ## Market read
-A restrained and falsifiable market read that clearly states the condition that would invalidate the opening interpretation during today's session.`;
+A restrained opening read depends on participation holding through the first hour. Breadth provides the main validation condition for that interpretation. A sharp reversal in participation would invalidate it.`;
 
 const DATA_ONLY_ARTICLE = `---
 title: Zen Opening Digest
@@ -292,6 +295,96 @@ test('opening content rules are diagnostics rather than hard gates', () => {
     requireFreshSources: true,
   });
   assert.equal(scheduled.warnings.some((warning) => /时间窗口/.test(warning)), false);
+});
+
+test('opening digest visible-word and sentence limits use rendered Markdown text', () => {
+  const words = (count, prefix) => Array.from({ length: count }, (_, index) => `${prefix}${index + 1}`).join(' ');
+  const forty = `- [Direct source](https://example.com/a/this-url-is-not-counted) ${words(38, 'fact')}`;
+  const fortyOne = `${forty} excess41`;
+  assert.equal(visibleEnglishWordCount(forty), 40);
+  assert.equal(visibleEnglishWordCount(fortyOne), 41);
+
+  const market80 = `${words(27, 'Overview')}. ${words(27, 'Detail')}. ${words(26, 'Condition')}.`;
+  const market81 = `${market80.slice(0, -1)} excess81.`;
+  assert.equal(visibleEnglishWordCount(market80), 80);
+  assert.equal(visibleEnglishSentenceCount(market80), 3);
+  assert.equal(visibleEnglishWordCount(market81), 81);
+
+  const atLimit = ARTICLE
+    .replace(/^\- \[A catalyst].*$/m, forty)
+    .replace(/## Market read\n[\s\S]*$/, `## Market read\n${market80}`);
+  const valid = validateOpeningDigestArticle({ article: atLimit });
+  assert.equal(valid.stats.catalystWordCounts[0], 40);
+  assert.equal(valid.stats.marketReadWordCount, 80);
+  assert.equal(valid.stats.marketReadSentenceCount, 3);
+  assert.equal(valid.stats.marketReadStructureValid, true);
+  assert.equal(valid.warnings.some((warning) => /词数超过/.test(warning)), false);
+
+  const overLimit = atLimit
+    .replace(forty, fortyOne)
+    .replace(market80, market81);
+  const invalid = validateOpeningDigestArticle({ article: overLimit });
+  assert.equal(invalid.stats.catalystWordCounts[0], 41);
+  assert.equal(invalid.stats.marketReadWordCount, 81);
+  assert.ok(invalid.warnings.some((warning) => /catalyst 可见英文词数超过 40:41/.test(warning)));
+  assert.ok(invalid.warnings.some((warning) => /Market read 可见英文词数超过 80:81/.test(warning)));
+});
+
+test('opening digest Market read requires one paragraph and 3-5 sentences', () => {
+  for (const [sentenceCount, expected] of [[2, false], [3, true], [5, true], [6, false]]) {
+    const market = Array.from({ length: sentenceCount }, (_, index) => `Sentence ${index + 1} states a restrained condition.`).join(' ');
+    const article = ARTICLE.replace(/## Market read\n[\s\S]*$/, `## Market read\n${market}`);
+    const audit = validateOpeningDigestArticle({ article });
+    assert.equal(audit.stats.marketReadSentenceCount, sentenceCount);
+    assert.equal(audit.stats.marketReadStructureValid, expected);
+  }
+  const twoParagraphs = ARTICLE.replace(
+    /## Market read\n[\s\S]*$/,
+    '## Market read\nThe overview remains conditional.\n\nBreadth provides support. A reversal would invalidate it.',
+  );
+  const audit = validateOpeningDigestArticle({ article: twoParagraphs });
+  assert.equal(audit.stats.marketReadParagraphCount, 2);
+  assert.equal(audit.stats.marketReadStructureValid, false);
+});
+
+test('opening digest compaction applies only verified blocks and preserves immutable facts', async () => {
+  const longCatalyst = `- [AAPL filing](https://example.com/a) AAPL moved 10.25% at 10:15 EDT on August 10 after the filing ${Array.from({ length: 30 }, (_, index) => `detail${index + 1}`).join(' ')}.`;
+  const article = ARTICLE
+    .replace(/^\- \[A catalyst].*$/m, longCatalyst)
+    .replace(/## Market read\n[\s\S]*$/, '## Market read\nThe opening read remains conditional on breadth holding through the first hour.');
+  const result = await compactOpeningDigestArticle({
+    article,
+    compactBlock: async ({ block }) => block.kind === 'catalyst'
+      ? { revised_text: '- [AAPL filing](https://example.com/a) AAPL moved 10.25% at 10:15 EDT on August 10 after the filing.' }
+      : { revised_text: 'The opening read remains conditional. Breadth must hold through the first hour. A reversal would invalidate the interpretation.' },
+    verifyBlock: async () => ({ approved: true, summary: 'verified' }),
+  });
+  assert.equal(result.trace.appliedCount, 2);
+  assert.equal(result.trace.revertedCount, 0);
+  assert.match(result.article, /AAPL moved 10\.25% at 10:15 EDT on August 10/);
+  assert.equal(validateOpeningDigestArticle({ article: result.article }).stats.marketReadStructureValid, true);
+});
+
+test('opening digest compaction reverts model failures and immutable-token changes per block', async () => {
+  const longCatalyst = `- [AAPL filing](https://example.com/a) AAPL moved 10.25% at 10:15 EDT on August 10 after the filing ${Array.from({ length: 30 }, (_, index) => `detail${index + 1}`).join(' ')}.`;
+  const article = ARTICLE
+    .replace(/^\- \[A catalyst].*$/m, longCatalyst)
+    .replace(/## Market read\n[\s\S]*$/, '## Market read\nThe opening read remains conditional on breadth holding through the first hour.');
+  let verificationCalls = 0;
+  const result = await compactOpeningDigestArticle({
+    article,
+    compactBlock: async ({ block }) => {
+      if (block.kind === 'market-read') throw new Error('invalid JSON');
+      return { revised_text: '- [AAPL filing](https://example.com/a) AAPL moved 11.00% at 10:15 EDT on August 10 after the filing.' };
+    },
+    verifyBlock: async () => { verificationCalls += 1; return { approved: true }; },
+  });
+  assert.equal(result.article, article);
+  assert.equal(result.trace.appliedCount, 0);
+  assert.equal(result.trace.revertedCount, 2);
+  assert.equal(verificationCalls, 0);
+  assert.ok(result.trace.blocks.some((block) => /changed numbers/.test(block.diagnostic)));
+  assert.ok(result.trace.blocks.some((block) => /invalid JSON/.test(block.diagnostic)));
 });
 
 test('opening metrics keeps nine fixed slots and replaces invalid or missing data with placeholders', async () => {
@@ -614,7 +707,8 @@ test('production acceptance uses an explicit TEST identity and sends immediately
   });
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
   assert.equal(create.body.name, '[TEST] Zen Opening Digest · 2026-08-10 · cc3fc06bb76a-1045et');
-  assert.match(create.body.subject, /^\[TEST\] Zen Opening Digest/);
+  assert.equal(create.body.subject, '[TEST] Zen Opening Digest · August 10, 2026');
+  assert.doesNotMatch(create.body.subject, /cc3fc06bb76a-1045et/);
   assert.deepEqual(uploads, [{
     filename: 'opening-digest-cover-2026-08-10-cc3fc06bb76a-1045et.png',
     name: 'Zen Opening Digest cover 2026-08-10-cc3fc06bb76a-1045et',

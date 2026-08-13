@@ -6,6 +6,117 @@ const FRONTMATTER_RE = /^---\n[\s\S]*?\n---\n?/;
 const REQUIRED_HEADINGS = ["Today's catalysts", 'Market read'];
 const EARNINGS_HEADING = 'Earnings ahead';
 const STALE_ADMISSION_RE = /\b(?:not\s+(?:a\s+)?new\s+(?:overnight|today|current)|background\s+rather\s+than|no\s+fresh\s+(?:official[- ]source\s+)?items?|previously\s+disclosed|not\s+(?:a\s+)?current[- ]window\s+catalyst)\b/i;
+export const OPENING_DIGEST_CATALYST_MAX_WORDS = 40;
+export const OPENING_DIGEST_MARKET_READ_MAX_WORDS = 80;
+export const OPENING_DIGEST_MARKET_READ_MIN_SENTENCES = 3;
+export const OPENING_DIGEST_MARKET_READ_MAX_SENTENCES = 5;
+
+export function visibleEnglishWordCount(markdown) {
+  const visible = String(markdown || '')
+    .replace(/!\[([^\]]*)]\(https?:\/\/[^\s)]+\)/g, ' $1 ')
+    .replace(/\[([^\]]+)]\(https?:\/\/[^\s)]+\)/g, ' $1 ')
+    .replace(/<https?:\/\/[^>]+>/g, ' ')
+    .replace(/https?:\/\/[^\s)>\]}"']+/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[`*_~>#|]/g, ' ');
+  return (visible.match(/(?:[$€£¥]\s*)?(?:[A-Za-z0-9]+(?:[.'’:/+-][A-Za-z0-9]+)*)%?/g) || []).length;
+}
+
+export function visibleEnglishSentenceCount(markdown) {
+  const text = visibleMarkdownText(markdown);
+  if (!text) return 0;
+  try {
+    const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
+    return [...segmenter.segment(text)]
+      .map((entry) => entry.segment.trim())
+      .filter((entry) => visibleEnglishWordCount(entry) > 0).length;
+  } catch {
+    return text.split(/(?<=[.!?])\s+(?=[A-Z0-9])/)
+      .filter((entry) => visibleEnglishWordCount(entry) > 0).length;
+  }
+}
+
+export function openingDigestEditorialBlocks(article) {
+  const source = String(article || '');
+  const catalystsHeading = /^## Today's catalysts\s*$/m.exec(source);
+  const marketHeading = /^## Market read\s*$/m.exec(source);
+  if (!catalystsHeading || !marketHeading || marketHeading.index <= catalystsHeading.index) {
+    return { catalysts: [], marketRead: null };
+  }
+  const catalystsStart = catalystsHeading.index + catalystsHeading[0].length;
+  const catalystsSection = source.slice(catalystsStart, marketHeading.index);
+  const catalysts = [...catalystsSection.matchAll(/^[-*]\s+.+$/gm)].map((match, index) => ({
+    id: `catalyst-${index + 1}`,
+    kind: 'catalyst',
+    index,
+    text: match[0].trimEnd(),
+    start: catalystsStart + match.index,
+    end: catalystsStart + match.index + match[0].length,
+  }));
+  let marketStart = marketHeading.index + marketHeading[0].length;
+  while (marketStart < source.length && /\s/.test(source[marketStart])) marketStart += 1;
+  let marketEnd = source.length;
+  while (marketEnd > marketStart && /\s/.test(source[marketEnd - 1])) marketEnd -= 1;
+  const marketText = source.slice(marketStart, marketEnd);
+  return {
+    catalysts,
+    marketRead: marketText ? {
+      id: 'market-read', kind: 'market-read', text: marketText, start: marketStart, end: marketEnd,
+    } : null,
+  };
+}
+
+export async function compactOpeningDigestArticle({ article, compactBlock, verifyBlock } = {}) {
+  const source = String(article || '');
+  const parsed = openingDigestEditorialBlocks(source);
+  const blocks = [...parsed.catalysts, ...(parsed.marketRead ? [parsed.marketRead] : [])];
+  const replacements = [];
+  const traceBlocks = [];
+  for (const block of blocks) {
+    const before = editorialBlockMetrics(block);
+    const reasons = editorialRepairReasons(block, before);
+    if (!reasons.length) {
+      traceBlocks.push({ id: block.id, kind: block.kind, status: 'unchanged', before, after: before, reasons: [] });
+      continue;
+    }
+    const trace = { id: block.id, kind: block.kind, status: 'reverted', before, after: before, reasons };
+    try {
+      if (typeof compactBlock !== 'function') throw new Error('compaction service unavailable');
+      const result = await compactBlock({ block, metrics: before, reasons });
+      const candidate = String(result?.revisedText ?? result?.revised_text ?? result ?? '').trim();
+      if (!candidate) throw new Error('compaction returned empty text');
+      const after = editorialBlockMetrics({ ...block, text: candidate });
+      const candidateIssues = validateCompactedBlock(block, candidate, after);
+      if (candidateIssues.length) throw new Error(candidateIssues.join('; '));
+      const invariantIssues = openingDigestInvariantIssues(block.text, candidate);
+      if (invariantIssues.length) throw new Error(invariantIssues.join('; '));
+      if (typeof verifyBlock !== 'function') throw new Error('semantic verification service unavailable');
+      const verification = await verifyBlock({ block, candidate, before, after });
+      if (verification?.approved !== true) {
+        const issues = Array.isArray(verification?.issues) ? verification.issues.join('; ') : 'semantic verification rejected the revision';
+        throw new Error(issues || 'semantic verification rejected the revision');
+      }
+      replacements.push({ start: block.start, end: block.end, text: candidate });
+      Object.assign(trace, { status: 'applied', after, verification: verification.summary || 'approved' });
+    } catch (error) {
+      trace.diagnostic = String(error?.message || error).slice(0, 500);
+    }
+    traceBlocks.push(trace);
+  }
+  let compacted = source;
+  for (const replacement of replacements.sort((a, b) => b.start - a.start)) {
+    compacted = `${compacted.slice(0, replacement.start)}${replacement.text}${compacted.slice(replacement.end)}`;
+  }
+  return {
+    article: compacted,
+    trace: {
+      attempted: traceBlocks.some((block) => block.reasons.length > 0),
+      appliedCount: traceBlocks.filter((block) => block.status === 'applied').length,
+      revertedCount: traceBlocks.filter((block) => block.status === 'reverted').length,
+      blocks: traceBlocks,
+    },
+  };
+}
 
 export function validateOpeningDigestArticle({
   article,
@@ -54,6 +165,7 @@ export function auditOpeningDigestArticle({
     warnings.push('Opening Digest Yahoo-only 财报时段必须标记 expected');
   }
   const catalystItems = catalystSection.split('\n').map((line) => line.trim()).filter((line) => /^[-*]\s+/.test(line));
+  const catalystWordCounts = catalystItems.map(visibleEnglishWordCount);
   if (catalystItems.length < 3 || catalystItems.length > 5) {
     warnings.push(`Opening Digest Today's catalysts 建议包含 3-5 条，当前为 ${catalystItems.length} 条`);
   }
@@ -63,6 +175,9 @@ export function auditOpeningDigestArticle({
 
   const links = [];
   for (const [index, item] of catalystItems.entries()) {
+    if (catalystWordCounts[index] > OPENING_DIGEST_CATALYST_MAX_WORDS) {
+      warnings.push(`Opening Digest 第 ${index + 1} 条 catalyst 可见英文词数超过 ${OPENING_DIGEST_CATALYST_MAX_WORDS}:${catalystWordCounts[index]}`);
+    }
     const itemLinks = [...item.matchAll(/\[[^\]]+\]\((https?:\/\/[^\s)]+)\)/g)].map((match) => match[1]);
     if (itemLinks.length !== 1) {
       warnings.push(`Opening Digest 第 ${index + 1} 条 catalyst 建议只包含一个直接来源链接`);
@@ -79,8 +194,22 @@ export function auditOpeningDigestArticle({
   if (new Set(links.map(normalizedUrl)).size !== links.length) {
     warnings.push('Opening Digest catalyst 来源链接存在重复');
   }
-  if (marketRead.length < 80 || marketRead.length > 1600) {
-    warnings.push(`Opening Digest Market read 长度异常:${marketRead.length}`);
+  const marketReadWordCount = visibleEnglishWordCount(marketRead);
+  const marketReadSentenceCount = visibleEnglishSentenceCount(marketRead);
+  const marketReadParagraphCount = visibleParagraphCount(marketRead);
+  const marketReadStructureValid = marketReadParagraphCount === 1
+    && marketReadSentenceCount >= OPENING_DIGEST_MARKET_READ_MIN_SENTENCES
+    && marketReadSentenceCount <= OPENING_DIGEST_MARKET_READ_MAX_SENTENCES
+    && !/^[-*]\s+/m.test(marketRead);
+  if (marketReadWordCount > OPENING_DIGEST_MARKET_READ_MAX_WORDS) {
+    warnings.push(`Opening Digest Market read 可见英文词数超过 ${OPENING_DIGEST_MARKET_READ_MAX_WORDS}:${marketReadWordCount}`);
+  }
+  if (marketReadSentenceCount < OPENING_DIGEST_MARKET_READ_MIN_SENTENCES
+    || marketReadSentenceCount > OPENING_DIGEST_MARKET_READ_MAX_SENTENCES) {
+    warnings.push(`Opening Digest Market read 应为 ${OPENING_DIGEST_MARKET_READ_MIN_SENTENCES}-${OPENING_DIGEST_MARKET_READ_MAX_SENTENCES} 句，当前为 ${marketReadSentenceCount} 句`);
+  }
+  if (marketReadParagraphCount !== 1) {
+    warnings.push(`Opening Digest Market read 应为单段，当前为 ${marketReadParagraphCount} 段`);
   }
   if (/^[-*]\s+/m.test(marketRead) || STALE_ADMISSION_RE.test(marketRead)) {
     warnings.push('Opening Digest Market read 建议使用判断段落，不应以没有新消息或旧背景作为结论');
@@ -118,15 +247,25 @@ export function auditOpeningDigestArticle({
       earningsCount: earningsLinks.length,
       earningsLinks,
       catalystCount: catalystItems.length,
+      catalystWordCounts,
       links,
       marketReadLength: marketRead.length,
+      marketReadWordCount,
+      marketReadSentenceCount,
+      marketReadParagraphCount,
+      marketReadStructureValid,
     },
     earningsPresent: earningsStart >= 0,
     earningsCount: earningsLinks.length,
     earningsLinks,
     catalystCount: catalystItems.length,
+    catalystWordCounts,
     links,
     marketReadLength: marketRead.length,
+    marketReadWordCount,
+    marketReadSentenceCount,
+    marketReadParagraphCount,
+    marketReadStructureValid,
   };
 }
 
@@ -171,6 +310,96 @@ export function openingDigestResearchQueries(asOf = new Date(), earningsCalendar
 export function openingDigestSearchInput(asOf = new Date()) {
   const date = easternDateKey(asOf);
   return `US equity opening digest for ${date}: market-moving developments published since the previous regular close, including macro data, rates, earnings, guidance, and large-cap catalysts.`;
+}
+
+function visibleMarkdownText(markdown) {
+  return String(markdown || '')
+    .replace(/!\[([^\]]*)]\(https?:\/\/[^\s)]+\)/g, ' $1 ')
+    .replace(/\[([^\]]+)]\(https?:\/\/[^\s)]+\)/g, ' $1 ')
+    .replace(/<https?:\/\/[^>]+>/g, ' ')
+    .replace(/https?:\/\/[^\s)>\]}"']+/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[`*_~>#|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function visibleParagraphCount(markdown) {
+  return String(markdown || '').trim()
+    ? String(markdown).trim().split(/\n\s*\n+/).filter((paragraph) => visibleEnglishWordCount(paragraph) > 0).length
+    : 0;
+}
+
+function editorialBlockMetrics(block) {
+  const text = String(block?.text || '');
+  return {
+    wordCount: visibleEnglishWordCount(text),
+    sentenceCount: visibleEnglishSentenceCount(text),
+    paragraphCount: visibleParagraphCount(text),
+  };
+}
+
+function editorialRepairReasons(block, metrics) {
+  if (block.kind === 'catalyst') {
+    return metrics.wordCount > OPENING_DIGEST_CATALYST_MAX_WORDS
+      ? [`word-count-${metrics.wordCount}-over-${OPENING_DIGEST_CATALYST_MAX_WORDS}`]
+      : [];
+  }
+  const reasons = [];
+  if (metrics.wordCount > OPENING_DIGEST_MARKET_READ_MAX_WORDS) {
+    reasons.push(`word-count-${metrics.wordCount}-over-${OPENING_DIGEST_MARKET_READ_MAX_WORDS}`);
+  }
+  if (metrics.sentenceCount < OPENING_DIGEST_MARKET_READ_MIN_SENTENCES
+    || metrics.sentenceCount > OPENING_DIGEST_MARKET_READ_MAX_SENTENCES) {
+    reasons.push(`sentence-count-${metrics.sentenceCount}-outside-${OPENING_DIGEST_MARKET_READ_MIN_SENTENCES}-${OPENING_DIGEST_MARKET_READ_MAX_SENTENCES}`);
+  }
+  if (metrics.paragraphCount !== 1) reasons.push(`paragraph-count-${metrics.paragraphCount}-not-1`);
+  if (/^[-*]\s+/m.test(block.text)) reasons.push('market-read-must-not-be-a-list');
+  return reasons;
+}
+
+function validateCompactedBlock(original, candidate, metrics) {
+  const issues = [];
+  if (original.kind === 'catalyst') {
+    if (/\n/.test(candidate) || !/^[-*]\s+\S/.test(candidate)) issues.push('catalyst must remain one Markdown list item');
+    if (metrics.wordCount > OPENING_DIGEST_CATALYST_MAX_WORDS) {
+      issues.push(`catalyst still exceeds ${OPENING_DIGEST_CATALYST_MAX_WORDS} visible English words`);
+    }
+    const links = candidate.match(/\[[^\]]+]\(https?:\/\/[^\s)]+\)/g) || [];
+    if (links.length !== 1) issues.push('catalyst must retain exactly one direct source link');
+  } else {
+    if (/^#{1,6}\s+/m.test(candidate) || /^[-*]\s+/m.test(candidate)) issues.push('Market read must remain a plain paragraph');
+    if (metrics.wordCount > OPENING_DIGEST_MARKET_READ_MAX_WORDS) {
+      issues.push(`Market read still exceeds ${OPENING_DIGEST_MARKET_READ_MAX_WORDS} visible English words`);
+    }
+    if (metrics.sentenceCount < OPENING_DIGEST_MARKET_READ_MIN_SENTENCES
+      || metrics.sentenceCount > OPENING_DIGEST_MARKET_READ_MAX_SENTENCES) {
+      issues.push(`Market read must contain ${OPENING_DIGEST_MARKET_READ_MIN_SENTENCES}-${OPENING_DIGEST_MARKET_READ_MAX_SENTENCES} sentences`);
+    }
+    if (metrics.paragraphCount !== 1) issues.push('Market read must remain one paragraph');
+  }
+  return issues;
+}
+
+function openingDigestInvariantIssues(original, candidate) {
+  const before = invariantSignature(original);
+  const after = invariantSignature(candidate);
+  const issues = [];
+  for (const key of Object.keys(before)) {
+    if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) issues.push(`compaction changed ${key}`);
+  }
+  return issues;
+}
+
+function invariantSignature(value) {
+  const text = String(value || '');
+  return {
+    URLs: text.match(/https?:\/\/[^\s)\]}>"]+/g) || [],
+    numbers: text.match(/(?<![A-Za-z0-9])(?:[$€£¥]\s*)?[-+]?\d+(?:[,.]\d+)*(?:%|‰)?(?:\s+(?:thousand|million|billion|trillion))?/gi) || [],
+    tickers: text.match(/\b(?:[A-Z]{2,6}|[A-Z]{1,5}\d[A-Z0-9-]*)\b/g) || [],
+    dates: text.match(/\b(?:\d{4}-\d{2}-\d{2}|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:,\s+\d{4})?)\b/gi) || [],
+    times: text.match(/\b\d{1,2}:\d{2}(?:\s*(?:a\.m\.|p\.m\.|AM|PM))?(?:\s+(?:ET|EST|EDT|PT|PST|PDT|UTC|GMT))?\b/gi) || [],
+  };
 }
 
 export function previousRegularClose(asOf = new Date()) {

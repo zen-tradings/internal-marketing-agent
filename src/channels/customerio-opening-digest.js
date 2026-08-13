@@ -157,7 +157,7 @@ export function makeChannel({
           type: 'email',
           recipients: { and: [{ or: [{ segment: { id: digest.segmentId } }] }] },
           subject: acceptance
-            ? `[TEST] Zen Opening Digest · ${displayDate(dateKey)} · ${acceptanceId}`
+            ? `[TEST] Zen Opening Digest · ${displayDate(dateKey)}`
             : `Zen Opening Digest · ${displayDate(dateKey)}`,
           preheader_text: article.preheader,
           body,
