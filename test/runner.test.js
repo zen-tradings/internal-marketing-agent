@@ -554,6 +554,80 @@ test('Opening Digest 普通审查问题只记录 trace，不修改或阻断稿�
   assert.equal(trace.factReview.severeIssues.length, 0);
 });
 
+test('Opening Digest 在事实审核后按块压缩并把结果写入 trace', async () => {
+  const workflow = openingWorkflow({ factReview: false });
+  const longCatalyst = `- [AAPL filing](https://example.com/a) AAPL moved 10.25% at 10:15 EDT on August 10 after the filing ${Array.from({ length: 30 }, (_, index) => `detail${index + 1}`).join(' ')}.`;
+  const draft = `---
+title: Zen Opening Digest
+---
+## Today's catalysts
+${longCatalyst}
+- [Second source](https://example.com/b) supports a concise second opening catalyst.
+- [Third source](https://example.com/c) supports a concise third opening catalyst.
+
+## Market read
+The opening read remains conditional on breadth holding through the first hour.`;
+  const compactedCatalyst = '- [AAPL filing](https://example.com/a) AAPL moved 10.25% at 10:15 EDT on August 10 after the filing.';
+  const compactedMarket = 'The opening read remains conditional. Breadth through the first hour provides the main validation. A reversal would invalidate the interpretation.';
+  let completion = 0;
+  const result = await runWriter({
+    workflow,
+    input: 'opening',
+    config: baseConfig(),
+    fetchFn: async (url) => {
+      if (String(url).endsWith('/search')) return jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/a', text: 'Supported market fact.' }] });
+      completion += 1;
+      const content = completion === 1 ? draft
+        : completion === 2 ? JSON.stringify({ revised_text: compactedCatalyst })
+          : completion === 3 ? JSON.stringify({ approved: true, preserves_meaning: true, preserves_causal_strength: true, structure_valid: true, issues: [] })
+            : completion === 4 ? JSON.stringify({ revised_text: compactedMarket })
+              : JSON.stringify({ approved: true, preserves_meaning: true, preserves_causal_strength: true, structure_valid: true, issues: [] });
+      return jsonResponse({ choices: [{ message: { content } }] });
+    },
+  });
+  assert.equal(result.ok, true);
+  const article = fs.readFileSync(result.articlePath, 'utf8');
+  assert.match(article, /AAPL moved 10\.25% at 10:15 EDT on August 10/);
+  assert.match(article, /Breadth through the first hour provides the main validation/);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.openingDigestCompaction.appliedCount, 2);
+  assert.equal(trace.openingDigestCompaction.revertedCount, 0);
+  assert.deepEqual(trace.openingDigestCompaction.blocks.filter((block) => block.status === 'applied').map((block) => block.id), ['catalyst-1', 'market-read']);
+});
+
+test('Opening Digest 压缩模型连续返回无效 JSON 时回退原块并继续 editorial 发送路径', async () => {
+  const workflow = openingWorkflow({ factReview: false });
+  const longCatalyst = `- [AAPL filing](https://example.com/a) AAPL moved 10.25% at 10:15 EDT on August 10 after the filing ${Array.from({ length: 30 }, (_, index) => `detail${index + 1}`).join(' ')}.`;
+  const draft = `---
+title: Zen Opening Digest
+---
+## Today's catalysts
+${longCatalyst}
+- [Second source](https://example.com/b) supports a concise second opening catalyst.
+- [Third source](https://example.com/c) supports a concise third opening catalyst.
+
+## Market read
+The opening read remains conditional. Breadth must hold through the first hour. A reversal would invalidate it.`;
+  let completion = 0;
+  const result = await runWriter({
+    workflow,
+    input: 'opening',
+    config: baseConfig(),
+    fetchFn: async (url) => {
+      if (String(url).endsWith('/search')) return jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/a', text: 'Supported market fact.' }] });
+      completion += 1;
+      return jsonResponse({ choices: [{ message: { content: completion === 1 ? draft : 'not valid json' } }] });
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.contentMode, 'editorial');
+  assert.equal(fs.readFileSync(result.articlePath, 'utf8'), draft);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.openingDigestCompaction.appliedCount, 0);
+  assert.equal(trace.openingDigestCompaction.revertedCount, 1);
+  assert.match(trace.openingDigestCompaction.blocks.find((block) => block.id === 'catalyst-1').diagnostic, /JSON/);
+});
+
 test('Opening Digest 严重事实问题修复并复核通过后可继续', async () => {
   const workflow = openingWorkflow();
   const bad = '---\ntitle: Zen Opening Digest\n---\nRevenue was 900 billion.';
@@ -1033,7 +1107,7 @@ edition: 2026-08-10
 - [Source two](https://example.com/2) supports a third current and material opening catalyst for the session.
 
 ## Market read
-The opening interpretation remains conditional on whether the initial breadth persists through the first hour.` } }] });
+The opening interpretation remains conditional on whether initial breadth persists. Participation through the first hour provides the main validation condition. A broad reversal would invalidate the read.` } }] });
     },
   });
   assert.equal(result.ok, true);
