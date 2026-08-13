@@ -11,7 +11,7 @@ Slack 私聊自然语言 / 频道 @Bot / PDF/文本附件 / cron
   → 微信分析 V2：原始 Prompt → TaskContract → SearchPlan → EvidenceMatrix → 证据后编辑 brief
   → 用户 PDF/Notion/Google Docs/GitHub/链接 + 最新官方一手 + 优先信源 + 开放交叉验证
   → 通用任务用 LatePost 方法；macro 由 Global Macro 主导并组合 LatePost 证据纪律
-  → Qwen3.8-Max 写作 → GLM 5.2 逐句事实审计 → 系统确定性引用
+  → 通用正文用 Qwen3.8-Max；Opening Digest 英文主稿用 GPT-OSS 120B → GLM 5.2 逐句事实审计 → 系统确定性引用
   → 中央模板门禁 → 微信固定版式 / Customer.io Newsletter 固定模板
   → 常规渠道只创建草稿；`opening-digest` 为受控邮件发送/排期例外，并可在邮件成功后同步中文微信草稿
   → QDII 查询以 Slack 回复为核心结果；草稿任务的状态通知仍为 best-effort
