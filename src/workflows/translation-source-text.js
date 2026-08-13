@@ -1093,7 +1093,11 @@ export async function translateDocument({
     });
   }
   throwIfTaskCancelled(signal);
-  if (completed.size !== units.length) throw new Error(`结构化翻译缺块:${completed.size}/${units.length}`);
+  if (completed.size !== units.length) {
+    const error = new Error(`结构化翻译缺块:${completed.size}/${units.length}`);
+    error.retryableTranslationResponse = true;
+    throw error;
+  }
   try { fs.rmSync(path.join(workDir, 'translation-invalid.json'), { force: true }); } catch {}
   const translated = applyTranslations(source, completed);
   translated.validationWarnings = [...validationWarnings.values()].flat();
@@ -1928,6 +1932,7 @@ async function requestTranslationBatch({
   completeArticle,
   timeoutMs,
   repair = false,
+  allowSplit = true,
 }) {
   const protections = new Map();
   const units = batch.map((unit) => {
@@ -2020,18 +2025,55 @@ ${JSON.stringify({ units })}`,
         text: repair ? restoreInvariantText(item.text, protections.get(item.id) || []) : item.text,
       }));
   };
-  let translations = parseTranslations(await complete(request));
-  if (repair && !hasExpectedTranslationSet(batch, translations)) {
-    const retryInstruction = `上一次修复响应缺少输入块。请重新返回全部 ${batch.length} 个块；只允许使用这些 ID：${batch.map((unit) => unit.id).join('、')}。`;
-    translations = parseTranslations(await complete({
-      ...request,
-      prompt: request.prompt.replace(
-        '\n\n输入 JSON:\n',
-        `\n\n${retryInstruction}\n\n输入 JSON:\n`,
-      ),
-    }));
+  let bestTranslations = [];
+  let lastResponseError;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const retryInstruction = attempt === 0
+      ? ''
+      : `${repair ? '上一次修复响应缺少输入块' : '上一次响应不是完整合法 JSON 或缺少输入块'}。请重新返回全部 ${batch.length} 个块；只允许使用这些 ID：${batch.map((unit) => unit.id).join('、')}。`;
+    try {
+      const translations = parseTranslations(await complete({
+        ...request,
+        prompt: retryInstruction
+          ? request.prompt.replace(
+            '\n\n输入 JSON:\n',
+            `\n\n${retryInstruction}\n\n输入 JSON:\n`,
+          )
+          : request.prompt,
+      }));
+      if (translations.length > bestTranslations.length) bestTranslations = translations;
+      if (hasExpectedTranslationSet(batch, translations)) return translations;
+    } catch (error) {
+      if (error?.retryableTranslationResponse !== true) throw error;
+      lastResponseError = error;
+    }
   }
-  return translations;
+
+  // 大批结构化输出更容易在 provider 或网关层被截断。连续两次不完整时，
+  // 确定性缩小到修复批次大小再请求，避免丢弃此前已写入的 checkpoint。
+  if (allowSplit && batch.length > 1) {
+    const smallerBatches = batchUnits(batch, REPAIR_BATCH_MAX_CHARS, REPAIR_BATCH_MAX_ITEMS);
+    if (smallerBatches.length > 1) {
+      const recovered = [];
+      for (const smallerBatch of smallerBatches) {
+        recovered.push(...await requestTranslationBatch({
+          batch: smallerBatch,
+          source,
+          model,
+          writer,
+          fetchFn,
+          completeArticle,
+          timeoutMs,
+          repair,
+          allowSplit: false,
+        }));
+      }
+      if (recovered.length > bestTranslations.length) bestTranslations = recovered;
+      if (hasExpectedTranslationSet(batch, recovered)) return recovered;
+    }
+  }
+  if (lastResponseError && bestTranslations.length === 0) throw lastResponseError;
+  return bestTranslations;
 }
 
 function hasExpectedTranslationSet(batch, translations) {

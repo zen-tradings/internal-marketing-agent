@@ -307,7 +307,10 @@ export function openStore(dbPath) {
               error LIKE '%fetch failed%'
               OR error LIKE '网络请求失败%'
               OR error LIKE '%ECONNRESET%'
+              OR error = 'Unexpected end of JSON input'
+              OR error LIKE 'OpenRouter returned malformed JSON response%'
               OR error LIKE '结构化翻译校验失败:%'
+              OR error LIKE '结构化翻译缺块:%'
               OR error LIKE '直译完整性门禁失败:%'
             ))
           )

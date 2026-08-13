@@ -14,8 +14,9 @@ const METHODOLOGY = `【直译任务 — 专属要求,与通用规范冲突时�
 10. 提高关键词和核心观点的高亮密度:正文每约 200 个汉字至少一处,最多每 65 个汉字一处,不足 40 字的短句可以不加高亮。优先高亮关键术语、核心机制、中心句或开头关键句;每处可覆盖 2–64 个字符的关键短语或短句,加粗总字数不超过该段可见字数的 45%,不能把整段全部加粗。小标题继续使用既定标题层级突出显示。`;
 
 export function isRetryableTranslationError(error) {
+  if (error?.retryableTranslationResponse === true) return true;
   const message = String(error?.message || error || '');
-  return /(?:fetch failed|network|socket|econnreset|econnrefused|etimedout|timed out|timeout|enotfound|eai_again|429|rate limit|超时|网络|连接重置|Datalab HTTP 5\d\d|原文获取失败:5\d\d|OpenRouter completion failed: 5\d\d)/i
+  return /(?:fetch failed|network|socket|econnreset|econnrefused|etimedout|timed out|timeout|enotfound|eai_again|429|rate limit|超时|网络|连接重置|Datalab HTTP 5\d\d|原文获取失败:5\d\d|OpenRouter completion failed: 5\d\d|Unexpected end of JSON input|OpenRouter returned malformed JSON response)/i
     .test(message);
 }
 

@@ -38,6 +38,10 @@ test('工作流重试过滤器会立即停止确定性错误，只重试网络�
   assert.equal(isRetryableTranslationError(new Error('Datalab HTTP 503')), true);
   assert.equal(isRetryableTranslationError(new Error('fetch failed: ECONNRESET')), true);
   assert.equal(isRetryableTranslationError(new Error('OpenRouter completion timed out')), true);
+  assert.equal(isRetryableTranslationError(new Error('Unexpected end of JSON input')), true);
+  assert.equal(isRetryableTranslationError(Object.assign(new Error('structured response failed'), {
+    retryableTranslationResponse: true,
+  })), true);
   assert.equal(isRetryableTranslationError(new Error('PDF 页数超过上限:121/120')), false);
 });
 

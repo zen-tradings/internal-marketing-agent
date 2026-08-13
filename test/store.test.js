@@ -91,14 +91,20 @@ test('recoverRunningWorkflow 只自动恢复指定工作流的运行中任务', 
   assert.equal(s.getRun('wechat').status, 'interrupted');
 });
 
-test('requeueRecoverableTranslation 可恢复中断、历史出口、发布、网络或翻译校验失败的直译', () => {
+test('requeueRecoverableTranslation 可恢复中断、历史出口、发布、网络或结构响应失败的直译', () => {
   const s = openStore(':memory:');
-  for (const id of ['egress', 'publish', 'generate', 'validation', 'completeness', 'content']) {
+  for (const id of ['egress', 'publish', 'generate', 'truncated', 'malformed', 'missing', 'validation', 'completeness', 'content']) {
     s.createRun({ id, workflowId: 'translate', source: 'slack', input: '直译', notify: {} });
     s.setStatus(id, 'failed', {
-      stage: ['generate', 'validation', 'completeness', 'content'].includes(id) ? 'generate' : id,
+      stage: ['generate', 'truncated', 'malformed', 'missing', 'validation', 'completeness', 'content'].includes(id) ? 'generate' : id,
       error: id === 'generate'
         ? '网络请求失败:fetch failed (ECONNRESET)'
+        : id === 'truncated'
+          ? 'Unexpected end of JSON input'
+          : id === 'malformed'
+            ? 'OpenRouter returned malformed JSON response after retry'
+            : id === 'missing'
+              ? '结构化翻译缺块:38/51'
         : id === 'validation'
           ? '结构化翻译校验失败:b000067'
           : id === 'completeness'
@@ -113,6 +119,9 @@ test('requeueRecoverableTranslation 可恢复中断、历史出口、发布、�
   assert.equal(s.getRun('publish').status, 'queued');
   assert.equal(s.requeueRecoverableTranslation('generate'), 1);
   assert.equal(s.getRun('generate').status, 'queued');
+  assert.equal(s.requeueRecoverableTranslation('truncated'), 1);
+  assert.equal(s.requeueRecoverableTranslation('malformed'), 1);
+  assert.equal(s.requeueRecoverableTranslation('missing'), 1);
   assert.equal(s.requeueRecoverableTranslation('validation'), 1);
   assert.equal(s.requeueRecoverableTranslation('completeness'), 1);
   assert.equal(s.getRun('validation').status, 'queued');

@@ -2682,7 +2682,20 @@ async function completeArticle({ prompt, model, writer, fetchFn, timeoutMs, syst
         }),
       });
       if (!res.ok) throw new Error(formatOpenRouterHttpError(res, await safeText(res)));
-      const data = await res.json();
+      let data;
+      try {
+        const rawResponse = await res.text();
+        data = JSON.parse(rawResponse);
+      } catch (error) {
+        lastDiagnostic = `malformed_json=${String(error?.message || error || 'unknown')}`;
+        if (attempt === 0) continue;
+        const malformed = new Error(
+          `OpenRouter returned malformed JSON response after retry (${lastDiagnostic})`,
+          { cause: error },
+        );
+        malformed.retryableTranslationResponse = true;
+        throw malformed;
+      }
       const content = extractMessageContent(data?.choices?.[0]?.message?.content);
       if (content) return content;
       lastDiagnostic = describeEmptyCompletion(data);

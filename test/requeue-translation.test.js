@@ -33,7 +33,7 @@ test('受限续跑命令只恢复有 checkpoint 的失败直译', () => {
   store.createRun({ id: runId, workflowId: 'translate', source: 'slack', input: '直译', notify: {} });
   store.setStatus(runId, 'failed', {
     stage: 'generate',
-    error: '结构化翻译校验失败:b000067',
+    error: 'Unexpected end of JSON input',
     finishedAt: Date.now(),
   });
   writeCheckpoint(workDir, runId);

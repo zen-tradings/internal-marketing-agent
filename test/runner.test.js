@@ -393,6 +393,51 @@ test('OpenRouter 连续空正文时返回 finish reason 与 token 诊断', async
   assert.match(result.stderr, /reasoning_tokens=12000/);
 });
 
+test('OpenRouter HTTP 响应外壳首次截断时在请求层重试并成功', async () => {
+  const workflow = tempWorkflow();
+  let completions = 0;
+  const fetchFn = async (url) => {
+    if (String(url).endsWith('/search')) return jsonResponse({ results: [] });
+    completions += 1;
+    if (completions === 1) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        async text() { return '{"choices":['; },
+      };
+    }
+    return jsonResponse({
+      choices: [{ finish_reason: 'stop', message: { content: '---\ntitle: 截断恢复成功\n---\n正文。' } }],
+    });
+  };
+
+  const result = await runWriter({ workflow, input: 'AMAT', config: baseConfig(), fetchFn });
+  assert.equal(result.ok, true);
+  assert.equal(completions, 2);
+});
+
+test('OpenRouter HTTP 响应外壳连续截断时返回可重试诊断', async () => {
+  const workflow = tempWorkflow();
+  let completions = 0;
+  const fetchFn = async (url) => {
+    if (String(url).endsWith('/search')) return jsonResponse({ results: [] });
+    completions += 1;
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      async text() { return '{"choices":['; },
+    };
+  };
+
+  const result = await runWriter({ workflow, input: 'AMAT', config: baseConfig(), fetchFn });
+  assert.equal(result.ok, false);
+  assert.equal(completions, 2);
+  assert.match(result.stderr, /malformed JSON response after retry/);
+  assert.match(result.stderr, /Unexpected end of JSON input/);
+});
+
 test('OpenRouter 输出缺 title frontmatter 时返回 ok:false 且不保留 article.md', async () => {
   const workflow = tempWorkflow();
   const fetchFn = async (url) => {

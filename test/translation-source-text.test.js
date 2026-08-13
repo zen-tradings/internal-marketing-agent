@@ -1513,6 +1513,48 @@ test('长文正常翻译批次最多 24 个单元，尽早写入分块 checkpoin
   assert.equal(checkpoint.translations.length, 26);
 });
 
+test('结构化响应连续截断时自动缩小批次并完成翻译', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/split-recovery',
+    title: 'Split recovery',
+    author: '',
+    sha256: 'split-recovery-after-truncated-json',
+    blocks: Array.from({ length: 8 }, (_, index) => ({
+      id: `b${String(index + 1).padStart(6, '0')}`,
+      order: index,
+      type: 'paragraph',
+      text: `Source item ${index + 1}.`,
+    })),
+  };
+  const batchSizes = [];
+  const translated = await translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle: async ({ prompt }) => {
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      batchSizes.push(payload.units.length);
+      if (payload.units.length > 6) return '{"translations":[';
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title' ? '分批恢复' : `译文条目 ${unit.text.match(/\d+/)[0]}。`,
+        })),
+      });
+    },
+  });
+
+  assert.deepEqual(batchSizes, [9, 9, 6, 3]);
+  assert.equal(translated.translatedTitle, '分批恢复');
+  assert.equal(translated.blocks.length, 8);
+  assert.equal(translated.blocks.at(-1).translatedText, '译文条目 8。');
+});
+
 test('异常高亮不会触发内容重译，安全清理后保留完整数字', async () => {
   const source = {
     version: 5,
