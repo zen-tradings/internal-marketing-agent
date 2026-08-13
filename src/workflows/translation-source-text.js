@@ -2555,8 +2555,12 @@ function chineseWrittenNumbers(value) {
     const prefixText = text.slice(0, match.index).trimEnd();
     const prefix = prefixText.at(-1) || '';
     if (/[0-9.]$/.test(prefix) && /^[十百千万亿兆]/.test(raw)) continue;
+    const boundaryAfter = !/\p{Script=Han}/u.test(after);
+    const counterAfter = /[个项次名位份套种只家台条点倍成年月日时分秒周季届级章页组轮期步方侧端类笔股档架件者人]/.test(after);
+    const ordinal = prefix === '第';
     const standalone = raw.length === 1
-      && /(?:第|为|等于|设为|共|约|近|达|至|到)$/.test(prefixText)
+      && (ordinal || (/(?:为|等于|设为|共|约|近|达|至|到)$/.test(prefixText)
+        && (boundaryAfter || counterAfter)))
       && !/[零〇一二两三四五六七八九]/.test(before)
       && !/[零〇一二两三四五六七八九]/.test(after);
     if (raw.length < 2 && !/[十百千万亿兆点]/.test(raw) && !standalone) continue;
