@@ -104,6 +104,25 @@ test('Opening Digest 专用翻译把可配置长超时传给模型调用', async
   assert.equal(observedTimeout, 420000);
 });
 
+test('OpenRouter 返回损坏 JSON 时按局部修复预算重试而不立即放弃微信稿', async () => {
+  const source = { article: { preheader: 'Market signals.', body: '' }, metrics: [] };
+  let calls = 0;
+  const result = await translateOpeningDigestPayload(source, {
+    writer: { model: 'test', openrouterApiKey: 'test-key', baseUrl: 'https://openrouter.test' },
+    fetchFn: async () => {
+      calls += 1;
+      const content = calls < 3
+        ? '{"translations":[{"id":"preheader","text":"市场信号。"}'
+        : JSON.stringify({ translations: [{ id: 'preheader', text: '市场信号。' }] });
+      return { ok: true, status: 200, async text() { return JSON.stringify({ choices: [{ message: { content } }] }); } };
+    },
+  });
+  assert.equal(calls, 3);
+  assert.equal(result.translations[0].text, '市场信号。');
+  assert.equal(result.repairs.length, 2);
+  assert.ok(result.repairs.every((repair) => repair.issues.some((issue) => /JSON 无效/.test(issue))));
+});
+
 test('Opening Digest 品牌门禁不把英文标题短语误判为机构名', async () => {
   const source = {
     article: {

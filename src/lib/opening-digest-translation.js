@@ -56,7 +56,16 @@ export async function translateOpeningDigestPayload(payload, {
       for (let round = 0; round < 3 && pending.length; round++) {
         const protectedUnits = pending.map(protectTranslationUnit);
         const protectionById = new Map(protectedUnits.map((item) => [item.unit.id, item]));
-        const result = await complete({ units: protectedUnits.map((item) => item.unit), writer, fetchFn, round, timeoutMs });
+        let result;
+        try {
+          result = await complete({ units: protectedUnits.map((item) => item.unit), writer, fetchFn, round, timeoutMs });
+        } catch (error) {
+          if (!error?.retryableTranslationResponse) throw error;
+          const issues = [`模型响应 JSON 无效:${error.message}`];
+          pending = pending.map((unit) => ({ ...unit, issues }));
+          pending.forEach((unit) => repairs.push({ round: round + 1, id: unit.id, issues }));
+          continue;
+        }
         const returnedItems = Array.isArray(result?.translations) ? result.translations : [];
         const expectedIds = pending.map((unit) => unit.id);
         const returnedIds = returnedItems.map((item) => String(item.id));
@@ -310,7 +319,9 @@ async function completeTranslation({ units, writer, fetchFn, round, timeoutMs })
     });
     const raw = await response.text();
     if (!response.ok) throw translationError(`OpenRouter 中文直译失败:${response.status} ${raw.slice(0, 300)}`);
-    const data = JSON.parse(raw);
+    let data;
+    try { data = JSON.parse(raw); }
+    catch (error) { throw translationResponseError(`OpenRouter 响应外壳不是有效 JSON:${error.message}`); }
     return parseJson(data?.choices?.[0]?.message?.content);
   } catch (error) {
     if (error?.name === 'AbortError') throw translationError('Opening Digest 中文直译超时');
@@ -322,10 +333,13 @@ async function completeTranslation({ units, writer, fetchFn, round, timeoutMs })
 function parseJson(value) {
   const raw = Array.isArray(value) ? value.map((part) => part?.text || part).join('') : String(value || '');
   const clean = raw.replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
-  try { return JSON.parse(clean); } catch {}
+  let directError;
+  try { return JSON.parse(clean); } catch (error) { directError = error; }
   const start = clean.indexOf('{'); const end = clean.lastIndexOf('}');
-  if (start >= 0 && end > start) return JSON.parse(clean.slice(start, end + 1));
-  throw translationError('OpenRouter 中文直译未返回有效 JSON');
+  if (start >= 0 && end > start) {
+    try { return JSON.parse(clean.slice(start, end + 1)); } catch (error) { directError = error; }
+  }
+  throw translationResponseError(`OpenRouter 中文直译未返回有效 JSON:${directError?.message || '响应为空'}`);
 }
 
 function validMapping(units, translations) {
@@ -338,3 +352,8 @@ function hashPayload(payload, model) {
 }
 
 function translationError(message) { const error = new Error(message); error.stage = 'translation'; return error; }
+function translationResponseError(message) {
+  const error = translationError(message);
+  error.retryableTranslationResponse = true;
+  return error;
+}
