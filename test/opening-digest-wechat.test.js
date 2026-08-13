@@ -177,6 +177,21 @@ test('英文金额的数字与量级作为一个不可变 token 保护', () => {
   assert.match(restored, /\$104 billion/);
 });
 
+test('英文引语边界在严格 JSON 翻译前被占位符保护并无损还原', () => {
+  const unit = {
+    id: 'body-6', kind: 'paragraph',
+    text: 'Bloom called the fuel cells "an on-site power solution delivering reliable power quietly and ultra-low emissions." NBIS closed at $259.20.',
+  };
+  const protectedUnit = protectTranslationUnit(unit);
+  assert.doesNotMatch(protectedUnit.unit.text, /["“”]/);
+  assert.equal(protectedUnit.tokens.filter((token) => token.value === '"').length, 2);
+  const translated = protectedUnit.unit.text
+    .replace('Bloom called the fuel cells', 'Bloom 将这些燃料电池称为')
+    .replace(' closed at ', ' 收盘于 ');
+  assert.equal(restoreTranslationUnit(translated, protectedUnit.tokens),
+    'Bloom 将这些燃料电池称为 "an on-site power solution delivering reliable power quietly and ultra-low emissions." NBIS 收盘于 $259.20.');
+});
+
 test('模型输入不泄露未保护原文且重叠缩写 token 可无损还原', () => {
   const unit = {
     id: 'body-4', kind: 'paragraph',

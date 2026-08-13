@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 9;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 10;
 const MODEL_TRANSLATION_BATCH_SIZE = 1;
 
 const FIXED_TERMS = new Map([
@@ -243,6 +243,11 @@ export function protectTranslationUnit(unit) {
     ...brandTokens(source, unit.kind),
     ...(source.match(/\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+\b/g) || []),
     ...(source.match(/\b(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z][A-Za-z0-9]{2,}\b/g) || []),
+    // Qwen's strict JSON-schema output can stop a translated string at a source
+    // quotation boundary while still reporting finish_reason=stop. Protecting the
+    // quotation marks keeps the boundary opaque to the model; restore then puts
+    // the exact original punctuation back before the invariant checks run.
+    ...(source.match(/["“”]/g) || []),
   ];
   const values = [...new Set(candidates.filter(Boolean))].sort((a, b) => b.length - a.length);
   const ranges = [];
