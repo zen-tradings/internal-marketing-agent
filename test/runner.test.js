@@ -578,6 +578,42 @@ test('Opening Digest 严重事实问题修复并复核通过后可继续', async
   assert.equal(trace.factReview.repaired, true);
 });
 
+test('Opening Digest 复核不得把已删除的无来源比较基数继续绑到有来源数字', async () => {
+  const workflow = openingWorkflow();
+  const bad = '---\ntitle: Zen Opening Digest\n---\nQ2 revenue surged to $582.3 million from $105.1 million a year earlier.';
+  const fixed = '---\ntitle: Zen Opening Digest\n---\nQ2 revenue surged to $582.3 million.';
+  const message = 'The $582.3 million Q2 revenue figure is sourced, but the $105.1 million prior-year comparison is not found in any supplied source.';
+  const initial = {
+    category: 'core_fact_contradiction', confidence: 'high', core: true,
+    claim: 'Q2 revenue surged to $582.3 million from $105.1 million a year earlier',
+    evidence: message, source_url: 'https://example.com/a', message,
+  };
+  const stale = {
+    ...initial,
+    claim: 'Q2 revenue surged to $582.3 million',
+  };
+  let completion = 0;
+  const result = await runWriter({
+    workflow,
+    input: 'opening',
+    config: baseConfig(),
+    fetchFn: async (url) => {
+      if (String(url).endsWith('/search')) return jsonResponse({ results: [{
+        title: 'Source', url: 'https://example.com/a', text: 'Q2 revenue was $582.3 million.',
+      }] });
+      completion += 1;
+      if (completion === 1) return jsonResponse({ choices: [{ message: { content: bad } }] });
+      if (completion === 2) return jsonResponse({ choices: [{ message: { content: JSON.stringify({ issues: [initial], revised_markdown: fixed }) } }] });
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({ issues: [stale] }) } }] });
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(fs.readFileSync(result.articlePath, 'utf8'), fixed);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.factReview.verificationHistory[0].dismissedStaleIssues.length, 1);
+  assert.equal(trace.factReview.verificationHistory[0].severeIssues.length, 0);
+});
+
 test('Opening Digest 严重事实问题两轮修复仍失败时硬停，不降级为数据版', async () => {
   const workflow = openingWorkflow();
   const bad = '---\ntitle: Zen Opening Digest\n---\nRevenue was 900 billion.';

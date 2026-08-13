@@ -2069,8 +2069,10 @@ async function reviewAndRepairOpeningDigest({ article, input, research, workflow
       throw hardFailure(`已发现严重事实问题，但修复复核失败:${error.message}`);
     }
     issues = normalizeOpeningReviewIssues(verification.issues);
-    severe = severeOpeningIssues(issues, allowed);
-    verificationHistory.push({ round: round + 1, issues, severeIssues: severe });
+    const dismissedStaleIssues = staleSupportedOpeningIssues(issues, severe);
+    const dismissed = new Set(dismissedStaleIssues);
+    severe = severeOpeningIssues(issues.filter((issue) => !dismissed.has(issue)), allowed);
+    verificationHistory.push({ round: round + 1, issues, dismissedStaleIssues, severeIssues: severe });
     if (!severe.length) {
       return {
         article: current,
@@ -2141,6 +2143,29 @@ function severeOpeningIssues(issues, allowed) {
     && issue.claim.length >= 4
     && issue.evidence.length >= 4
     && allowedUrls.has(referenceUrlKey(issue.sourceUrl)));
+}
+
+function staleSupportedOpeningIssues(issues, previousSevere) {
+  return issues.filter((issue) => (previousSevere || []).some((previous) => {
+    if (!issue.claim || !previous.claim || issue.claim === previous.claim
+      || referenceUrlKey(issue.sourceUrl) !== referenceUrlKey(previous.sourceUrl)
+      || !previous.claim.includes(issue.claim)) return false;
+    const explanation = [issue.message, issue.evidence].find((value) => /\b(?:but|however)\b/i.test(value || '')) || '';
+    const [supported = '', unsupported = ''] = explanation.split(/\b(?:but|however)\b/i, 2);
+    if (!/\b(?:supported|sourced|reasonable rounding)\b/i.test(supported)
+      || /\b(?:not supported|not sourced|not found|unsupported|no source)\b/i.test(supported)
+      || !/\b(?:not supported|not sourced|not found|unsupported|no source|does not|doesn't)\b/i.test(unsupported)) return false;
+    const claimNumbers = reviewNumericTokens(issue.claim);
+    if (!claimNumbers.length) return false;
+    const supportedNumbers = new Set(reviewNumericTokens(supported));
+    const unsupportedNumbers = new Set(reviewNumericTokens(unsupported));
+    return claimNumbers.every((token) => supportedNumbers.has(token) && !unsupportedNumbers.has(token));
+  }));
+}
+
+function reviewNumericTokens(value) {
+  return (String(value || '').match(/(?<![A-Za-z0-9])[-+]?[$€£¥]?\d+(?:[,.]\d+)*(?:%|‰)?/g) || [])
+    .map((token) => token.replace(/[$€£¥,%‰]/g, '').replace(/^\+/, ''));
 }
 
 function openingDigestHardError(message) {
