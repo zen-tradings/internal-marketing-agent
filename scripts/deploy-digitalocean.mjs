@@ -243,17 +243,17 @@ sudo tar -xzf "$archive" -C "$stage"
 printf '%s\n' "$sha" | sudo tee "$stage/.deploy-commit" >/dev/null
 sudo chown -R zenbot:zenbot "$stage"
 sudo -u zenbot npm --prefix "$stage" ci </dev/null
-python3 -c 'import sys; assert sys.version_info >= (3, 11), sys.version'
-sudo -u zenbot python3 -m venv "$stage/.venv"
-sudo -u zenbot "$stage/.venv/bin/python" -m pip install --disable-pip-version-check -r "$stage/python/requirements-qdii.lock"
+python3 -c 'import sys; assert sys.version_info >= (3, 11), sys.version' </dev/null
+sudo -u zenbot python3 -m venv "$stage/.venv" </dev/null
+sudo -u zenbot "$stage/.venv/bin/python" -m pip install --disable-pip-version-check -r "$stage/python/requirements-qdii.lock" </dev/null
 sudo -u zenbot env \
   QDII_PYTHON_PATH="$stage/.venv/bin/python" \
   QDII_WORKER_PATH="$stage/python/qdii_worker.py" \
-  node "$stage/scripts/check-qdii-python.mjs"
+  node "$stage/scripts/check-qdii-python.mjs" </dev/null
 sudo -u zenbot env \
   OPENING_DIGEST_EARNINGS_PYTHON_PATH="$stage/.venv/bin/python" \
   OPENING_DIGEST_EARNINGS_WORKER_PATH="$stage/python/opening_digest_worker.py" \
-  node "$stage/scripts/check-opening-digest-python.mjs"
+  node "$stage/scripts/check-opening-digest-python.mjs" </dev/null
 sudo -u zenbot npm --prefix "$stage" run check </dev/null
 
 if [ -f "$backup_helper" ]; then
