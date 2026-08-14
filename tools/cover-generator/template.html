@@ -42,7 +42,7 @@
   titleEl.textContent = title;
   subtitleEl.textContent = subtitle;
 
-  // 长标题保持单一视觉层级，按字数自适应，不遮挡背景右侧球体。
+  // Keep long titles at one visual level, adapting by character count without covering the sphere on the right.
   const length = [...title].length;
   if (length > 28) titleEl.style.fontSize = '28px';
   else if (length > 20) titleEl.style.fontSize = '34px';
