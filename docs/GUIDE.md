@@ -132,9 +132,9 @@ scripts/install-launchd.sh
 
 ### Linux / DigitalOcean systemd
 
-目录布局、首次安装、不可变发布包、数据库备份、安全更新和健康检查见 [`../deploy/README.md`](../deploy/README.md)。QDII 开发环境先运行 `npm run setup:qdii` 建立 Python 3.11+ 虚拟环境。更新时在独立 release 目录安装 Node/Python 锁定依赖并执行检查，再切换并重启唯一的 systemd 实例；现役目录用 `.deploy-commit` 标记，不依赖在线 `git pull`。
+目录布局、首次安装、不可变发布包、SQLite 与运行资产恢复单元备份、安全更新和健康检查见 [`../deploy/README.md`](../deploy/README.md)。QDII 开发环境先运行 `npm run setup:qdii` 建立 Python 3.11+ 虚拟环境。更新只能通过 `npm run deploy:digitalocean`：在独立 release 目录安装 Node/Python 锁定依赖并执行检查，再验证 SQLite 与运行资产恢复单元备份、切换并重启唯一的 systemd 实例；现役目录用 `.deploy-commit` 标记，不依赖在线 `git pull`。
 
-改任何 `src/` 代码后的验收顺序：`npm run check`（测试不使用真实业务凭据；依赖审计会访问 npm registry）→ 按需执行真实连接检查 → 备份 SQLite → 明确重启对应服务。不要从 Git 拉取后未经检查直接重启。
+改任何 `src/` 代码后的验收顺序：`npm run check`（测试不使用真实业务凭据；依赖审计会访问 npm registry）→ 按需执行真实连接检查 → 验证 SQLite 与运行资产恢复单元备份 → 明确重启对应服务。不要从 Git 拉取后未经检查直接重启。
 
 结构化校验失败的直译不要手工改数据库。确认目标版本已部署后，按 [`../deploy/README.md`](../deploy/README.md) 的受限续跑步骤使用数据库 run-id 恢复；命令验证 checkpoint 和 `media_id` 后，重启唯一实例让持久化队列接管。旧版代码围栏/四空格门禁误拦截的四类 V2 分析，只能用 `npm run requeue:analysis-gate -- <run-id>` 恢复；该命令同样只入队、不直接运行。
 

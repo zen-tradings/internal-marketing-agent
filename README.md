@@ -57,6 +57,7 @@ scripts/
 
 deploy/
 ├── zen-content-hub.service Linux systemd 服务模板
+├── zen-content-hub-backup* SQLite 与运行资产备份脚本、单元及定时器
 └── README.md               DigitalOcean 部署、更新与备份手册
 ```
 
@@ -118,7 +119,7 @@ launchctl kickstart -k gui/$(id -u)/com.zentrading.content-hub
 
 ### Linux / DigitalOcean 常驻
 
-仓库提供了 systemd 服务模板、最小目录布局、健康检查、更新与 SQLite 备份步骤：[`deploy/README.md`](deploy/README.md)。推荐把代码放在 `/opt/zen-content-hub`，运行数据放在 `/var/lib/zen-content-hub`，密钥放在 `/etc/zen-content-hub/zen-content-hub.env`。
+仓库提供了 systemd 服务模板、最小目录布局、健康检查、更新与 SQLite/运行资产恢复单元备份步骤：[`deploy/README.md`](deploy/README.md)。推荐把代码放在 `/opt/zen-content-hub`，运行数据放在 `/var/lib/zen-content-hub`，密钥放在 `/etc/zen-content-hub/zen-content-hub.env`。
 
 健康端点默认关闭；设置 `HEALTH_HOST=127.0.0.1` 和 `HEALTH_PORT=8787` 后启用：
 
@@ -129,7 +130,7 @@ curl --fail http://127.0.0.1:8787/ready
 
 `/health` 表示进程与本地状态可读；`/ready` 还要求 Slack Socket Mode 确实处于连接状态。Slack 瞬时离线不会阻塞已持久化任务执行，成功、失败、取消、澄清和 QDII 核心回复会写入 SQLite outbox，并在重新连接后按任务当前终态补发；过期状态通知会被丢弃，通知故障不会反向改写已完成的草稿结果。
 
-代码更新不会自动生效。把通过 CI 的明确提交按 [`deploy/README.md`](deploy/README.md) 打成不可变发布包，在独立 release 目录执行 `npm ci && npm run check`，备份 SQLite 后再切换并重启唯一的 systemd 实例；不要从本地脏工作树直接覆盖生产目录。
+代码更新不会自动生效。把通过 CI 的明确提交按 [`deploy/README.md`](deploy/README.md) 打成不可变发布包，在独立 release 目录执行 `npm ci && npm run check`，备份 SQLite 与运行资产恢复单元后再切换并重启唯一的 systemd 实例；不要从本地脏工作树直接覆盖生产目录。
 
 `RUN_RETENTION_DAYS` 控制终态任务记录及其独立运行目录的保留天数，`SLACK_THREAD_RETENTION_DAYS` 控制线程上下文和事件去重记录；清理在启动时执行。`cancelled` 和 `needs_input` 与其它终态记录使用同一保留规则。主动停止会删除整个未完成运行目录；等待澄清的任务只保留 `research-trace.json`，其余半成品立即清理。调整为更短期限前先备份数据库和 `/var/lib/zen-content-hub`。
 
