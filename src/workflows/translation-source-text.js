@@ -2487,7 +2487,7 @@ function isClearlyUntranslated(source, translated) {
   if (sourceEnglish < 40) return false;
   const sourceWords = visibleSource.match(/[A-Za-z][A-Za-z'-]*/g) || [];
   const capitalized = sourceWords.filter((word) => /^[A-Z]/.test(word)).length;
-  if (/,/.test(visibleSource) && sourceWords.length >= 4 && capitalized / sourceWords.length >= 0.7) return false;
+  if (/[,;]/.test(visibleSource) && sourceWords.length >= 4 && capitalized / sourceWords.length >= 0.7) return false;
   const words = visibleTranslated.match(/[A-Za-z][A-Za-z'-]*/g) || [];
   const han = (visibleTranslated.match(/\p{Script=Han}/gu) || []).length;
   return words.length >= 10 && han < 4;

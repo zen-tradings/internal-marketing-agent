@@ -1272,6 +1272,27 @@ test('b000036 回归：纯公式与引用占位符不被 ZEN_INLINE 名称误判
   assert.deepEqual(assessment.warnings, []);
 });
 
+test('b000011 回归：分号分隔的作者机构专名列表不误判为未翻译', () => {
+  const assessment = assessTranslationUnit({
+    id: 'b000011',
+    kind: 'paragraph',
+    text: 'Affiliations:\nTom Cunningham (METR); Lukas Althoff (Stanford University); Basil Halperin (University of Virginia); Brian Jabarian (Carnegie Mellon University and Google AI); Andrew Koh (Columbia University); Arjun Ramani (MIT); Phil Trammell (Stanford DEL and Epoch AI); Parker Whitfill (METR); Cheryl Wu (Yale University).',
+  }, '机构：Tom Cunningham（METR）；Lukas Althoff（Stanford University）；Basil Halperin（University of Virginia）；Brian Jabarian（Carnegie Mellon University and Google AI）；Andrew Koh（Columbia University）；Arjun Ramani（MIT）；Phil Trammell（Stanford DEL and Epoch AI）；Parker Whitfill（METR）；Cheryl Wu（Yale University）。', {
+    afterRepair: true,
+  });
+  assert.deepEqual(assessment.hardErrors, []);
+  assert.deepEqual(assessment.warnings, []);
+
+  const untranslatedProse = assessTranslationUnit({
+    id: 'b000012',
+    kind: 'paragraph',
+    text: 'The first model estimates demand; the second model estimates supply; the final model combines both results for policy analysis.',
+  }, 'The first model estimates demand; the second model estimates supply; the final model combines both results for policy analysis.', {
+    afterRepair: true,
+  });
+  assert.match(untranslatedProse.hardErrors.join(' '), /疑似未完成翻译/);
+});
+
 test('复合英文数字词、序数和中文数字表达按数值等价通过', () => {
   const complex = assessTranslationUnit({
     id: 'b000001',
