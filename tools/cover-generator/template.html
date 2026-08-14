@@ -1,6 +1,13 @@
 <meta charset="utf-8">
 <style>
   /* Zen Trading fixed white cover background · 900×383 */
+  @font-face{
+    font-family:"Zen Rounded CJK";
+    src:url("__ZEN_COVER_FONT__") format("woff2");
+    font-display:block;
+    font-style:normal;
+    font-weight:500;
+  }
   :root{
     --ink:#294a63;
     --muted:#62798a;
@@ -16,9 +23,10 @@
   .main{position:absolute;left:44px;top:137px;width:600px;text-align:left}
   .edition{margin-bottom:12px;font-size:10px;line-height:1;letter-spacing:.22em;
     font-weight:600;color:var(--muted);text-transform:uppercase}
-  h1{max-width:600px;font-size:48px;line-height:1.12;letter-spacing:.01em;font-weight:650;color:var(--ink)}
-  .subtitle{max-width:545px;margin-top:14px;font-family:Georgia,"Songti SC","STSong",serif;
-    font-size:18px;line-height:1.35;letter-spacing:.01em;font-weight:600;color:var(--ink)}
+  h1{max-width:600px;font-family:"Zen Rounded CJK","PingFang SC",sans-serif;
+    font-size:48px;line-height:1.12;letter-spacing:.01em;font-weight:500;color:var(--ink)}
+  .subtitle{max-width:545px;margin-top:14px;font-family:"Zen Rounded CJK","PingFang SC",sans-serif;
+    font-size:18px;line-height:1.35;letter-spacing:.01em;font-weight:500;color:var(--ink)}
   .subtitle:empty{display:none}
 </style>
 

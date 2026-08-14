@@ -61,10 +61,10 @@ publishing or public-IP gate.
 /var/lib/zen-content-hub/      SQLite database and per-run artifacts
 ```
 
-Install Node.js 22+, Python 3.11+ with `venv`, Chrome/Chromium, Poppler, and a Simplified Chinese font
-package such as Ubuntu's `fonts-noto-cjk`. Without the CJK font, headless Chrome
-renders Chinese cover titles as empty boxes. The cover generator is versioned
-in `tools/cover-generator`; run `npm ci` in `/opt/zen-content-hub` and set these
+Install Node.js 22+, Python 3.11+ with `venv`, Chrome/Chromium, and Poppler.
+The cover generator and its OFL-licensed Resource Han Rounded CN Medium display font are versioned
+in `tools/cover-generator`, so cover rendering does not depend on host-installed CJK fonts.
+Run `npm ci` in `/opt/zen-content-hub` and set these
 Linux-specific values (use the actual browser executable installed on the
 host):
 

@@ -23,6 +23,11 @@ export const DEFAULT_COVER_BACKGROUND = resolve(
   'assets',
   'zen-cover-background.png'
 );
+export const DEFAULT_COVER_FONT = resolve(
+  MODULE_DIR,
+  'fonts',
+  'ResourceHanRoundedCN-Medium.woff2'
+);
 
 const COMMON_BROWSER_PATHS = [
   '/usr/bin/chromium',
@@ -59,6 +64,9 @@ export async function renderCover({
   if (!existsSync(DEFAULT_COVER_BACKGROUND)) {
     throw new Error(`固定封面背景不存在: ${DEFAULT_COVER_BACKGROUND}`);
   }
+  if (!existsSync(DEFAULT_COVER_FONT)) {
+    throw new Error(`固定封面字体不存在: ${DEFAULT_COVER_FONT}`);
+  }
 
   const template = readFileSync(join(MODULE_DIR, 'template.html'), 'utf8');
   const serializedData = JSON.stringify(data)
@@ -67,6 +75,7 @@ export async function renderCover({
     .replaceAll('\u2029', '\\u2029');
   const html = template
     .replaceAll('__ZEN_COVER_BACKGROUND__', pathToFileURL(DEFAULT_COVER_BACKGROUND).href)
+    .replaceAll('__ZEN_COVER_FONT__', pathToFileURL(DEFAULT_COVER_FONT).href)
     .replace(
       '<script>',
       `<script>window.DATA = ${serializedData};</script>\n<script>`
@@ -89,6 +98,12 @@ export async function renderCover({
     });
     const page = await browser.newPage({ viewport: { width: COVER_WIDTH, height: COVER_HEIGHT } });
     await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'load', timeout: 30000 });
+    await page.evaluate(async () => {
+      await document.fonts.load('500 48px "Zen Rounded CJK"', '微信公众号封面');
+      if (!document.fonts.check('500 48px "Zen Rounded CJK"', '微信公众号封面')) {
+        throw new Error('封面中文字体加载失败');
+      }
+    });
     await page.screenshot({ path: absoluteOutPath, type: 'png', omitBackground: true });
   } finally {
     if (browser) await browser.close();
