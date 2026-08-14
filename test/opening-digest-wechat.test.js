@@ -23,7 +23,7 @@ const BODY = `## Earnings ahead
 
 ## Today's catalysts
 - [NVIDIA Corporation update](https://example.com/a) moved SPY 10.25% at 10:15 EDT.
-- OCC reported a second catalyst for QQQ.
+- OCC reported a second catalyst for QQQ ([CNBC](https://example.com/b)).
 
 ## Market read
 NVIDIA Corporation remains the central condition; 2026 guidance is unchanged.`;
@@ -62,7 +62,7 @@ function translated(source = payload()) {
         'body-2': '**8月10日 周一：** [NVDA](https://finance.yahoo.com/calendar/earnings) 盘后（预计）',
         'body-3': '今日催化',
         'body-4': '[NVIDIA 公司动态](https://example.com/a) 使 SPY 在 10:15 EDT 变动 10.25%。',
-        'body-5': 'OCC 报告了影响 QQQ 的第二项催化。',
+        'body-5': 'OCC 报告了影响 QQQ 的第二项催化（[CNBC](https://example.com/b)）。',
         'body-6': '市场解读',
         'body-7': 'NVIDIA 公司仍是核心条件；2026 年指引保持不变。',
         'metric-note-1': '2Y UST 是最新可用的 U.S. Treasury 每日票面收益率。',
@@ -304,6 +304,9 @@ test('中文微信 HTML 锁定 @5、9 格行情、OIC 20×8 且低于官方大�
   assert.ok(html.length < WECHAT_DRAFT_MAX_CHARS, `${html.length} chars`);
   assert.ok(Buffer.byteLength(html) < 1024 * 1024);
   assert.doesNotMatch(html, /href=/i, '微信正文不得保留站外 href');
+  assert.doesNotMatch(html, /CNBC|example\.com|finance\.yahoo\.com/i, '微信正文不得保留原文来源引用或 URL');
+  assert.match(html, /NVIDIA 公司动态/, '承担正文语义的链接文字应保留为纯文本');
+  assert.match(html, /NVDA/, '财报预告中的 Ticker 应保留为纯文本');
   const validation = validateWechatOpeningDigestDraft({ content: { news_item: [{ title: 'Zen 开市日报 · 2026-08-10', digest: '早盘市场信号。', content: html }] } }, {
     title: 'Zen 开市日报 · 2026-08-10', payload: source, translation,
   });

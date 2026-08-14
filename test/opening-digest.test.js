@@ -442,6 +442,7 @@ test('complete digest renders template, address, options and schedules without c
   assert.deepEqual(uploads, ['opening-digest-cover-2026-08-10.png']);
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
   assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@6"/);
+  assert.match(create.body.body, /href="https:\/\/example\.com\/a"/, '英文邮件必须继续保留来源链接');
   assert.match(create.body.body, /href="https:\/\/www\.linkedin\.com\/company\/110921483"[^>]*>LinkedIn<\/a>/);
   assert.match(create.body.body, /\.zen-email-content \{ padding:20px 8px !important; \}/);
   assert.match(create.body.body, /Zen Trading · 700 Leahy St, Redwood City, CA 94061/);

@@ -245,9 +245,22 @@ function metricStrings(metric) {
   const change = Number.isFinite(metric.changePct) ? `${metric.changePct >= 0 ? '+' : ''}${metric.changePct.toFixed(2)}%` : '';
   return [value, change];
 }
-function inlineMarkup(value) { return escapeHtml(stripMarkdownLinks(value)).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>'); }
-function stripMarkdownLinks(value) { return String(value || '').replace(/\[([^\]]+)\]\((?:https?:\/\/|mailto:)[^)]+\)/g, '$1'); }
-function stripInlineMarkdown(value) { return stripMarkdownLinks(value).replace(/\*\*([^*]+)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1'); }
+function inlineMarkup(value) { return escapeHtml(stripOpeningDigestSourceLinks(value)).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>'); }
+function stripOpeningDigestSourceLinks(value) {
+  return String(value || '')
+    // Parenthetical links are source citations rather than sentence content in
+    // the Opening Digest contract. Remove both the publisher label and URL.
+    .replace(/[\uff08(]\s*\[([^\]]+)]\(((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+)\)\s*[)\uff09]/gi, '')
+    // A linked headline, company, or ticker can carry sentence meaning. Keep its
+    // visible label as plain text while removing the off-site destination.
+    .replace(/\[([^\]]+)]\(((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+)\)/gi, '$1')
+    .replace(/<(?:https?:\/\/|mailto:)[^>\s]+>/gi, '')
+    .replace(/(?:https?:\/\/|mailto:)[^\s<>"'\uff0c\u3002\uff1b\uff01\uff1f)\uff09]+/gi, '')
+    .replace(/[ \t]+([,.;:!?\uff0c\u3002\uff1b\uff1a\uff01\uff1f])/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+function stripInlineMarkdown(value) { return stripOpeningDigestSourceLinks(value).replace(/\*\*([^*]+)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1'); }
 function normalizeText(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
 function formatCapturedAt(value) { try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)); } catch { return String(value || ''); } }
 function chineseDate(dateKey) { const [year, month, day] = dateKey.split('-'); return `${year}年${Number(month)}月${Number(day)}日`; }
