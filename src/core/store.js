@@ -138,7 +138,7 @@ export function openStore(dbPath) {
     },
     getRun(id) { return db.prepare('SELECT * FROM runs WHERE id = ?').get(id); },
     setMediaId(id, mediaId, title) {
-      // 早写:发布成功后立刻落库 media_id(不等整条 run 收尾),供重试/重启幂等判断
+      // Persist media_id immediately after publication, before run completion, for retry/restart idempotency.
       db.prepare(`UPDATE runs SET media_id = ?, title = COALESCE(?, title) WHERE id = ?`)
         .run(mediaId, title ?? null, id);
     },
@@ -374,7 +374,7 @@ export function openStore(dbPath) {
         `, id);
     },
     requeueRecoverableTranslation(id) {
-      // egress 只用于兼容旧版本已落库的失败记录；当前运行时不再产生出口门禁失败。
+      // egress exists only for historical persisted failures; current runtime no longer creates egress-gate failures.
       return requeueAndClearNotifications(db, `
         UPDATE runs
         SET status = 'queued', stage = NULL, error = NULL, started_at = NULL, finished_at = NULL

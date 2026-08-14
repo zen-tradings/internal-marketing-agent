@@ -1,5 +1,5 @@
-// 微信正文的表格没有可靠的横向滚动容器。这里先判断表格在手机宽度下是否仍可读，
-// 对不可读的宽表按列自动拆分：首列作为记录键保留，其余指标每组三列。
+// WeChat body tables have no reliable horizontal scrolling. Determine mobile readability first, then split
+// unreadable wide tables by columns while retaining the first column as the record key and grouping three metrics.
 
 const DEFAULT_MAX_COLUMNS = 4;
 
@@ -35,7 +35,7 @@ export function findUnreadableTables(markdown, { maxColumns = DEFAULT_MAX_COLUMN
   const tables = parseMarkdownTables(lines);
   const unreadable = tables.filter((table) => !table.valid || !isMobileReadableTable(table, { maxColumns }));
 
-  // 表头与分隔行列数不一致时 parseMarkdownTables 不会接纳为有效表格，单独标记。
+  // parseMarkdownTables rejects a table when header and separator column counts differ; mark it separately.
   for (let i = 0; i < lines.length - 1; i += 1) {
     const header = parseTableRow(lines[i]);
     const divider = parseTableRow(lines[i + 1]);
@@ -52,8 +52,8 @@ export function isMobileReadableTable(table, { maxColumns = DEFAULT_MAX_COLUMNS 
   if (table.columnCount <= maxColumns) return true;
   if (table.columnCount !== maxColumns + 1) return false;
 
-  // 允许非常紧凑的五列表，例如 Quarter/Rev/GM/OM/EPS。中文按双宽计算，
-  // 同时限制单列和总内容宽度，避免长表头被压成逐字竖排。
+  // Allow very compact five-column tables such as Quarter/Rev/GM/OM/EPS. Count Han characters as double width and
+  // cap individual and total content widths so long headers cannot collapse into vertical characters.
   const widths = table.headers.map((_, index) => Math.max(
     ...[table.headers, ...table.rows].map((row) => visualWidth(row[index] || '')),
   ));

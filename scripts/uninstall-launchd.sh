@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 卸载 zen-slack-bot (Zen Content Hub) 的 macOS launchd 常驻。
-# 对应 scripts/install-launchd.sh。容忍"当前未加载"的情况,可重复执行。
+# Uninstall the zen-slack-bot (Zen Content Hub) macOS launchd service.
+# Counterpart to scripts/install-launchd.sh. Tolerates an unloaded service and is safe to run repeatedly.
 set -euo pipefail
 
 LABEL="com.zentrading.content-hub"

@@ -29,7 +29,7 @@ export default {
   get channel() { return envChannel(); },
   get timeoutMs() { return envTimeoutMs(); },
   get research() { return sharedResearch(); },
-  // 网络抖动时每次都从分块 checkpoint 继续，不重复已完成译文。
+  // Resume each retry from chunk checkpoints after network jitter and do not repeat completed translation units.
   retries: 3,
   retryDelayMs: 15000,
   shouldRetry: isRetryableTranslationError,

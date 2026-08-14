@@ -20,8 +20,8 @@ const boundedWechatClient = createWechatClient({
   },
 });
 
-// Wenyan 的发布器保存 token/素材缓存，但默认 transport 没有超时。只在模块初始化
-// 时替换其网络方法，缓存与渲染行为保持不变；请求级参数由 AsyncLocalStorage 隔离。
+// Wenyan's publisher keeps token and asset caches, while its default transport has no timeout. Replace only its
+// network method at module initialization so caching and rendering stay unchanged; AsyncLocalStorage isolates request options.
 wechatPublisher.fetchAccessToken = boundedWechatClient.fetchAccessToken;
 wechatPublisher.uploadMaterial = boundedWechatClient.uploadMaterial;
 wechatPublisher.publishArticle = boundedWechatClient.publishArticle;

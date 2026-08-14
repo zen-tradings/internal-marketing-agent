@@ -14,7 +14,7 @@ for (const [name, url, init] of targets) {
   timer.unref?.();
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
-    // 4xx 代表目标 API 已收到请求；这里只验证 DNS/TLS/路由，不发送凭据或业务数据。
+    // A 4xx proves the target API received the request; verify only DNS/TLS/routing without credentials or business data.
     if (response.status >= 500) throw new Error(`HTTP ${response.status}`);
     console.log(`${name}:可达 (HTTP ${response.status})`);
   } catch (error) {

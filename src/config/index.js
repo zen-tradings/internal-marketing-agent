@@ -1,8 +1,8 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// 仓库根目录:src/config/index.js 上两级。用于解析 assets/ 下固定图的默认绝对路径,
-// 不依赖 process.cwd()(启动目录可能不是仓库根)。
+// Repository root: two levels above src/config/index.js. Resolve default absolute fixed-image paths from assets/
+// without depending on process.cwd(), which may not be the repository root.
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 export function loadConfig(env = process.env) {
@@ -59,7 +59,7 @@ export function loadConfig(env = process.env) {
       plannerReasoningEffort: env.OPENROUTER_PLANNER_REASONING_EFFORT || 'none',
       reviewReasoningEffort: env.OPENROUTER_REVIEW_REASONING_EFFORT || 'none',
       routerReasoningEffort: env.OPENROUTER_ROUTER_REASONING_EFFORT || 'none',
-      // 直译只需要原始链接/PDF 与 OpenRouter；Exa 仅由原创研究链要求。
+      // Translation needs only the original link/PDF and OpenRouter; Exa is required only by original research.
       exaApiKey: env.EXA_API_KEY || '',
       exaBaseUrl: env.EXA_BASE_URL || 'https://api.exa.ai',
       exaNumResults: positiveIntegerOrThrow(env.EXA_NUM_RESULTS, 5, 'EXA_NUM_RESULTS'),
@@ -99,7 +99,7 @@ export function loadConfig(env = process.env) {
       maxReportCandidates: positiveIntegerOrThrow(env.QDII_MAX_REPORT_CANDIDATES, 3, 'QDII_MAX_REPORT_CANDIDATES'),
     },
     translation: {
-      // 直译优先使用原站结构化 HTML；PDF 由 Datalab 托管解析后回到同一结构化链路。
+      // Translation prefers structured HTML from the source; Datalab parses PDFs before returning to the same pipeline.
       browserEnabled: env.TRANSLATION_BROWSER_ENABLED === undefined
         ? true
         : booleanFlag(env.TRANSLATION_BROWSER_ENABLED),
@@ -197,7 +197,7 @@ export function loadConfig(env = process.env) {
         || path.join(REPO_ROOT, 'tools', 'cover-generator'),
     },
     infographic: {
-      // 写作任务按文章内容生成信息图;直译任务在渠道层直接跳过,与此开关无关。
+      // Writing tasks generate infographics from article content; the channel skips translation regardless of this flag.
       enabled: env.INFOGRAPHIC_ENABLED === undefined
         ? true
         : booleanFlag(env.INFOGRAPHIC_ENABLED),

@@ -8,9 +8,9 @@ export default {
   sourcePolicy: officialFirstPolicy(),
   factReview: true,
   triggers: ['slack'],
-  get workDir() { return runtimeConfig()?.workDir || process.env.WORK_DIR || '/srv/zen/wechat'; }, // 保持现状,不带子目录
+  get workDir() { return runtimeConfig()?.workDir || process.env.WORK_DIR || '/srv/zen/wechat'; }, // Preserve existing root-level layout.
   get model() { return envModel(); },
-  get channel() { return envChannel(); },   // 默认真实渠道;本地演练用 HUB_DRY_RUN=1 或设 WECHAT_CHANNEL=mock
+  get channel() { return envChannel(); },   // Live channel by default; use HUB_DRY_RUN=1 or WECHAT_CHANNEL=mock locally.
   get timeoutMs() { return envTimeoutMs(); },
   get research() { return sharedResearch(); },
   retries: 0,

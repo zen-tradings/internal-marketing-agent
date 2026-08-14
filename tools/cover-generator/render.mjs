@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// 用法: node render.mjs <data.json> [out.png]
-// 把数据注入 template.html，再用本机 Chromium/Chrome 渲染成精确 900×383 PNG。
+// Usage: node render.mjs <data.json> [out.png]
+// Inject data into template.html, then render an exact 900×383 PNG with local Chromium/Chrome.
 import {
   existsSync,
   mkdtempSync,

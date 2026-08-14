@@ -12,7 +12,7 @@ const DEFAULT_GENERATOR_DIR = path.resolve(
   'cover-generator'
 );
 
-// 发布前总是写入本次生成的封面,避免沿用旧文章 cover。
+// Always write the newly generated cover before publication to avoid reusing an older article cover.
 export function ensureFrontmatterCover(markdown, coverPath) {
   const m = markdown.match(/^---\n([\s\S]*?)\n---/);
   if (!m) return `---\ncover: ${coverPath}\n---\n${markdown}`;
@@ -33,8 +33,8 @@ const COVER_SYSTEM_PROMPT = `你负责从 Zen Trading 公众号文章中提取�
 }
 标题应保留文章主体名称；核心结论必须来自正文，信息不足时写“Zen Research from Zen Trading”。`;
 
-// 调 OpenRouter 从文章内容里提取封面数据。解析/校验失败一律返回 null,不抛错,
-// 让调用方(generateCover)回退到示例数据 + 标题的既有行为,不能让封面因提取失败而挂掉。
+// Ask OpenRouter to extract cover data from article content. Parsing or validation failures return null so
+// generateCover retains its existing example-data-plus-title fallback instead of failing cover generation.
 export async function buildCoverData({ title, markdown, writer, fetchFn = globalThis.fetch }) {
   const controller = new AbortController();
   const timeoutMs = Number(writer?.coverTimeoutMs || 30000);
@@ -105,7 +105,7 @@ function normalizeCoverData(data) {
   return { title, key_takeaway };
 }
 
-// 缺失/空字符串返回 null(触发整体提取失败);超过硬上限的字符串截断而非失败。
+// Missing or empty strings return null and fail the full extraction; values over hard limits are truncated.
 function truncateField(value, hardLimit, targetLen) {
   if (typeof value !== 'string' || !value.trim()) return null;
   const s = value.trim();
@@ -129,9 +129,9 @@ function trimTrailingSlash(value) {
   return String(value || '').replace(/\/+$/, '');
 }
 
-// 调用仓库内置 cover-generator/render.mjs 生成封面 PNG。
-// 真实接口: node render.mjs <data.json> [out.png] —— 无 --title/--out flag,
-// 数据以 window.DATA 形式注入 template.html 后由无头 Chrome 截图。
+// Call the bundled cover-generator/render.mjs to generate the cover PNG.
+// Its interface is node render.mjs <data.json> [out.png], without --title/--out flags; data is injected as
+// window.DATA in template.html and captured by headless Chrome.
 export async function generateCover({
   title,
   outDir,
@@ -152,7 +152,7 @@ export async function generateCover({
     throw Object.assign(new Error(`读取生成器示例数据失败:${e.message}`), { stage: 'cover' });
   }
 
-  // 既有回退行为:示例数据 + 文章标题覆盖 title 字段,其余字段沿用示例默认值。
+  // Existing fallback: overwrite example-data title with the article title and retain other example defaults.
   let data = { ...exampleData, title, key_takeaway: 'Zen Research from Zen Trading' };
 
   if (markdown && writer) {
@@ -160,7 +160,7 @@ export async function generateCover({
     try {
       built = await buildDataFn({ title, markdown, writer });
     } catch {
-      built = null; // 内容提取失败不能让封面生成挂掉,回退到示例+标题
+      built = null; // Content extraction must not fail cover generation; use the example-plus-title fallback.
     }
     if (built) data = deepMerge(exampleData, built);
   }

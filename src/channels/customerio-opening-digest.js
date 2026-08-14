@@ -107,7 +107,7 @@ export function makeChannel({
           else diagnostics.push('Customer.io 未返回 Opening Digest 封面 HTTPS URL，已使用无封面版');
         } catch (error) {
           if (error.message === 'skip-existing-email-cover') {
-            // 已发送邮件无需重复上传 Customer.io 封面；微信仍会消费同一数据 payload。
+            // A sent email does not need another Customer.io cover upload; WeChat still consumes this payload.
           } else {
           diagnostics.push(`Opening Digest 封面已省略:${error.message}`);
           }

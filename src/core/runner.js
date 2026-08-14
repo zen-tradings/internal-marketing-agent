@@ -1365,9 +1365,8 @@ export function normalizeAnalysisArticle(content, contract) {
     if (firstTitle) titles.push(unquoteYamlTitle(firstTitle));
     article = article.slice(firstFrontmatter[0].length).trimStart();
   }
-  // GLM 偶尔会在合法 frontmatter 后再次输出一个 frontmatter，或只多输出
-  // `title: ...` + `---` 的残片，或把 YAML title 放进代码围栏。
-  // 发布前统一收敛为一个 title 区块。
+  // GLM can emit another frontmatter after valid frontmatter, a trailing title fragment, or a YAML title inside a
+  // code fence. Normalize to one title block before publication.
   for (;;) {
     const duplicateBlock = article.match(/^---\n([\s\S]*?)\n---(?:\n|$)/);
     if (duplicateBlock) {
@@ -1409,15 +1408,13 @@ function unquoteYamlTitle(value) {
   return text;
 }
 
-// 调研入口:
-// 1) 从任务文本里摘出用户手工贴的 URL(最多 5 个),直接调 Exa /contents 抓正文,并与
-//    官方/一手来源、既定 prioritySources 一起归入第一优先级研究素材;
-// 2) 剩余文本(去掉 URL)作为 query,并行跑「优先信源」+「开放」两路 /search;
-// 3) 结果按 用户指定 > 官方/一手 > 既定优先源 > 专项深搜 > 开放搜索 顺序合并,按 URL 去重。
+// Research entry point: fetch up to five user URLs through Exa /contents as top-priority material alongside primary
+// and configured priority sources; search remaining prompt text through priority and open lanes in parallel; then
+// merge and URL-deduplicate by user-specified, primary, priority, deep-research, and open-search precedence.
 async function searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy, editorialContext = null, asOf = new Date() }) {
   if (sourcePolicy.skipResearch) {
-    // 欢迎、公告等关系型邮件不做市场搜索。若用户主动附了链接且 Exa 可用，
-    // 只读取这些指定材料，不扩展检索，也不将其变成强制引用门禁。
+    // Relationship emails such as welcomes and announcements do not search markets. With user links and Exa,
+    // read only those materials without expanding search or imposing mandatory citation gates.
     const { urls } = extractUrls(input, 5);
     if (!urls.length || !writer.exaApiKey) return [];
     try {
@@ -1427,15 +1424,15 @@ async function searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy
       return [];
     }
   }
-  // 普通任务维持 5 个全文 URL 上限；明确要求官方/一手信源的严格任务允许 8 个，
-  // 以容纳交易所、监管、公司 IR 等相互独立的证据链。仍保留上限，避免 prompt 无界增长。
+  // Ordinary tasks cap full-content URLs at five; strict official/primary-source tasks allow eight to accommodate
+  // independent exchange, regulator, and company-IR evidence chains while keeping prompt growth bounded.
   const maxUserUrls = sourcePolicy.requireOfficial ? 8 : 5;
   const { urls, remainder } = extractUrls(input, maxUserUrls);
 
   const contentsPromise = urls.length
     ? fetchExaContents({ urls, writer, fetchFn, trace }).then(
         (results) => results.map((r) => ({ ...r, userSpecified: true })),
-        () => [], // 抓取失败只降级,不影响其它素材
+        () => [], // Fetch failure degrades only this material and does not affect other sources.
       )
     : Promise.resolve([]);
 
@@ -1448,8 +1445,8 @@ async function searchExa({ input, writer, workflow, fetchFn, trace, sourcePolicy
     : workflow?.research?.officialSources);
   const hasOfficial = sourcePolicy.requireOfficial && Array.isArray(officialSources) && officialSources.length > 0;
 
-  // 法律案件必须先读用户给的案卷页，再把案名、案号补进检索词。只用 Slack 中的
-  // “拆解这份文件”做查询会让通用搜索命中大量与案件无关的官方页面。
+  // Legal cases must read the user-provided docket first, then add case name and number to search terms. Searching
+  // only a generic request would return many official pages unrelated to the case.
   const earlyContents = sourcePolicy.kind === 'legal-document-analysis' ? await contentsPromise : null;
   const sourceIdentity = earlyContents
     ?.map((source) => source.title || '')
@@ -1664,9 +1661,8 @@ async function searchExaPriority({ query, writer, prioritySources, fetchFn, trac
   }
 }
 
-// 用户手工贴的 URL 走全文抓取(text: true,不做 compact verbosity),不请求 highlights
-// (highlights 是围绕 query 摘取片段,对"抓整篇原文"这个用途没有意义);
-// formatResearch 里再按 userSpecified 单独放宽字符上限。
+// User-provided URLs use full-content fetches (text: true) without highlights, which are query-centric excerpts;
+// formatResearch separately raises their character cap through userSpecified.
 async function fetchExaContents({ urls, writer, fetchFn, trace, kind = 'user-contents' }) {
   const url = `${trimTrailingSlash(writer.exaBaseUrl || 'https://api.exa.ai')}/contents`;
   const event = startTrace(trace, { kind, endpoint: '/contents', urls });
@@ -1695,8 +1691,7 @@ async function fetchExaContents({ urls, writer, fetchFn, trace, kind = 'user-con
   }
 }
 
-// 从任务文本里提取 http(s) URL(默认最多取前 5 个供 /contents 抓取),并返回去掉所有 URL 后的剩余文本
-// (供两路 /search 当 query 用)。
+// Extract up to five http(s) URLs for /contents and return prompt text with all URLs removed for two-lane /search.
 export function extractUrls(text, maxUrls = 5) {
   const re = /https?:\/\/[^\s<>()]+/g;
   const all = String(text || '').match(re) || [];
@@ -1708,8 +1703,8 @@ export function extractUrls(text, maxUrls = 5) {
   return { urls, remainder };
 }
 
-// 按 URL 去重(规范化:去 trailing slash、host 大小写不敏感),先出现的保留,
-// 调用方需保证「更高优先级素材先出现在数组前面」。
+// Deduplicate URLs after trailing-slash and case-insensitive-host normalization, keeping the first; callers must
+// order higher-priority material first.
 function dedupeByUrl(list) {
   const seen = new Set();
   const out = [];
@@ -1837,7 +1832,7 @@ function failTrace(event, error) {
   persistResearchTrace(trace);
 }
 
-// 避免把父 trace 作为可枚举字段写进 JSON,同时让事件完成时能即时落盘。
+// Keep the parent trace non-enumerable in JSON while persisting it immediately when an event completes.
 const TRACE_OWNERS = new WeakMap();
 
 function findOwningTrace(event) { return TRACE_OWNERS.get(event); }
@@ -1930,11 +1925,10 @@ ${researchMaterial}
 ${outputInstruction}`;
 }
 
-// 用户手工贴的 URL(userSpecified)是一级优先研究素材,需要保留(接近)全文,
-// 上限用 writer.exaUserContentMaxChars(EXA_USER_CONTENT_MAX_CHARS,默认 24000 字符);
-// 其余(优先信源/开放搜索)只是背景参考,维持原先的 2400 字符上限。
-// 用户指定素材仍由既有 5 条 URL 与全局 prompt 上限共同约束。Opening Digest 会传入更小的
-// 普通来源摘录上限；若组合后的 prompt 仍超限，调用方按固定档位重建，同时保留来源元数据和 URL。
+// User-provided URLs are top-priority research material and retain near-full text up to
+// writer.exaUserContentMaxChars (EXA_USER_CONTENT_MAX_CHARS, default 24000); priority/open sources remain 2400-
+// character background references. The five-URL and global-prompt caps still apply. Opening Digest passes a smaller
+// ordinary-source excerpt limit; if the aggregate prompt is too large, rebuild at fixed tiers while retaining metadata.
 function formatResearch(results, writer = {}, { sourceExcerptMaxChars } = {}) {
   if (!results.length) return '未检索到可用素材。请明确说明信息不足,不要编造事实。';
   const userMaxChars = writer.exaUserContentMaxChars || 24000;
@@ -2336,7 +2330,7 @@ async function reviewAndRepairArticle({ article, input, research, workflow, writ
   const legalInstruction = sourcePolicy.kind === 'legal-document-analysis'
     ? '必须区分诉状指控、当事人陈述、法院认定和分析推断；不得扩散与案件分析无关的住址、电话、账户号等敏感信息。'
     : '';
-  // 公告/欢迎邮件没有外部事实素材时，仍检查明显虚构，但不强迫引用。
+  // Without external factual material, announcement/welcome emails still check obvious fabrication but need no citations.
   const prompt = `审查下面的待发布稿件，只依据任务和允许来源判断。检查所有数字、日期、因果关系和关键事实；引用 URL 只能来自允许来源。${referenceInstruction}${legalInstruction}不要改变文章语言、结构或观点，除非为删除无支持内容、修正来源矛盾或修复引用所必需。\n\n返回严格 JSON，不要代码围栏:\n{"approved":true|false,"issues":["..."],"revised_markdown":"完整修订稿；无需修订时留空"}\n\n工作流:${workflow.id}\n任务:${input}\n\n允许来源:${JSON.stringify(allowed)}\n\n待审稿件:\n${article}`;
   const review = await completeReviewJson({
     prompt,
@@ -2420,7 +2414,7 @@ function removeTerminalReferenceSections(article) {
   const heading = /^#{1,4}\s*(?:引用链接|引用来源|资料来源|参考来源|来源列表|Sources|References)\s*$/gmi;
   const matches = [...text.matchAll(heading)];
   if (!matches.length) return text;
-  // 来源章节按发布契约只能在末尾；旧稿若有多个同义章节，从第一个开始统一重建。
+  // The publication contract permits a sources section only at the end; rebuild from the first of any synonymous sections.
   return text.slice(0, matches[0].index).trimEnd();
 }
 
@@ -2438,9 +2432,9 @@ function terminalReferenceSection(article) {
 export function extractArticleUrls(article) {
   const urls = [];
   let remaining = String(article || '');
-  // 图片地址是资源，不是事实引用；先移除，避免被计入引用数量或重复 URL。
+  // Image URLs are assets, not factual citations; remove them before counting citations or duplicate URLs.
   remaining = remaining.replace(/!\[[^\]]*\]\(\s*<?https?:\/\/[^\s)>]+>?(?:\s+["'][^"']*["'])?\s*\)/g, ' ');
-  // Markdown 标签里的文字可能本身长得像 URL，只收集真正的链接目标。
+  // Markdown label text can resemble a URL; collect only actual link targets.
   remaining = remaining.replace(/\[[^\]]*\]\(\s*<?(https?:\/\/[^\s)>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g, (_match, url) => {
     urls.push(cleanArticleUrl(url));
     return ' ';
@@ -2618,7 +2612,7 @@ async function completeReviewJson(options) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const raw = await completeArticle({
       ...options,
-      // JSON 角色使用各自的 reasoning 配置；审计默认关闭，Kimi 规划器可独立开启。
+      // JSON roles use their own reasoning settings; auditing defaults off and the Kimi planner can enable it independently.
       writer: {
         ...options.writer,
         reasoningEffort: options.reasoningEffort
@@ -2654,8 +2648,8 @@ async function completeArticle({ prompt, model, writer, fetchFn, timeoutMs, syst
     const configuredEffort = writer.reasoningEffort || 'none';
     let lastDiagnostic = 'unknown response';
 
-    // 空正文通常是 reasoning 吃完输出预算或 provider 瞬时异常。应用层只重试一次。
-    // 强制 reasoning 的模型降到 low；其它模型关闭，避免无效重试和重复计费。
+    // Empty bodies usually mean reasoning exhausted the output budget or a transient provider failure. Retry once at
+    // application level: lower forced reasoning to low and disable it for other models to avoid useless repeat billing.
     for (let attempt = 0; attempt < 2; attempt++) {
       const effort = attempt === 0
         ? configuredEffort
@@ -2758,7 +2752,7 @@ function hasTitleFrontmatter(article) {
   return Boolean(match && /^title\s*:\s*\S.+$/m.test(match[1]));
 }
 
-// 把 undici 的通用 "fetch failed" 展开成带真实 cause 的可诊断信息。
+// Expand undici's generic "fetch failed" into diagnostic information with the underlying cause.
 export function describeFetchError(e) {
   if (!e) return 'unknown error';
   const cause = e.cause;
@@ -2766,7 +2760,7 @@ export function describeFetchError(e) {
   return `${e.message || e}${causePart}`;
 }
 
-// 判定是否为可重试的瞬时网络错误(连接被丢/TLS 抖动/超时等),AbortError(主动超时)不重试。
+// Identify retryable transient network errors such as dropped connections, TLS jitter, and timeouts; do not retry AbortError.
 export function isTransientNetworkError(e) {
   if (!e || e.name === 'AbortError') return false;
   const msg = String(e.message || '');
@@ -2775,10 +2769,9 @@ export function isTransientNetworkError(e) {
     || /ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|EPIPE|UND_ERR/i.test(`${code} ${msg}`);
 }
 
-// 对瞬时网络错误做退避重试。仅重试 fetch 抛出的网络错误;HTTP 响应(含 4xx/5xx)不在此重试。
-// opts.timeoutMs:若提供,每次尝试都用一个全新的 AbortController 包裹单次请求(不复用上一次
-// 已 abort 的 signal),超时即 controller.abort() 触发 AbortError;AbortError 不算瞬时网络错误
-// (见 isTransientNetworkError),因此不会被重试,而是直接向上抛出,交给调用方的降级逻辑处理。
+// Retry only transient fetch-thrown network errors with backoff, never HTTP responses including 4xx/5xx. When
+// opts.timeoutMs is present, wrap each attempt in a fresh AbortController; timeout aborts it as AbortError, which
+// is not transient and is propagated to the caller's fallback logic.
 export async function fetchWithRetry(fetchFn, url, options, opts = {}) {
   const {
     attempts = 3,
@@ -2800,7 +2793,7 @@ export async function fetchWithRetry(fetchFn, url, options, opts = {}) {
       await sleep(retryAfterMs ?? backoffMs[Math.min(i, backoffMs.length - 1)]);
     } catch (e) {
       lastErr = e;
-      if (!isTransientNetworkError(e)) throw e; // 非瞬时错误原样抛出,保留类型(如 AbortError)
+      if (!isTransientNetworkError(e)) throw e; // Preserve non-transient error identity, including AbortError.
       if (i === attempts - 1) break;
       await sleep(backoffMs[Math.min(i, backoffMs.length - 1)]);
     } finally {

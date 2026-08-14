@@ -1,14 +1,13 @@
-// 只读任务状态监控脚本。不依赖 bot 进程运行,只打开同一个 sqlite 文件读取,
-// 快速判断队列是否卡死(尤其是 running 任务一直不结束的场景)。
-// 用法: npm run status  (可用 DB_PATH=xxx npm run status 覆盖数据库路径)
+// Read-only task-status monitor. It reads the shared SQLite file without needing the bot process, making stuck
+// queues (especially never-ending running tasks) easy to identify. Usage: npm run status with optional DB_PATH.
 import dotenv from 'dotenv';
 import fs from 'node:fs';
 import Database from 'better-sqlite3';
 
 dotenv.config({ override: true });
 
-// 与 src/config/index.js 的 loadConfig 保持同样的默认值/覆盖规则,但不复用 loadConfig 本身:
-// loadConfig 会强制要求 SLACK_BOT_TOKEN/WECHAT_APP_ID 等与本脚本无关的 env,这里只关心 dbPath。
+// Mirror src/config/index.js default/override rules without reusing loadConfig, which requires unrelated service
+// environment variables such as SLACK_BOT_TOKEN and WECHAT_APP_ID; this script needs only dbPath.
 const dbPath = process.env.DB_PATH || `${process.env.HOME || '.'}/zen-content-hub/runs.db`;
 
 if (!fs.existsSync(dbPath)) {

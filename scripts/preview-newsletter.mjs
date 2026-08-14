@@ -5,8 +5,8 @@ import os from 'node:os';
 import { loadConfig } from '../src/config/index.js';
 import { parseNewsletterArticle, renderNewsletterEmail } from '../src/lib/newsletter-email.js';
 
-// 本地预览:用当前模板 + .env 里的品牌图/联系邮件渲染一篇示例邮件,写到临时 HTML 供审核。
-// 不调用任何外部 API,不在 Customer.io 创建草稿。
+// Local preview: render a sample email using the current template and .env brand/contact values into temporary HTML.
+// Do not call external APIs or create a Customer.io draft.
 const SAMPLE = `---
 title: Nvidia's capex signal is still pointing up
 subject: Zen Research from Zen Trading · ${process.env.NEWSLETTER_EDITION || 'Vol. 2'} | Capex signal

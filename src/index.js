@@ -96,10 +96,9 @@ export function openingDigestPublishContext(run) {
   return { source: 'acceptance', acceptanceId };
 }
 
-// 队列处理器工厂,便于注入 stub 做单测(store/runWriter/channels 均可替换)。
-// 注意:`deps` 对象本身(而非解构出的局部变量)被闭包持有,notifier 字段在
-// start() 中是稍后才赋值的(registerSlack 之后)——沿用原来 `let notifier` 的
-// "调用时才读取当前值" 语义,不在这里提前修复这个时序,只是原样保留。
+// Queue-handler factory with injectable store, runner, and channels for unit tests.
+// The closure retains the deps object itself rather than destructured locals. start() assigns notifier later,
+// after registerSlack, so retain the original read-current-value-at-call-time behavior.
 export function makeHandler(deps) {
   const { store, runWriter, workflows, channels, config } = deps;
   return async function handler(run, { signal, setPhase = () => {} } = {}) {
@@ -180,8 +179,7 @@ export function makeHandler(deps) {
 
       const { title, mediaId, sourceCount, completeness, deliveryWarnings = [] } = await runWithRetry(async () => {
         throwIfTaskCancelled(signal);
-        // 发布幂等:已有 media_id 说明上一轮(重试循环内或重启后重投)已经发布成功过,
-        // 跳过重新生成/发布,避免产生重复草稿。
+        // A media_id proves a prior retry or restart republish succeeded; skip regeneration/publication to avoid duplicates.
         const existing = store.getRun(run.id);
         if (existing.media_id) {
           setPhase('published');
@@ -243,9 +241,8 @@ export function makeHandler(deps) {
           );
         }
 
-        // dry-run:HUB_DRY_RUN 置位时,不管 workflow 声明的是哪个渠道,一律强制走 mock,
-        // 用于本地/CI 演练全流程而不触碰真实微信 API。严格真值判断,避免 "0"/"false"/空串
-        // 被当成开启(例如 shell 里误写 HUB_DRY_RUN=0 却仍然触发 dry-run)。
+        // With HUB_DRY_RUN enabled, force every declared workflow channel to mock for local/CI end-to-end rehearsal
+        // without touching the live WeChat API. Use strict truthiness so 0, false, and empty strings do not enable it.
         const DRY = /^(1|true|yes|on)$/i.test(process.env.HUB_DRY_RUN || '');
         const channelId = DRY ? 'mock' : runtimeWorkflow.channel;
         const channel = channels[channelId];
@@ -286,7 +283,7 @@ export function makeHandler(deps) {
           source: publishContext.source,
           acceptanceId: publishContext.acceptanceId,
         });
-        store.setMediaId(run.id, mediaId, title); // 早写,发布成功后立刻落库,支撑上面的幂等判断
+        store.setMediaId(run.id, mediaId, title); // Persist immediately after publish to support the idempotency check above.
         setPhase('published');
         return { mediaId, title, sourceCount: res.sources?.length || 0, completeness: res.completeness, deliveryWarnings };
       },
@@ -433,14 +430,14 @@ export async function start() {
   if (prunedRuns || pruned.threads || pruned.events) {
     console.log(`[hub] 已清理历史记录:runs=${prunedRuns},threads=${pruned.threads},events=${pruned.events}`);
   }
-  // 长篇直译按分块保存 checkpoint，可在进程重启后安全续跑。
-  // 其它工作流仍标记 interrupted 并等待人工确认，避免自动重复创建草稿。
+  // Long translations persist chunk checkpoints and can safely resume after restart.
+  // Other workflows remain interrupted pending explicit confirmation to avoid duplicate drafts.
   const recoveredTranslations = store.recoverRunningWorkflow('translate');
   if (recoveredTranslations) console.log(`[hub] 启动:自动恢复 ${recoveredTranslations} 个直译任务`);
   const interrupted = store.markInterrupted();
   if (interrupted) console.log(`[hub] 启动:${interrupted} 个残留任务标记为 interrupted`);
-  // 只恢复显式处于 queued 的持久化任务。interrupted 不会自动重跑，必须先由
-  // 管理操作明确 requeue，避免旧任务在重启后意外创建草稿。
+  // Restore only persisted tasks explicitly queued. Interrupted tasks require an explicit administrative requeue
+  // to prevent an old task from creating an unexpected draft after restart.
   const persistedQueued = store.listByStatus('queued');
 
   const deps = {
@@ -470,8 +467,8 @@ export async function start() {
   });
   const enqueue = (t) => {
     const result = queue.enqueue({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, ...t });
-    // 收到即回执:不等待任务真正被处理(那要等到出队),用户提交后立刻有反馈。
-    // 守卫住 notifier 可能还没就绪(启动窗口期竞态)以及 ack 本身可能抛错,两者都不能拖垮入队。
+    // Acknowledge on receipt instead of waiting for queue execution, giving the user immediate feedback.
+    // Guard both the startup-window notifier race and acknowledgement failures; neither may prevent enqueueing.
     try {
       Promise.resolve(deps.notifier?.ack?.(t.notify, t.input)).catch((e) => {
         console.error('[hub] notifier.ack 失败(已忽略)', e.message);
@@ -489,8 +486,8 @@ export async function start() {
     }
     return result;
   };
-  // Slack 连接监督:退避重试首连;并对 @slack/socket-mode 1.x 的瞬时崩溃容忍 + 自动重连,
-  // 不让一次套接字断开拖垮整个进程(queue/cron 等仍存活)。
+  // Supervise Slack connection with backoff. Tolerate transient @slack/socket-mode 1.x crashes and reconnect so
+  // one socket disconnect cannot stop the queue, cron, or process.
   let currentSlackApp;
   let connectPromise;
   let outboxFlushPromise;
@@ -565,10 +562,9 @@ export async function start() {
     void shutdown('uncaughtException', 1);
   });
 
-  // Slack 的 Socket Mode 是交互入口，不是已持久化发布任务的前置条件。
-  // 网络瞬断时 connectSlack 会自行退避重试；若在这里 await，它会把恢复中的
-  // 长篇直译永远卡在队列外，直到 Slack 恢复。先让队列恢复并执行，通知器随后
-  // 连接成功时再接管回执/进度通知。
+  // Slack Socket Mode is an interactive entry point, not a prerequisite for persisted publication tasks.
+  // connectSlack retries after a transient outage; awaiting it here would keep recovered long translations outside
+  // the queue. Restore and execute the queue first, then let the notifier take over when Slack reconnects.
   void ensureSlackConnected();
   const outboxTimer = setInterval(() => {
     if (!deps.notifier || outboxFlushPromise) return;

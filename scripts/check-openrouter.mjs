@@ -73,7 +73,7 @@ for (const role of [
             { role: 'user', content: 'Return {"ok":true}.' },
           ]
         : [{ role: 'user', content: 'Reply with exactly: ok' }],
-      // reasoning 模型会消耗隐藏 token；给连通性检查预留足够输出预算。
+      // Reasoning models consume hidden tokens; reserve sufficient output budget for the connectivity check.
       max_tokens: role.maxTokens || (role.json ? 1024 : 256),
       reasoning: { effort: role.reasoningEffort, exclude: true },
       temperature: 0,

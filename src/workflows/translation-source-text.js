@@ -25,7 +25,7 @@ import {
   scopeLabel,
 } from './translation-scope.js';
 
-// 单一现役直译源：保留正文结构与视觉素材，模型只替换可翻译文字单元。
+// Single active translation source: retain document structure and visual assets while replacing only translatable units.
 const DOCUMENT_VERSION = 5;
 const CHECKPOINT_VERSION = 6;
 const TRANSLATION_BATCH_MAX_CHARS = 8000;
@@ -1055,8 +1055,8 @@ export async function translateDocument({
         validationWarnings.delete(assessment.unit.id);
         validationExceptions.delete(assessment.unit.id);
       }
-      // 每个通过结构硬门禁的文本单元立即落盘。即使同批另一个单元失败，
-      // 已完成进度也会在续跑时保留。
+      // Persist each text unit immediately after it passes structural hard gates. A failure in another unit of the
+      // same batch does not discard completed progress on resume.
       writeCheckpoint();
     }
 
@@ -2055,8 +2055,8 @@ ${JSON.stringify({ units })}`,
     }
   }
 
-  // 大批结构化输出更容易在 provider 或网关层被截断。连续两次不完整时，
-  // 确定性缩小到修复批次大小再请求，避免丢弃此前已写入的 checkpoint。
+  // Large structured output is more likely to truncate at the provider or gateway. After two incomplete attempts,
+  // deterministically reduce to repair-batch size without losing previously persisted checkpoints.
   if (allowSplit && batch.length > 1) {
     const smallerBatches = batchUnits(batch, REPAIR_BATCH_MAX_CHARS, REPAIR_BATCH_MAX_ITEMS);
     if (smallerBatches.length > 1) {
@@ -2594,7 +2594,7 @@ function chineseWrittenNumbers(value) {
     if (parsed !== null) tokens.push(`PCT:${parsed}`);
     return ' '.repeat(match.length);
   });
-  // “百分比/百分点/百分率”中的“百”是词素，不代表独立数字 100。
+  // The Han character in percentage terms is a morpheme, not an independent number 100.
   text = text.replace(/百分(?:比|点|率)/g, (match) => ' '.repeat(match.length));
   for (const match of text.matchAll(/[负零〇一二两三四五六七八九十百千万亿兆点]+/g)) {
     const raw = match[0];

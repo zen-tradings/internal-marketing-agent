@@ -51,9 +51,9 @@ export function withTaskCancellation(fetchFn, signal) {
   return wrapped;
 }
 
-// 安全下载需要在完成 DNS 校验后替换最底层的网络 transport，同时保留取消、
-// 观测等上层装饰器。不能依赖函数对象与 globalThis.fetch 的直接相等关系；
-// 一旦 fetch 被取消包装器装饰，那种判断会悄悄关闭 DNS pinning。
+// Safe downloads replace the lowest-level transport after DNS validation while preserving cancellation and
+// observability decorators. Do not compare function identity with globalThis.fetch: cancellation decoration
+// would silently disable DNS pinning.
 export function fetchUsesGlobalTransport(fetchFn) {
   return (fetchFn?.[FETCH_BASE_TRANSPORT] || fetchFn) === globalThis.fetch;
 }

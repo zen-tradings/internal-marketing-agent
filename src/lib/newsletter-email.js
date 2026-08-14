@@ -43,11 +43,11 @@ export function renderNewsletterEmail(article, options = {}) {
     ? ''
     : '<p style="margin:0 0 8px"><a href="{% unsubscribe_url %}" class="untracked" style="color:#173f43">Unsubscribe</a></p>';
   const feedback = renderFeedback({ feedbackUrl, contactEmail, edition: article.edition });
-  // 开头品牌图:仅在配置了公开图片 URL 时渲染,顶部与卡片圆角对齐,自适应宽度。
+  // Render the leading brand image only with a configured public URL; align its top corners with the card and scale it.
   const headerImage = headerImageUrl
     ? `<tr><td style="padding:0"><img src="${escapeAttr(headerImageUrl)}" alt="Zen Research from Zen Trading" width="620" style="display:block;width:100%;max-width:620px;height:auto;border:0;border-top-left-radius:12px;border-top-right-radius:12px"></td></tr>`
     : '';
-  // 页脚只保留固定公司信息(网址 + 邮件 + LinkedIn)与法律强制项(退订 + 实体地址)。
+  // Keep only fixed company information (site, email, LinkedIn) and legal requirements (unsubscribe, address) in footer.
   const contact = contactEmail
     ? `<p style="margin:0 0 8px"><a href="${escapeAttr(siteUrl)}" style="color:#173f43">${escapeHtml(siteLabel)}</a> · <a href="mailto:${escapeAttr(contactEmail)}" style="color:#173f43">${escapeHtml(contactEmail)}</a></p>`
     : `<p style="margin:0 0 8px"><a href="${escapeAttr(siteUrl)}" style="color:#173f43">${escapeHtml(siteLabel)}</a></p>`;

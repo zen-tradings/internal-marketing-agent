@@ -1,18 +1,18 @@
-// 各写作工作流共享的公共项:
-// - env getter 语义(channel/model/timeoutMs/workDir 基准目录)
-// - Exa 双路调研优先信源清单(可用 EXA_PRIORITY_DOMAINS 整体覆盖)
-// - 通用写作规范/调研素材/产出约束文案,供各工作流的 promptTemplate 拼装复用
+// Shared writing-workflow primitives:
+// - env getter behavior for channel, model, timeout, and work-directory base
+// - Exa two-lane priority sources, fully overridable with EXA_PRIORITY_DOMAINS
+// - common writing, research-material, and output-constraint blocks for prompt templates
 //
-// 注意:所有 getter 风格的导出都是"调用时才读 process.env"(函数),不是在 import
-// 时求值一次的常量,这样才能保持与原 wechat.js 一致的"dotenv 在 import 之后才注入也生效"语义。
+// Getter-style exports read process.env at call time rather than import time, preserving the behavior where
+// dotenv values injected after import still apply.
 
 import path from 'node:path';
 import { runtimeConfig } from '../config/runtime.js';
 
-// Exa 双路调研的优先信源(声明式)。EXA_PRIORITY_DOMAINS(逗号分隔)整体覆盖默认列表;
-// Exa includeDomains 会匹配子域名,这里只需写主域。
+// Declarative priority sources for Exa's two research lanes. EXA_PRIORITY_DOMAINS fully overrides this comma-
+// separated default list; includeDomains matches subdomains, so only root domains are needed.
 const DEFAULT_PRIORITY_SOURCES = [
-  'trendforce.com',        // 含 datatrack.trendforce.com,半导体/AI 供应链/HBM
+  'trendforce.com',        // Includes datatrack.trendforce.com for semiconductor, AI supply-chain, and HBM coverage.
   'semianalysis.com',
   'techinsights.com',
   'counterpointresearch.com',
@@ -35,8 +35,8 @@ const DEFAULT_PRIORITY_SOURCES = [
   'lightcounting.com',
 ];
 
-// 用户明确要求“官方/一手信源”时单独跑这一组域名。它与上面的行业优先源分开,
-// 防止分析站点命中后被误算作官方来源。
+// Use this separate domain set when the user explicitly requests official or primary sources; keeping it separate
+// from industry-priority sources prevents analytical sites from being misclassified as official.
 const DEFAULT_OFFICIAL_SOURCES = [
   'sec.gov',
   'nasdaq.com',
@@ -55,8 +55,8 @@ const DEFAULT_OFFICIAL_SOURCES = [
   'cxmt.com',
 ];
 
-// 搜索结果中的新闻/评论来源不能来自政府资助、国家所有或公共广播媒体。
-// 监管机构、交易所和政府原始数据不属于“媒体”，继续通过 officialSources 使用。
+// Search-result news and commentary cannot come from government-funded, state-owned, or public-broadcast media.
+// Regulators, exchanges, and primary government data are not media and remain valid through officialSources.
 const DEFAULT_EXCLUDED_MEDIA_SOURCES = [
   'xinhuanet.com',
   'news.cn',
@@ -105,8 +105,8 @@ const DEFAULT_EXCLUDED_MEDIA_SOURCES = [
   'deutschlandradio.de',
 ];
 
-// 在同一来源层级内优先这些独立第三方报道/研究机构；其它语言不降级，
-// 只要来源独立且能直接支持任务事实，仍可进入证据矩阵。
+// Prefer these independent third-party reporting and research organizations within a source tier. Other languages
+// remain eligible when independent and directly supportive of task facts.
 const DEFAULT_INDEPENDENT_REPORTING_SOURCES = [
   'reuters.com',
   'apnews.com',
@@ -166,7 +166,7 @@ export function independentReportingSources() {
   ]);
 }
 
-// 供各工作流 `get research()` 直接返回。
+// Returned directly by each workflow's get research().
 export function sharedResearch() {
   return {
     prioritySources: prioritySources(),
@@ -190,8 +190,8 @@ export function envChannel() { return runtimeConfig()?.workflowEnvironment?.chan
 export function envModel() { return runtimeConfig()?.writer?.model || process.env.OPENROUTER_MODEL; }
 export function envTimeoutMs() { return runtimeConfig()?.defaultTimeoutMs || Number(process.env.DEFAULT_TIMEOUT_MS || 600000); }
 
-// wechat 自身的 workDir 保持现状(不带子目录);新工作流用「基准目录/工作流 id」,
-// 避免并发任务写同一个 article.md 互相覆盖。
+// Keep WeChat's existing workDir without a subdirectory; new workflows use base-directory/workflow-id to prevent
+// concurrent tasks from overwriting one article.md.
 export function workDirFor(id) {
   const base = runtimeConfig()?.workDir || process.env.WORK_DIR || '/srv/zen/wechat';
   return path.join(base, id);
@@ -206,8 +206,8 @@ function uniqueDomains(domains) {
     .filter(Boolean))];
 }
 
-// 各工作流共用的通用约束块:风格规范 + 调研素材纪律 + 产出格式。
-// 专属方法论内容(各工作流自己的分析框架)拼在【任务内容】之后、本块之前。
+// Common constraint block: style rules, research-material discipline, and output format. Workflow-specific
+// methodology is assembled after task content and before this block.
 export const COMMON_CONSTRAINTS_BLOCK = `【写作规范 — 严格执行】
 - 风格:严谨专业,机构分析师口吻
 - 不用破折号(——),改用逗号或冒号
@@ -232,8 +232,8 @@ title: 文章标题
 ---
 正文用 Markdown。不要自行发布,发布由外部系统完成。现在开始写作。`;
 
-// 拼装完整 promptTemplate 文本。methodologyBlock 为空时(wechat 的通用写作任务)只有
-// 任务内容 + 通用约束块;非空时(earnings/sector/morning)在任务内容之后插入专属方法论。
+// Assemble complete promptTemplate text. Without methodology, general WeChat writing uses task content plus the
+// common block; earnings, sector, and morning insert workflow-specific methodology after task content.
 export function buildPromptTemplate({ persona, task, methodologyBlock }) {
   const parts = [
     `你是 ${persona}。完成以下写作任务。`,

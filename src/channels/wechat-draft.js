@@ -14,9 +14,9 @@ import { normalizeWideTables as defaultNormalizeWideTables } from '../lib/mobile
 import { normalizeIndentedCodeBlocks as defaultNormalizeIndentedCodeBlocks } from '../lib/code-blocks.js';
 import { FIXED_DRAFT_TEMPLATE_IDS } from '../lib/draft-template.js';
 
-// 与 wenyan-mcp dist/publish.js 完全一致的渲染参数(parity 硬要求)
-// 正文固定走普通公众号版式。用户明确要求或直译原文自带的代码使用浅色高亮；
-// macStyle 始终关闭，避免黄色 Mac 卡片改变固定模板。
+// Rendering options must exactly match wenyan-mcp dist/publish.js.
+// Body copy always uses the standard WeChat layout. Authorized or source-native code uses light highlighting.
+// Keep macStyle disabled so the yellow Mac card cannot alter the fixed template.
 export const WECHAT_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['wechat-draft'];
 export const WECHAT_THEME_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -44,8 +44,8 @@ async function defaultWriteArticle(articlePath, content) {
   await fs.writeFile(articlePath, content, 'utf-8');
 }
 
-// 已失败任务重试时,article.md 可能已被上一次发布尝试写入 cover 与固定头尾图。
-// 门禁的对象应始终是模型产出的内容,而不是这些由本渠道确定性注入的本地文件路径。
+// A retry may find cover and fixed images written by the previous publish attempt in article.md.
+// Gate only model-produced content, never deterministic local paths injected by this channel.
 function markdownForGate(markdown, assets = {}) {
   let candidate = stripGeneratedInfographics(String(markdown || '')).replace(
     /^---\n[\s\S]*?\n---/,
@@ -58,7 +58,7 @@ function markdownForGate(markdown, assets = {}) {
   return candidate;
 }
 
-// 依赖注入版,便于测试
+// Dependency-injected form for testing.
 export function makeChannel({
   renderAndPublish = renderAndPublishWithFinalFooter,
   readArticle = defaultReadArticle,
@@ -94,8 +94,8 @@ export function makeChannel({
       try { ({ title, markdown } = await readArticle(articlePath)); }
       catch (e) { const err = new Error(`读取文章失败:${e.message}`); err.stage = 'render'; throw err; }
 
-      // 失败重试时 article.md 可能已含上一次注入的生成信息图。先确定性剥离,
-      // 保证后续规范化与门禁看到的都是模型产出的原文,重新生成不会累积图片。
+      // A failed retry can include a previously injected infographic. Remove it deterministically first
+      // so normalization and gating see model output only and regeneration cannot accumulate images.
       const withoutStaleInfographics = stripGeneratedInfographics(markdown);
       if (withoutStaleInfographics !== markdown) {
         try { await writeArticle(articlePath, withoutStaleInfographics); markdown = withoutStaleInfographics; }
@@ -130,8 +130,8 @@ export function makeChannel({
         }
       }
 
-      // 将独立的 Markdown 四空格代码确定性规范为 text 围栏。是否由用户授权
-      // 只决定 Slack 是否提醒，不影响安全渲染；已有围栏、HTML pre 和嵌套列表保持原样。
+      // Deterministically normalize standalone four-space Markdown code to text fences. User authorization
+      // controls only the Slack reminder, not safe rendering; keep existing fences, HTML pre, and nested lists.
       const codeResult = normalizeIndentedCodeBlocks(markdown);
       if (codeResult.changed) {
         try {
@@ -148,8 +148,8 @@ export function makeChannel({
         } catch (warnErr) { console.error('代码块规范化提醒失败(不影响流程):', warnErr); }
       }
 
-      // 先把手机端不可读的宽表确定性拆成多个窄表。紧凑五列表可保留；普通宽表
-      // 固定首列、每组三个指标，保证不丢数据。转换后再跑最终门禁。
+      // Deterministically split mobile-unreadable wide tables into narrow tables. Preserve compact five-column
+      // tables; otherwise retain the first column and group three metrics at a time before the final gate.
       const tableResult = normalizeWideTables(markdown);
       if (tableResult.changed) {
         try {
@@ -166,9 +166,8 @@ export function makeChannel({
         } catch (warnErr) { console.error('宽表转换提醒失败(不影响流程):', warnErr); }
       }
 
-      // 门禁:对模型产出原文(注入固定图之前)做出口检查。失败后的重试会保留系统写入的
-      // cover/固定图,因此先剥离这些已知资产。errors 拦截发布并直接结束流程,
-      // 只有在无 errors 时才继续检查 warnings(放行但需人工关注),避免同一次发布重复告警。
+      // Gate model output before fixed images are injected. Retries retain system-written cover/fixed images,
+      // so remove known assets first. Errors block publication; evaluate warnings only without errors to avoid duplicates.
       const assetsConfig = config.assets || {};
       const gate = checkArticle(markdownForGate(markdown, assetsConfig), {
         workflowMode: workflow?.mode || '',
@@ -187,8 +186,8 @@ export function makeChannel({
         catch (warnErr) { console.error('门禁提醒告警失败(不影响流程):', warnErr); }
       }
 
-      // 历史重试稿可能已经把固定尾图写进 Markdown。先全部移除，最终由渲染后 HTML
-      // 阶段按“调研图、社群封底”追加到脚注/引用之后，确保它们是最后两个正文节点。
+      // Historical retries can have fixed footer images in Markdown. Remove them all; final HTML appends the
+      // research and community images after footnotes/references so they remain the final two body nodes.
       const withoutLegacyTail = stripFinalTailMarkdown(markdown, [
         assetsConfig.surveyImage,
         assetsConfig.footerImage,
@@ -198,7 +197,7 @@ export function makeChannel({
         markdown = withoutLegacyTail;
       }
 
-      // Markdown 阶段只注入头图；两张固定尾图在完成主题和脚注渲染后追加。
+      // Inject only the header image into Markdown; append both fixed footer images after body and footnote rendering.
       const injectResult = injectFixedImages(markdown, {
         headerPath: assetsConfig.headerImage,
         footerPath: undefined,
@@ -212,8 +211,8 @@ export function makeChannel({
         markdown = injectResult.markdown;
       }
 
-      // 写作任务按文章内容生成信息图并插入文中;直译任务忠实还原原文,不生成。
-      // 规划、渲染、锚点定位任一失败都只告警并跳过该图,不阻断发布。
+      // Writing tasks generate and insert infographics; faithful translations do not. Planning, rendering, or
+      // anchor failures only warn and skip that image; they never block publication.
       if ((workflow?.mode || '') !== 'translation' && config.infographic?.enabled === true) {
         let infographicResult;
         try {
@@ -246,7 +245,7 @@ export function makeChannel({
         }
       }
 
-      // 微信草稿要求封面图:渲染发布前必须先生成封面并写入 frontmatter
+      // WeChat drafts require a cover image before rendering and publishing; write it into frontmatter first.
       try {
         const outDir = path.dirname(articlePath);
         const coverPath = path.join(outDir, 'cover.png');

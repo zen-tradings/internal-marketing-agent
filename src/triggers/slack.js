@@ -12,9 +12,8 @@ export function cleanSlackText(text) {
     .trim();
 }
 
-// Slack 在公共频道 @Bot 时可能同时投递 message 与 app_mention，两次投递的
-// event_id 不同，但 channel + message ts 相同。任务去重必须使用消息身份，
-// 不能优先使用 event_id，否则同一条指令会进入队列两次并创建重复草稿。
+// A public-channel @Bot can deliver both message and app_mention with distinct event_id values but identical
+// channel/message timestamps. Deduplicate by message identity, not event_id, to prevent duplicate drafts.
 export function slackMessageEventKey({ channel, ts, eventId, revision } = {}) {
   if (channel && ts) {
     const suffix = revision && String(revision) !== '0' ? `:rev:${revision}` : '';
@@ -30,12 +29,12 @@ export function parseSlackTask(raw, botUserId, { channelType, channel } = {}) {
   }
   const m = t.match(/^<@([A-Z0-9]+)>\s+([\s\S]+)/);
   if (m && (m[1] === botUserId || !botUserId)) return cleanSlackText(m[2]);
-  // 私聊中不要求“任务:”或 @mention，像普通 AI 对话一样直接接受自然语言。
+  // Direct messages accept natural language without a task prefix or @mention.
   if (channelType === 'im' || String(channel || '').startsWith('D')) return cleanSlackText(t);
   return null;
 }
 
-// 中文别名 → 工作流 id。别名同样必须命中 workflowIds 才会真正路由。
+// Chinese aliases map to workflow IDs and must still resolve to a registered workflow.
 const WORKFLOW_ALIASES = { 微信: 'wechat', 宏观: 'macro', 公司: 'company', 个股: 'company', 深度: 'company', 邮件: 'email', 财报: 'earnings', 行业: 'sector', 晨报: 'morning', 开市日报: 'opening-digest', 开市简报: 'opening-digest', 直译: 'translate', 翻译: 'translate', 基金查询: 'qdii' };
 
 const ENGLISH_ROUTE_ALIASES = Object.freeze({ fund: 'qdii', holding: 'qdii', holdings: 'qdii', newsletter: 'email' });
@@ -49,16 +48,12 @@ function englishAliasTask(task, workflowIds) {
   return workflowId ? { workflowId, task: match[2].trim() } : null;
 }
 
-// 中文别名按长度从长到短排序,支持多个别名互为前缀时优先取最长匹配。
+// Sort Chinese aliases longest-first so aliases that share prefixes choose the longest match.
 const SORTED_ALIAS_KEYS = Object.keys(WORKFLOW_ALIASES).sort((a, b) => b.length - a.length);
 
-// 任务文本路由规则:
-// 1) 中文别名(WORKFLOW_ALIASES 的键)不要求分隔符——别名后紧跟内容、空格或冒号均可识别,
-//    例如 "直译https://x"、"直译 https://x"、"直译：x" 都路由到 translate。
-// 2) 英文工作流 id(workflowIds 本身)仍要求冒号前缀 "id: 内容",避免正文里出现同名英文单词
-//    被误判为路由前缀(如 "wechatXXX 写点东西" 不应被当成 wechat 工作流)。
-// 命中已注册的 workflowIds(或其中文别名映射到的 workflowIds)才路由,否则整段文本走
-// defaultWorkflowId,不报错。剥离别名/前缀后任务文本为空也照常路由,交给工作流兜底处理。
+// Task-routing rules: Chinese aliases do not require a delimiter and may be followed by content, whitespace, or
+// a colon. English workflow IDs still require an id: prefix to avoid false positives in body text. Route only a
+// registered ID (or a registered alias mapping); otherwise use defaultWorkflowId. Empty post-prefix text still routes.
 export function resolveWorkflowTask(task, workflowIds = [], defaultWorkflowId = 'wechat') {
   const englishAlias = englishAliasTask(task, workflowIds);
   if (englishAlias) return englishAlias;
@@ -89,7 +84,7 @@ const MACRO_ANALYSIS_INTENT_RE = /(?:快评|点评|解读|分析|深度|机制|�
 const NATURAL_RULES = [
   { id: 'opening-digest', re: /(?:opening\s+digest|market\s+open(?:ing)?\s+digest|开市日报|开市简报)/i },
   { id: 'email', re: /(?:newsletter|customer\.?io|email\s+(?:draft|campaign|newsletter)|subscriber\s+email|订阅者|邮件草稿|邮件通讯|电子报|发邮件)/i },
-  // URL 只是素材，不代表翻译意图。只有用户明确要求翻译时才进入完整直译引擎。
+  // A URL is source material, not translation intent; use the full translation engine only for an explicit request.
   { id: 'translate', re: /(?:\btranslate\b|\b(?:full|complete|faithful|literal|direct)\s+translation\b|\btranslation\s+of\s+(?:this|the)\s+(?:article|paper|pdf|link|file|attachment)\b|直译|全文翻译|完整翻译|忠实翻译|逐字翻译|翻译成(?:简体)?中文|(?:请|帮我|需要|要)(?:完整)?翻译(?:这篇|这个|这份|全文|链接|文章|文件|附件|文档|PDF))/i },
   { id: 'morning', re: /(?:\b(?:morning|daily|pre-?market|overnight)\s+(?:brief|briefing|report|digest)\b|晨报|早报|盘前简报|隔夜(?:市场|要闻))/i },
   { id: 'earnings', re: /(?:\bearnings\s+(?:review|analysis|recap|update|report)\b|\bquarterly\s+(?:earnings|results?)\b|\bactuals?\s+(?:vs\.?\s+)?(?:consensus|expectations?)\b|\bguidance\s+(?:change|update|revision)\b|财报点评|业绩点评|本季财报|实际.*预期|指引变化)/i },
@@ -100,7 +95,7 @@ const NATURAL_RULES = [
     test: (text) => MACRO_THEME_RE.test(text) && MACRO_ANALYSIS_INTENT_RE.test(text),
     reason: 'macro-theme+analysis-intent',
   },
-  // 只有一个 URL 且没有任务动词时，按“模糊任务默认公众号分析”处理；绝不猜成直译。
+  // A single URL without a task verb is an ambiguous request and defaults to WeChat analysis, never translation.
   { id: 'wechat', re: /^\s*https?:\/\/\S+\s*$/i },
 ];
 
@@ -138,15 +133,15 @@ export async function resolveNaturalWorkflowTask(task, {
     if (matched) return { workflowId: matched, task, reason: 'qdii-data-intent', qdiiPlan };
   }
 
-  // Slack 中最常见的直译用法是自然语言里出现“翻译/直译”并附链接，不一定把
-  // 关键词放在句首。URL + 明确翻译词构成稳定的强意图，优先于其它主题词路由。
+  // Common Slack translations mention a translation word with a link in natural language rather than as a prefix.
+  // A URL plus explicit translation language is strong intent and outranks topic routing.
   if (/https?:\/\/\S+/i.test(task) && /(?:\btranslate\b|\b(?:full|complete|faithful|literal|direct)\s+translation\b|\btranslation\s+of\s+(?:this|the)\s+(?:article|paper|pdf|link|file|attachment)\b|直译|全文翻译|完整翻译|忠实翻译|逐字翻译|翻译)/i.test(task)) {
     const matched = workflowIds.find((id) => id.toLowerCase() === 'translate');
     if (matched) return { workflowId: matched, task, reason: 'translation-keyword-with-url' };
   }
 
-  // 模型/产品能力比较是 prompt 驱动分析，不是“公司深度”。不能仅因出现
-  // deep dive/in-depth analysis 就触发财务、SEC、季度数据和价值链搜索。
+  // Model or product capability comparison is prompt-driven analysis, not a company deep dive. Do not trigger
+  // financial, SEC, quarterly-data, or value-chain research solely because deep-dive wording appears.
   const explicitModelEntities = extractExplicitEntityVersions(task);
   if (explicitModelEntities.length >= 2
     && /(?:比较|对比|\bcompar(?:e|ing|ison)\b|\bversus\b|\bvs\.?\b)/i.test(task)) {
@@ -160,7 +155,7 @@ export async function resolveNaturalWorkflowTask(task, {
     if (matched) return { workflowId: matched, task, reason: rule.reason || 'natural-rule' };
   }
 
-  // 线程里的短补充通常不包含完整意图，默认继承上一任务的工作流。
+  // Short thread follow-ups often lack complete intent, so inherit the prior task workflow.
   if (previousWorkflowId && workflowIds.includes(previousWorkflowId) && String(task).trim().length < 160) {
     return { workflowId: previousWorkflowId, task, reason: 'thread-context' };
   }
@@ -196,8 +191,8 @@ export function createSlackIntentClassifier(config, fetchFn = globalThis.fetch) 
         body: JSON.stringify({
           model: writer.routerModel || writer.model,
           temperature: 0,
-          // GLM 等模型即使 reasoning=none 也可能消耗少量隐藏 token。
-          // 给短 JSON 足够预算，避免 80 token 时正文为空而错误回退默认路由。
+          // Models such as GLM can consume hidden tokens even with reasoning=none. Reserve enough for short JSON
+          // so an empty 80-token body cannot incorrectly fall back to the default route.
           max_tokens: 256,
           reasoning: { effort: writer.routerReasoningEffort || 'none', exclude: true },
           messages: [
@@ -300,8 +295,8 @@ export async function registerSlack({
   defaultWorkflowId = 'wechat',
 }) {
   const app = new App({ token: config.slack.botToken, appToken: config.slack.appToken, socketMode: true, logLevel: 'warn' });
-  // bolt 分发层错误(事件处理器抛错等)在此兜底,避免冒泡。注意:socket-mode 状态机
-  // 内部的 finity 崩溃不走这里,由 index.js 的进程级守卫容忍并触发重连。
+  // Catch Bolt dispatch-layer errors such as handler throws to prevent propagation. Finty state-machine crashes do
+  // not reach this handler; the process-level guard in index.js tolerates them and reconnects.
   app.error(async (error) => { console.error('[slack] bolt error:', (error && error.message) || error); });
   const seen = new Set();
   const dedup = (key) => { if (seen.has(key)) return false; seen.add(key); setTimeout(() => seen.delete(key), 1800000).unref?.(); return true; };

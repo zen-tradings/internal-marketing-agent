@@ -12,14 +12,14 @@ const DEFAULT_GENERATOR_DIR = path.resolve(
   'infographic-generator'
 );
 
-// 生成图统一命名,便于重试时确定性剥离(见 stripGeneratedInfographics)。
+// Use a stable generated-image name so retries can deterministically remove it (see stripGeneratedInfographics).
 export const GENERATED_IMAGE_RE = /^!\[[^\]]*\]\((?:[^()\s]*\/)?infographic-\d+\.png\)\s*$/;
 
 const MAX_SYNTAX_CHARS = 4000;
 const MAX_ANCHOR_CHARS = 60;
 
-// 规划 prompt 中给出的模板白名单。渲染端仍会用 getTemplates() 硬校验,
-// 这里收敛到在公众号竖屏上可读性好、数据形态简单的一批。
+// Template allowlist supplied to the planning prompt. The renderer still enforces getTemplates(); this subset
+// is limited to simple data forms that remain readable in a vertical WeChat layout.
 const TEMPLATE_GUIDE = `
 可用模板(只能从这里选):
 - 流程/步骤/时间线: sequence-steps-simple, sequence-timeline-simple, sequence-ascending-steps, sequence-funnel-simple, sequence-pyramid-simple, sequence-roadmap-vertical-simple
@@ -76,8 +76,8 @@ function trimTrailingSlash(value) {
   return String(value || '').replace(/\/+$/, '');
 }
 
-// 调 OpenRouter 规划文章配图。解析/校验失败一律返回 null,不抛错,
-// 由调用方按“无配图”继续发布流程。
+// Ask OpenRouter to plan article images. Parsing or validation failures return null without throwing so the
+// caller continues publication without an infographic.
 export async function buildInfographicPlan({
   title,
   markdown,
@@ -160,7 +160,7 @@ function normalizeInfographicItem(item) {
   if (!anchor || anchor.length > MAX_ANCHOR_CHARS) return null;
   if (!syntax || syntax.length > MAX_SYNTAX_CHARS) return null;
   if (!/^infographic\s+\S+\s*$/m.test(syntax.split('\n')[0] || '')) return null;
-  // 离线渲染不加载远程图标/插画资源,直接剔除这些行,避免渲染端外联。
+  // Offline rendering must not load remote icon or illustration resources; remove those rows to prevent egress.
   syntax = syntax
     .split('\n')
     .filter((line) => !/^\s*(icon|illus)\s+\S/.test(line))
@@ -168,8 +168,8 @@ function normalizeInfographicItem(item) {
   return { anchor, alt: alt.slice(0, 30), syntax };
 }
 
-// 重试发布时,article.md 可能已含上一次注入的生成图。按确定性的文件命名剥离,
-// 保证门禁看到的始终是模型产出的原文,且重复发布不会累积图片。
+// A retry may include a previously injected image in article.md. Remove it by stable file name so the gate
+// always sees model output and repeated publication cannot accumulate images.
 export function stripGeneratedInfographics(markdown) {
   return String(markdown || '')
     .split('\n')
@@ -182,8 +182,8 @@ function normalizeAnchorText(value) {
   return String(value || '').replace(/\s+/g, '').trim();
 }
 
-// 把生成图插入锚点所在块之后:标题锚点插在标题行后,段落锚点插在段落结束后。
-// 找不到锚点返回 null,由调用方告警并跳过该图。
+// Insert a generated image after its anchor block: after a heading line or a paragraph end. Return null when no
+// anchor is found so the caller warns and skips that image.
 export function insertInfographicImage(markdown, { anchor, imagePath, alt }) {
   const lines = String(markdown || '').split('\n');
   const needle = normalizeAnchorText(anchor);
@@ -210,8 +210,8 @@ export function insertInfographicImage(markdown, { anchor, imagePath, alt }) {
   return next.join('\n').replace(/\n{3,}/g, '\n\n');
 }
 
-// 规划 -> 逐张渲染 -> 插入 Markdown。任何一步失败都降级为跳过该图并记录
-// warning,绝不阻断发布(与封面提取失败的回退策略一致)。
+// Plan, render each image, then insert into Markdown. Any failure degrades to a recorded warning and skipped image;
+// it never blocks publication, consistent with cover-extraction fallback.
 export async function generateArticleInfographics({
   title,
   markdown,

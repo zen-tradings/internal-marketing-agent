@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// 用法: node render.mjs <data.json> [out.png]
+// Usage: node render.mjs <data.json> [out.png]
 // data.json: { "syntax": "infographic <template>\ndata\n  ...", "width"?: number }
-// 用 @antv/infographic 的 SSR 在本地把信息图语法渲染成 SVG,
-// 再由本机 Chromium/Chrome 截图成 PNG(微信不支持 SVG)。
+// Render infographic syntax locally to SVG with @antv/infographic SSR, then capture PNG with local Chromium/Chrome
+// because WeChat does not support SVG.
 import {
   mkdtempSync,
   readFileSync,
@@ -19,14 +19,14 @@ import { resolveBrowserExecutable } from '../cover-generator/render.mjs';
 
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 
-// SSR 文本测量按精确宽度给标题/标签容器排版,浏览器实际字宽略大就会换行。
-// 预留 20% 测量余量,避免中文标题被拆成两行遮挡图形。
+// SSR text measurement lays out title/label containers at exact widths, while browser glyphs can be slightly wider.
+// Reserve 20% measurement headroom so Han titles do not wrap and obscure graphics.
 setFontExtendFactor(1.2);
-// 公众号正文内容区宽约 677px。过窄的模板(如竖向卡片)按比例放大到可读宽度,
-// 过宽的保持自然尺寸,由微信端 max-width 自适应。
+// The WeChat body content area is about 677px wide. Scale overly narrow templates, such as vertical cards, to a
+// readable width; keep wide templates at natural size for WeChat max-width adaptation.
 const MIN_DISPLAY_WIDTH = 560;
 const MAX_DISPLAY_WIDTH = 900;
-const SCALE = 2; // deviceScaleFactor,保证 retina 清晰度
+const SCALE = 2; // deviceScaleFactor for Retina clarity.
 
 export function parseTemplateName(syntax) {
   const firstLine = String(syntax || '').split('\n').map((line) => line.trim()).find(Boolean) || '';
@@ -45,8 +45,8 @@ export async function renderInfographic({
   const syntax = String(data.syntax || '').trim();
   if (!syntax) throw new Error('data.json 缺少 syntax 字段');
 
-  // 未知模板会被 SSR 静默回退成通用布局,容易产生误导性图片,这里硬失败,
-  // 由调用方丢弃该张图并告警。
+  // SSR silently falls back to a generic layout for unknown templates, which can be misleading; hard-fail so the
+  // caller discards and warns about the image.
   const template = parseTemplateName(syntax);
   if (!template) throw new Error('信息图语法首行必须是: infographic <template>');
   if (!getTemplates().includes(template)) {
@@ -65,8 +65,8 @@ export async function renderInfographic({
     : Math.min(Math.max(naturalWidth, MIN_DISPLAY_WIDTH), MAX_DISPLAY_WIDTH);
   const displayHeight = Math.ceil((naturalHeight * displayWidth) / naturalWidth);
 
-  // SVG 内 font-family 是呈现属性,CSS 优先级更高,这里补齐系统中文字体回退,
-  // 避免字体 CDN 不可达时中文变成豆腐块。
+  // SVG font-family is a presentation attribute and CSS has higher precedence. Add system Han-font fallback so
+  // unavailable font CDNs do not render Han characters as tofu glyphs.
   const html = `<!doctype html>
 <html>
 <head>
@@ -103,7 +103,7 @@ ${svg}
       deviceScaleFactor: SCALE,
     });
     await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'load', timeout: 30000 });
-    // 远程字体样式表可达时等字体就绪;不可达时 document.fonts.ready 也会正常 resolve。
+    // Wait for fonts when the remote stylesheet is available; document.fonts.ready also resolves when it is not.
     await page.evaluate(() => (document.fonts ? document.fonts.ready : undefined)).catch(() => {});
     await page.screenshot({ path: absoluteOutPath, type: 'png' });
   } finally {

@@ -1,8 +1,8 @@
 import { findUnreadableTables } from './mobile-tables.js';
 import { inspectCodeBlocks } from './code-blocks.js';
 
-// 发布前门禁:纯函数,确定性规则。errors 出口拦截(不予发布),warnings 放行但需 Slack 提醒人工关注。
-// 门禁在注入固定图之前跑,检查的是模型产出的原文,本地路径/密钥这类内容在模型输出里本就不该出现。
+// Pre-publication gate: pure deterministic rules. Errors block egress; warnings pass with a Slack review notice.
+// Run before fixed-image injection and inspect model output only; local paths and credentials must never be present.
 
 const SECRET_PATTERNS = [
   { re: /sk-or-[A-Za-z0-9_-]{10,}/, label: 'OpenRouter API key(sk-or-...)' },
@@ -44,8 +44,8 @@ export function checkArticle(markdown, {
     warnings.push(`排版提醒:正文仍有 ${unreadableTables.length} 个无法自动拆分的宽表或列数异常表格,已按可读性优先放行`);
   }
 
-  // 直译以忠实还原原文为最高优先级，不用原创写作的破折号风格规范干预译文。
-  // 这里只豁免这一条风格提醒；密钥、本地路径、坏表格等安全与完整性门禁保持不变。
+  // Faithful translation takes precedence over original-writing dash style rules.
+  // Exempt only this style warning; credential, local-path, malformed-table, and other safety gates remain active.
   if (workflowMode !== 'translation' && md.includes('——')) {
     warnings.push('风格:出现中文破折号——,规范要求用逗号或冒号代替');
   }

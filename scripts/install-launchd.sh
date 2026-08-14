@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# 为 zen-slack-bot (Zen Content Hub) 安装 macOS launchd 开机自启常驻。
+# Install the zen-slack-bot (Zen Content Hub) macOS launchd persistent service.
 #
-# 只在本机(有人值守的 Mac)使用。安装后 bot 会作为当前登录用户的 LaunchAgent
-# 在开机/登录时自动拉起，进程崩溃时自动重启，正常退出(exit 0)则不重启。
+# Use only on a locally attended Mac. The bot runs as the current user's LaunchAgent at boot/login, restarts on
+# crashes, and does not restart after a normal exit (exit 0).
 #
-# 生成的 plist 只显式设置服务运行所需的 PATH。项目不检查公网出口 IP，
-# 也不因代理环境变量阻止启动或发布；实际出站路由由 macOS 与 Node.js
-# 运行环境决定。launchd 不会自动继承交互式 shell profile 中的环境变量，
-# 如需为服务单独配置网络环境，应在服务配置中明确设置。
+# The generated plist explicitly sets only the PATH required by the service. The project neither checks public egress
+# IP nor blocks startup/publishing for proxy variables; macOS and Node.js determine routing. launchd does not inherit
+# interactive shell-profile variables, so configure any service-specific network environment explicitly in service config.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -34,9 +33,8 @@ fi
 NODE_BIN="$(command -v node)"
 NODE_DIR="$(cd "$(dirname "$NODE_BIN")" && pwd)"
 
-# launchd 不会读取交互式 shell 的 profile。除 Node 自身目录外，显式加入
-# Apple Silicon 与 Intel Homebrew 的常用 bin 路径，并优先使用当前 brew
-# 实际返回的 prefix，确保 Poppler 等运行时工具在登录重启后仍可被找到。
+# launchd does not read interactive shell profiles. Besides Node's directory, add common Apple Silicon and Intel
+# Homebrew bin paths and prefer the current brew prefix so Poppler and other runtime tools remain available after login.
 PATH_PARTS=("$NODE_DIR")
 append_path_part() {
   local candidate="$1"
@@ -127,8 +125,8 @@ launchctl bootout "gui/${UID_NUM}/${LABEL}" >/dev/null 2>&1 \
   || launchctl bootout "gui/${UID_NUM}" "$PLIST_PATH" >/dev/null 2>&1 \
   || true
 
-# bootout 有时会在旧进程退出完成前返回；等待服务从 launchd 域消失，避免紧接着
-# bootstrap 时出现瞬时的 Input/output error。
+# bootout can return before the old process exits. Wait for the service to leave the launchd domain to avoid a
+# transient Input/output error during the following bootstrap.
 for _ in {1..20}; do
   if ! launchctl print "gui/${UID_NUM}/${LABEL}" >/dev/null 2>&1; then
     break

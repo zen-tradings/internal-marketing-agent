@@ -13,7 +13,7 @@ export default {
   mode: 'analysis',
   sourcePolicy: officialFirstPolicy(),
   factReview: true,
-  // 支持可选 cron 定时触发:设置 MORNING_CRON 后自动追加 cron 触发器,未设置则仅 slack。
+  // Support optional cron triggers: set MORNING_CRON to append one; otherwise accept Slack only.
   get triggers() {
     const cronExpr = runtimeConfig()?.workflowEnvironment?.morningCron || process.env.MORNING_CRON;
     return cronExpr ? ['slack', `cron:${cronExpr}`] : ['slack'];

@@ -183,8 +183,8 @@ export function normalizePlanningResult(raw, input, workflow = {}, taskContext =
     }));
   const mergedEntities = uniqueByComparable([...locked, ...returnedEntities], (entity) => entity.literal);
   const maxQueries = Math.max(2, positiveInteger(options.maxQueries, 8));
-  // “只使用用户链接”会关闭所有补充检索，必须由原始 Prompt 明确授权。
-  // 规划模型不能自行把普通的“分析这个链接”升级成排他性来源约束。
+  // An only-user-links request disables supplemental search and must be explicit in the original prompt.
+  // The planner cannot upgrade an ordinary link-analysis request into an exclusive-source constraint.
   const onlyUserLinks = fallback.only_user_links;
   const contract = {
     ...fallback,
@@ -208,7 +208,7 @@ export function normalizePlanningResult(raw, input, workflow = {}, taskContext =
       .slice(0, 10),
     freshness_requirement: cleanString(candidate.freshness_requirement) || fallback.freshness_requirement,
     only_user_links: onlyUserLinks,
-    // 代码块能力只能由原始 Prompt 确定，不能接受规划模型自行开启。
+    // Only the original prompt can authorize code blocks; the planner cannot enable them independently.
     content_policy: fallback.content_policy,
     clarification_needed: false,
     clarification_question: '',
