@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isTransientSocketModeError } from '../src/lib/slack-resilience.js';
+import { isSlackAppConnected, isTransientSocketModeError } from '../src/lib/slack-resilience.js';
 
 test('识别 socket-mode finity 的 server explicit disconnect 崩溃', () => {
   const err = new Error("Unhandled event 'server explicit disconnect' in state 'connecting'.");
@@ -25,4 +25,11 @@ test('无关错误不误吞', () => {
 test('容忍非 Error 入参', () => {
   assert.equal(isTransientSocketModeError(null), false);
   assert.equal(isTransientSocketModeError('just a string'), false);
+});
+
+test('Slack readiness 读取 Socket Mode client 的真实活动状态', () => {
+  assert.equal(isSlackAppConnected({ receiver: { client: { isActive: () => true } } }), true);
+  assert.equal(isSlackAppConnected({ receiver: { client: { isActive: () => false } } }), false);
+  assert.equal(isSlackAppConnected({}), false);
+  assert.equal(isSlackAppConnected({ receiver: { client: { isActive: () => { throw new Error('state'); } } } }), false);
 });

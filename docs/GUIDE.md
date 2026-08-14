@@ -67,7 +67,8 @@
 
 ⑤ 回报     src/core/notifier.js
    入队回执显示完整 Prompt、精确型号、链接数量和修订号。成功/失败/警告/澄清都
-   best-effort 回 Slack 原消息串。通知失败只记录日志，不能把已创建草稿改记为失败。
+   回 Slack 原消息串。终态通知和 QDII 核心回复失败时进入 SQLite outbox，Slack 恢复后
+   按任务当前状态补发；进度和警告仍为 best-effort。通知失败不能把已创建草稿改记为失败。
 ```
 
 ## 二、配置的三层

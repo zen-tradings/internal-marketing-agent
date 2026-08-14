@@ -17,37 +17,13 @@ export function checkArticle(markdown, {
   contentPolicy = {},
 } = {}) {
   const md = String(markdown || '');
-  const errors = [];
+  const errors = checkOutboundLeaks(md, { secretValues }).errors;
   const warnings = [];
 
   const fmMatch = md.match(/^---\n([\s\S]*?)\n---/);
   const fm = fmMatch ? fmMatch[1] : '';
-  // `cover` 由发布链路写回为本地文件路径，重试时不能把这个系统字段误判为
-  // 模型泄漏的本地路径。正文及其他 frontmatter 字段仍保持严格检查。
-  const markdownWithoutGeneratedCover = fmMatch
-    ? md.replace(/^---\n[\s\S]*?\n---/, (block) => block.replace(/^\s*cover\s*:\s*.*(?:\n|$)/gm, ''))
-    : md;
-
   if (!fmMatch || !/^\s*title\s*:\s*\S/m.test(fm)) {
     errors.push('出口拦截:frontmatter 缺少 title 字段');
-  }
-
-  for (const { re, label } of SECRET_PATTERNS) {
-    if (re.test(md)) {
-      errors.push(`出口拦截:疑似密钥泄漏(${label}),不允许发布`);
-    }
-  }
-
-  for (const secret of secretValues) {
-    const value = String(secret || '').trim();
-    if (value.length >= 8 && md.includes(value)) {
-      errors.push('出口拦截:正文包含当前进程的真实凭据值,不允许发布');
-      break;
-    }
-  }
-
-  if (/(?:\/Users\/|\/home\/|\/srv\/|\/tmp\/|[A-Za-z]:\\Users\\)/.test(markdownWithoutGeneratedCover)) {
-    errors.push('出口拦截:正文包含本地路径,模型产出不应泄漏运行环境路径');
   }
 
   const code = inspectCodeBlocks(md);
@@ -75,4 +51,44 @@ export function checkArticle(markdown, {
   }
 
   return { errors, warnings };
+}
+
+export function checkOutboundLeaks(markdown, { secretValues = [] } = {}) {
+  const md = String(markdown || '');
+  const frontmatter = md.match(/^---\n[\s\S]*?\n---/);
+  const withoutGeneratedCover = frontmatter
+    ? md.replace(/^---\n[\s\S]*?\n---/, (block) => block.replace(/^\s*cover\s*:\s*.*(?:\n|$)/gm, ''))
+    : md;
+  const errors = [];
+  for (const { re, label } of SECRET_PATTERNS) {
+    if (re.test(md)) errors.push(`出口拦截:疑似密钥泄漏(${label}),不允许发布`);
+  }
+  for (const secret of secretValues) {
+    const value = String(secret || '').trim();
+    if (value.length >= 8 && md.includes(value)) {
+      errors.push('出口拦截:正文包含当前进程的真实凭据值,不允许发布');
+      break;
+    }
+  }
+  if (/(?:\/Users\/|\/home\/|\/srv\/|\/tmp\/|[A-Za-z]:\\Users\\)/.test(withoutGeneratedCover)) {
+    errors.push('出口拦截:正文包含本地路径,模型产出不应泄漏运行环境路径');
+  }
+  return { errors };
+}
+
+export function configuredSecretValues(config = {}) {
+  return [
+    config.writer?.openrouterApiKey,
+    config.writer?.exaApiKey,
+    config.slack?.botToken,
+    config.slack?.appToken,
+    config.documents?.googleDocsAccessToken,
+    config.documents?.googleDocsClientSecret,
+    config.documents?.googleDocsRefreshToken,
+    config.documents?.githubToken,
+    config.wechat?.appSecret,
+    config.customerio?.appApiKey,
+    config.translation?.notionApiToken,
+    config.translation?.datalabApiKey,
+  ];
 }

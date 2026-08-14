@@ -10,3 +10,11 @@ export function isTransientSocketModeError(err) {
   // 限定来自 socket-mode / finity 状态机,避免误吞其它同措辞的错误
   return /socket-mode|finity|StateMachine|SocketModeClient/i.test(stack) || /disconnect/i.test(msg);
 }
+
+export function isSlackAppConnected(app) {
+  try {
+    return app?.receiver?.client?.isActive?.() === true;
+  } catch {
+    return false;
+  }
+}

@@ -29,8 +29,9 @@
     "status": "node scripts/status.mjs",
     "trace:research": "node scripts/research-trace.mjs",
     "check:syntax": "node scripts/check-syntax.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs",
     "check:dependencies": "npm audit --omit=dev --audit-level=high",
-    "check": "npm run check:syntax && npm test && npm run check:dependencies",
+    "check": "npm run check:syntax && npm run check:architecture && npm test && npm run check:dependencies",
     "test": "node --test test/*.test.js test/golden/*.test.js",
     "test:update-golden": "node scripts/update-render-golden.mjs"
   },

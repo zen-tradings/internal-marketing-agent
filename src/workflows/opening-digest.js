@@ -1,5 +1,6 @@
 import { sharedResearch, envModel, envTimeoutMs, workDirFor } from './shared.js';
 import { easternDateKey, isUsEquitySession } from '../lib/us-equity-calendar.js';
+import { runtimeConfig } from '../config/runtime.js';
 import {
   openingDigestResearchQueries,
   openingDigestSearchInput,
@@ -42,13 +43,16 @@ export default {
   factReview: true,
   factReviewPolicy: 'severe-only',
   triggers: ['slack', 'cron:15 10 * * 1-5'],
-  cronTimezone: 'America/New_York',
+  get cronTimezone() { return runtimeConfig()?.openingDigest?.timezone || process.env.OPENING_DIGEST_TIMEZONE || 'America/New_York'; },
+  cronCatchUpWindowMinutes: 120,
+  cronRunKey: (date) => easternDateKey(date),
   get cronInput() { return openingDigestSearchInput(new Date()); },
-  shouldRun: (date) => /^(1|true|yes|on)$/i.test(String(process.env.OPENING_DIGEST_ENABLED || '')) && isUsEquitySession(date),
+  shouldRun: (date) => (runtimeConfig()?.openingDigest?.enabled
+    ?? /^(1|true|yes|on)$/i.test(String(process.env.OPENING_DIGEST_ENABLED || ''))) && isUsEquitySession(date),
   systemPrompt: 'You are the editor of Zen Opening Digest. Use only supplied research, keep claims sourced, and write concise English market commentary. Never provide investment advice.',
   outputInstruction: 'Return the Opening Digest Markdown contract only.',
   get workDir() { return workDirFor('opening-digest'); },
-  get model() { return process.env.OPENING_DIGEST_MODEL || envModel(); },
+  get model() { return runtimeConfig()?.openingDigest?.model || process.env.OPENING_DIGEST_MODEL || envModel(); },
   channel: 'customerio-opening-digest',
   get timeoutMs() { return envTimeoutMs(); },
   get research() {

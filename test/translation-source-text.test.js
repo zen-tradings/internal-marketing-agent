@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { JSDOM } from 'jsdom';
+import { withTaskCancellation } from '../src/lib/task-cancellation.js';
 import {
   acquireSourceDocument,
   assertPdfExtractionCoverage,
@@ -125,9 +126,33 @@ test('安全下载只允许有界 GET/POST，并把证监会表单原样交给�
   }), /请求体超过/);
 });
 
-test('PDF 页数在文字提取前受硬上限保护', () => {
-  const spawn = () => ({ status: 0, stdout: 'Pages: 121\n', stderr: '' });
-  assert.throws(() => assertPdfPageLimit('/tmp/source.pdf', 120, spawn), /121\/120/);
+test('任务取消包装不会关闭安全下载的 DNS pinning', async () => {
+  const controller = new AbortController();
+  const wrappedFetch = withTaskCancellation(globalThis.fetch, controller.signal);
+  let pinnedAddresses;
+  let receivedSignal;
+  const result = await safeFetchResource({
+    url: 'https://example.com/report.txt',
+    dnsLookup: PUBLIC_DNS,
+    fetchFn: wrappedFetch,
+    pinnedFetchFactory(addresses) {
+      pinnedAddresses = addresses;
+      return async (_url, options) => {
+        receivedSignal = options.signal;
+        return new Response('pinned', { status: 200 });
+      };
+    },
+  });
+  assert.deepEqual(pinnedAddresses, [{ address: '93.184.216.34', family: 4 }]);
+  assert.equal(receivedSignal.aborted, false);
+  controller.abort();
+  assert.equal(receivedSignal.aborted, true);
+  assert.equal(result.buffer.toString(), 'pinned');
+});
+
+test('PDF 页数在文字提取前受硬上限保护', async () => {
+  const execute = async () => ({ stdout: 'Pages: 121\n', stderr: '' });
+  await assert.rejects(() => assertPdfPageLimit('/tmp/source.pdf', 120, { execute }), /121\/120/);
 });
 
 test('PDF 在进入 Poppler/Datalab 前验证真实签名，Slack 登录页返回 files:read 指引', async () => {

@@ -7,9 +7,9 @@ import {
   generateArticleInfographics as defaultGenerateArticleInfographics,
   stripGeneratedInfographics,
 } from '../lib/infographic.js';
-import { checkArticle as defaultCheckArticle } from '../lib/gate.js';
+import { checkArticle as defaultCheckArticle, configuredSecretValues } from '../lib/gate.js';
 import { injectFixedImages as defaultInjectFixedImages } from '../lib/assets.js';
-import { renderAndPublishWithFinalFooter, stripFinalTailMarkdown } from '../lib/wechat-render.js';
+import { recoverWechatDraft, renderAndPublishWithFinalFooter, stripFinalTailMarkdown } from '../lib/wechat-render.js';
 import { normalizeWideTables as defaultNormalizeWideTables } from '../lib/mobile-tables.js';
 import { normalizeIndentedCodeBlocks as defaultNormalizeIndentedCodeBlocks } from '../lib/code-blocks.js';
 import { FIXED_DRAFT_TEMPLATE_IDS } from '../lib/draft-template.js';
@@ -71,6 +71,7 @@ export function makeChannel({
   injectFixedImages = defaultInjectFixedImages,
   normalizeWideTables = defaultNormalizeWideTables,
   normalizeIndentedCodeBlocks = defaultNormalizeIndentedCodeBlocks,
+  recoverDraft = recoverWechatDraft,
 } = {}) {
   return {
     id: 'wechat-draft',
@@ -83,6 +84,9 @@ export function makeChannel({
       notify,
       notifier,
       runId,
+      signal,
+      existingRemoteId,
+      onCreated,
       resumeFromCheckpoint = false,
       contentPolicy = {},
     }) {
@@ -104,6 +108,26 @@ export function makeChannel({
         const err = new Error('微信凭据缺失(WECHAT_APP_ID/WECHAT_APP_SECRET)');
         err.stage = 'publish';
         throw err;
+      }
+
+      if (existingRemoteId) {
+        try {
+          const recovered = await recoverDraft({
+            appId, appSecret, mediaId: existingRemoteId,
+            timeoutMs: config.wechat.timeoutMs, signal,
+          });
+          const recoveredTitle = recovered?.news_item?.[0]?.title
+            || recovered?.content?.news_item?.[0]?.title
+            || '';
+          if (!recoveredTitle || recoveredTitle !== title) {
+            throw new Error(`远端标题不匹配:${recoveredTitle || '无标题'}`);
+          }
+          return { mediaId: String(existingRemoteId), title };
+        } catch (error) {
+          const wrapped = new Error(`微信既有草稿恢复失败:${error.message}`);
+          wrapped.stage = 'publish';
+          throw wrapped;
+        }
       }
 
       // 将独立的 Markdown 四空格代码确定性规范为 text 围栏。是否由用户授权
@@ -149,20 +173,7 @@ export function makeChannel({
       const gate = checkArticle(markdownForGate(markdown, assetsConfig), {
         workflowMode: workflow?.mode || '',
         contentPolicy,
-        secretValues: [
-          config.writer?.openrouterApiKey,
-          config.writer?.exaApiKey,
-          config.slack?.botToken,
-          config.slack?.appToken,
-          config.documents?.googleDocsAccessToken,
-          config.documents?.googleDocsClientSecret,
-          config.documents?.googleDocsRefreshToken,
-          config.documents?.githubToken,
-          config.wechat?.appSecret,
-          config.customerio?.appApiKey,
-          config.translation?.notionApiToken,
-          config.translation?.datalabApiKey,
-        ],
+        secretValues: configuredSecretValues(config),
       });
       if (gate.errors.length) {
         try { if (notifier && notify) await notifier.warn(notify, `门禁拦截,不予发布:\n${gate.errors.join('\n')}`); }
@@ -268,24 +279,20 @@ export function makeChannel({
         const err = new Error('缺少封面,微信草稿要求封面图'); err.stage = 'cover'; throw err;
       }
 
-      // 本地模式:凭据走 env(renderAndPublish 内部读 WECHAT_APP_ID/SECRET),不传 appId
-      const prevAppId = process.env.WECHAT_APP_ID;
-      const prevAppSecret = process.env.WECHAT_APP_SECRET;
-      process.env.WECHAT_APP_ID = appId;
-      process.env.WECHAT_APP_SECRET = appSecret;
       try {
         const mediaId = await renderAndPublish(undefined, {
           ...RENDER_OPTS,
           file: articlePath,
+          appId,
+          appSecret,
+          timeoutMs: config.wechat.timeoutMs,
+          signal,
           finalSurveyPath: assetsConfig.surveyImage,
           finalFooterPath: assetsConfig.footerImage,
         }, getInputContent);
+        await onCreated?.({ remoteId: String(mediaId), title });
         return { mediaId, title };
       } catch (e) { const err = new Error(`发布失败:${e.message}`); err.stage = 'publish'; throw err; }
-      finally {
-        if (prevAppId === undefined) delete process.env.WECHAT_APP_ID; else process.env.WECHAT_APP_ID = prevAppId;
-        if (prevAppSecret === undefined) delete process.env.WECHAT_APP_SECRET; else process.env.WECHAT_APP_SECRET = prevAppSecret;
-      }
     },
   };
 }

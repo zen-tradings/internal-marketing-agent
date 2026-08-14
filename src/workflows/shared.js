@@ -7,6 +7,7 @@
 // 时求值一次的常量,这样才能保持与原 wechat.js 一致的"dotenv 在 import 之后才注入也生效"语义。
 
 import path from 'node:path';
+import { runtimeConfig } from '../config/runtime.js';
 
 // Exa 双路调研的优先信源(声明式)。EXA_PRIORITY_DOMAINS(逗号分隔)整体覆盖默认列表;
 // Exa includeDomains 会匹配子域名,这里只需写主域。
@@ -132,6 +133,8 @@ const DEFAULT_INDEPENDENT_REPORTING_SOURCES = [
 ];
 
 export function prioritySources() {
+  const configured = runtimeConfig()?.workflowEnvironment;
+  if (configured?.priorityDomainsOverride) return [...configured.priorityDomains];
   const raw = process.env.EXA_PRIORITY_DOMAINS;
   return raw
     ? raw.split(',').map((s) => s.trim()).filter(Boolean)
@@ -139,6 +142,8 @@ export function prioritySources() {
 }
 
 export function officialSources() {
+  const configured = runtimeConfig()?.workflowEnvironment;
+  if (configured?.officialDomainsOverride) return [...configured.officialDomains];
   const raw = process.env.EXA_OFFICIAL_DOMAINS;
   return raw
     ? raw.split(',').map((s) => s.trim()).filter(Boolean)
@@ -146,16 +151,18 @@ export function officialSources() {
 }
 
 export function excludedMediaSources() {
+  const configured = runtimeConfig()?.workflowEnvironment;
   return uniqueDomains([
     ...DEFAULT_EXCLUDED_MEDIA_SOURCES,
-    ...csvDomains(process.env.EXA_EXCLUDED_MEDIA_DOMAINS),
+    ...(configured ? configured.excludedMediaDomains : csvDomains(process.env.EXA_EXCLUDED_MEDIA_DOMAINS)),
   ]);
 }
 
 export function independentReportingSources() {
+  const configured = runtimeConfig()?.workflowEnvironment;
   return uniqueDomains([
     ...DEFAULT_INDEPENDENT_REPORTING_SOURCES,
-    ...csvDomains(process.env.EXA_INDEPENDENT_MEDIA_DOMAINS),
+    ...(configured ? configured.independentMediaDomains : csvDomains(process.env.EXA_INDEPENDENT_MEDIA_DOMAINS)),
   ]);
 }
 
@@ -179,14 +186,14 @@ export function officialFirstPolicy() {
   };
 }
 
-export function envChannel() { return process.env.WECHAT_CHANNEL || 'wechat-draft'; }
-export function envModel() { return process.env.OPENROUTER_MODEL; }
-export function envTimeoutMs() { return Number(process.env.DEFAULT_TIMEOUT_MS || 600000); }
+export function envChannel() { return runtimeConfig()?.workflowEnvironment?.channel || process.env.WECHAT_CHANNEL || 'wechat-draft'; }
+export function envModel() { return runtimeConfig()?.writer?.model || process.env.OPENROUTER_MODEL; }
+export function envTimeoutMs() { return runtimeConfig()?.defaultTimeoutMs || Number(process.env.DEFAULT_TIMEOUT_MS || 600000); }
 
 // wechat 自身的 workDir 保持现状(不带子目录);新工作流用「基准目录/工作流 id」,
 // 避免并发任务写同一个 article.md 互相覆盖。
 export function workDirFor(id) {
-  const base = process.env.WORK_DIR || '/srv/zen/wechat';
+  const base = runtimeConfig()?.workDir || process.env.WORK_DIR || '/srv/zen/wechat';
   return path.join(base, id);
 }
 

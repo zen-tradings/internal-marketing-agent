@@ -20,14 +20,21 @@ export function loadConfig(env = process.env) {
   };
   const slackAllowedUserIds = csvValues(env.SLACK_ALLOWED_USER_IDS);
   const slackAllowedChannelIds = csvValues(env.SLACK_ALLOWED_CHANNEL_IDS);
-  if (String(env.NODE_ENV || '').toLowerCase() === 'production') {
+  const production = String(env.NODE_ENV || '').toLowerCase() === 'production';
+  const maxConcurrency = positiveIntegerOrThrow(env.MAX_CONCURRENCY, 1, 'MAX_CONCURRENCY');
+  const workDir = env.WORK_DIR || '/srv/zen/wechat';
+  const dbPath = env.DB_PATH || path.resolve(env.HOME || '.', 'zen-content-hub', 'runs.db');
+  if (production) {
     if (!slackAllowedUserIds.length) throw new Error('生产环境必须配置 SLACK_ALLOWED_USER_IDS');
     if (!slackAllowedChannelIds.length) throw new Error('生产环境必须配置 SLACK_ALLOWED_CHANNEL_IDS');
+    if (maxConcurrency !== 1) throw new Error('生产环境 MAX_CONCURRENCY 必须为 1');
+    if (!path.isAbsolute(workDir)) throw new Error('生产环境 WORK_DIR 必须是绝对路径');
+    if (!path.isAbsolute(dbPath)) throw new Error('生产环境 DB_PATH 必须是绝对路径');
   }
   return {
-    workDir: env.WORK_DIR || '/srv/zen/wechat',
-    dbPath: env.DB_PATH || `${env.HOME || '.'}/zen-content-hub/runs.db`,
-    maxConcurrency: positiveIntegerOrThrow(env.MAX_CONCURRENCY, 1, 'MAX_CONCURRENCY'),
+    workDir,
+    dbPath,
+    maxConcurrency,
     maxQueueSize: positiveIntegerOrThrow(env.MAX_QUEUE_SIZE, 100, 'MAX_QUEUE_SIZE'),
     defaultTimeoutMs: positiveNumber(env.DEFAULT_TIMEOUT_MS, 10 * 60 * 1000, 'DEFAULT_TIMEOUT_MS'),
     runRetentionDays: positiveIntegerOrThrow(env.RUN_RETENTION_DAYS, 90, 'RUN_RETENTION_DAYS'),
@@ -67,6 +74,17 @@ export function loadConfig(env = process.env) {
       pipelineVersion: analysisPipelineVersion(env.ANALYSIS_PIPELINE_VERSION),
       searchMaxQueries: positiveIntegerOrThrow(env.ANALYSIS_SEARCH_MAX_QUERIES, 8, 'ANALYSIS_SEARCH_MAX_QUERIES'),
       recentWindowDays: positiveIntegerOrThrow(env.ANALYSIS_RECENT_WINDOW_DAYS, 60, 'ANALYSIS_RECENT_WINDOW_DAYS'),
+    },
+    workflowEnvironment: {
+      channel: workflowChannel(env.WECHAT_CHANNEL),
+      morningCron: String(env.MORNING_CRON || '').trim(),
+      newsletterEdition: newsletterEdition(env.NEWSLETTER_EDITION),
+      priorityDomains: domainValues(env.EXA_PRIORITY_DOMAINS, 'EXA_PRIORITY_DOMAINS'),
+      priorityDomainsOverride: Boolean(String(env.EXA_PRIORITY_DOMAINS || '').trim()),
+      officialDomains: domainValues(env.EXA_OFFICIAL_DOMAINS, 'EXA_OFFICIAL_DOMAINS'),
+      officialDomainsOverride: Boolean(String(env.EXA_OFFICIAL_DOMAINS || '').trim()),
+      excludedMediaDomains: domainValues(env.EXA_EXCLUDED_MEDIA_DOMAINS, 'EXA_EXCLUDED_MEDIA_DOMAINS'),
+      independentMediaDomains: domainValues(env.EXA_INDEPENDENT_MEDIA_DOMAINS, 'EXA_INDEPENDENT_MEDIA_DOMAINS'),
     },
     qdii: {
       enabled: booleanFlag(env.QDII_ENABLED),
@@ -118,7 +136,11 @@ export function loadConfig(env = process.env) {
       googleDocsRefreshToken: env.GOOGLE_DOCS_REFRESH_TOKEN || '',
       githubToken: env.GITHUB_TOKEN || '',
     },
-    wechat: { appId: need('WECHAT_APP_ID'), appSecret: need('WECHAT_APP_SECRET') },
+    wechat: {
+      appId: need('WECHAT_APP_ID'),
+      appSecret: need('WECHAT_APP_SECRET'),
+      timeoutMs: positiveNumber(env.WECHAT_TIMEOUT_MS, 30000, 'WECHAT_TIMEOUT_MS'),
+    },
     customerio: {
       appApiKey: env.CUSTOMERIO_APP_API_KEY || '',
       baseUrl: env.CUSTOMERIO_API_BASE_URL || 'https://api.customer.io',
@@ -233,6 +255,28 @@ function newsletterAudienceStage(value) {
     throw new Error('NEWSLETTER_AUDIENCE_STAGE 必须是 internal、pilot 或 full');
   }
   return stage;
+}
+
+function workflowChannel(value) {
+  const channel = String(value || 'wechat-draft').trim();
+  if (!['wechat-draft', 'mock'].includes(channel)) throw new Error('WECHAT_CHANNEL 必须是 wechat-draft 或 mock');
+  return channel;
+}
+
+function newsletterEdition(value) {
+  const edition = String(value || 'Vol. 1').trim();
+  if (!edition || edition.length > 80) throw new Error('NEWSLETTER_EDITION 必须是 1-80 字符');
+  return edition;
+}
+
+function domainValues(value, label) {
+  const values = csvValues(value);
+  for (const domain of values) {
+    if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(domain)) {
+      throw new Error(`${label} 包含无效域名:${domain}`);
+    }
+  }
+  return values.map((domain) => domain.toLowerCase());
 }
 
 function booleanFlag(value) {

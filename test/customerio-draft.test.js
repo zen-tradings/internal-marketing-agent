@@ -116,6 +116,45 @@ test('Customer.io channel:只创建内部 segment 草稿,绝不夹带发送或�
   assert.ok(!('scheduled_at' in request.payload));
 });
 
+test('Customer.io channel:创建后立即持久化 remote id，恢复任务不重复 POST', async () => {
+  const created = [];
+  let posts = 0;
+  const channel = makeChannel({
+    readArticle: async () => ARTICLE,
+    fetchFn: async (url, options) => {
+      if (url.endsWith('/customer_count')) return { ok: true, status: 200, async json() { return { count: 3 }; } };
+      if (options.method === 'POST') {
+        posts += 1;
+        return { ok: true, status: 200, async json() { return { newsletter: { id: 41 } }; } };
+      }
+      return { ok: true, status: 200, async json() { return { newsletter: { id: 41, name: 'Zen Research from Zen Trading · Vol. 1', sent_at: null } }; } };
+    },
+  });
+  await channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' }, onCreated: (value) => created.push(value) });
+  const recovered = await channel.publish({
+    articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' },
+    existingRemoteId: '41', onCreated: (value) => created.push(value), resumeFromCheckpoint: true,
+  });
+  assert.equal(posts, 1);
+  assert.equal(recovered.mediaId, 'customerio-newsletter:41');
+  assert.equal(created.length, 2);
+});
+
+test('Customer.io channel:正文含真实密钥或本地路径时在上传前拦截', async () => {
+  let postCalled = false;
+  const channel = makeChannel({
+    readArticle: async () => `${ARTICLE}\n/tmp/private\ncio-super-secret`,
+    fetchFn: async (_url, options) => {
+      if (options.method === 'POST') postCalled = true;
+      return { ok: true, status: 200, async json() { return { count: 3 }; } };
+    },
+  });
+  await assert.rejects(() => channel.publish({
+    articlePath: '/tmp/article.md', config: config({ appApiKey: 'cio-super-secret' }), workflow: { edition: 'Vol. 1' },
+  }), /出口门禁拦截.*真实凭据.*本地路径/);
+  assert.equal(postCalled, false);
+});
+
 test('Customer.io channel:发件邮箱不是 support@zentradings.com 时在网络请求前拦截', async () => {
   let calls = 0;
   const channel = makeChannel({ readArticle: async () => ARTICLE, fetchFn: async () => { calls++; } });

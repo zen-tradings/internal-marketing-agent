@@ -1,7 +1,33 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { JSDOM } from 'jsdom';
-import { prepareRenderContext, publishToWechatDraft } from '@wenyan-md/core/wrapper';
+import { createWechatClient } from '@wenyan-md/core/wechat';
+import { defaultHttpAdapter } from '@wenyan-md/core/http';
+import { prepareRenderContext, publishToWechatDraft, wechatPublisher } from '@wenyan-md/core/wrapper';
+import { fetchWithTimeout } from './http-timeout.js';
+
+const wechatRequestContext = new AsyncLocalStorage();
+const boundedWechatClient = createWechatClient({
+  ...defaultHttpAdapter,
+  fetch(resource, options) {
+    const context = wechatRequestContext.getStore() || {};
+    return fetchWithTimeout(context.fetchFn || globalThis.fetch, resource, options, {
+      timeoutMs: context.timeoutMs || 30000,
+      signal: context.signal,
+      label: '微信 API',
+    });
+  },
+});
+
+// Wenyan 的发布器保存 token/素材缓存，但默认 transport 没有超时。只在模块初始化
+// 时替换其网络方法，缓存与渲染行为保持不变；请求级参数由 AsyncLocalStorage 隔离。
+wechatPublisher.fetchAccessToken = boundedWechatClient.fetchAccessToken;
+wechatPublisher.uploadMaterial = boundedWechatClient.uploadMaterial;
+wechatPublisher.publishArticle = boundedWechatClient.publishArticle;
+wechatPublisher._listDraftsFn = boundedWechatClient.listDrafts;
+wechatPublisher._getDraftFn = boundedWechatClient.getDraft;
+wechatPublisher._updateDraftFn = boundedWechatClient.updateDraft;
 
 export async function renderAndPublishWithFinalFooter(inputContent, options, getInputContent) {
   const { gzhContent, absoluteDirPath } = await prepareRenderContext(inputContent, options, getInputContent);
@@ -20,9 +46,32 @@ export async function renderAndPublishWithFinalFooter(inputContent, options, get
     finalSurveyPath: options.finalSurveyPath,
     finalFooterPath: options.finalFooterPath,
   });
-  const data = await publishToWechatDraft(gzhContent, { appId: options.appId, relativePath: absoluteDirPath });
+  const data = await wechatRequestContext.run({
+    timeoutMs: options.timeoutMs || 30000,
+    signal: options.signal,
+    fetchFn: options.fetchFn || globalThis.fetch,
+  }, () => publishToWechatDraft(gzhContent, {
+    appId: options.appId,
+    appSecret: options.appSecret,
+    relativePath: absoluteDirPath,
+  }));
   if (!data?.media_id) throw new Error(`发布到微信公众号失败:${JSON.stringify(data)}`);
   return data.media_id;
+}
+
+export async function recoverWechatDraft({
+  appId,
+  appSecret,
+  mediaId,
+  timeoutMs = 30000,
+  signal,
+  fetchFn = globalThis.fetch,
+}) {
+  if (!appId || !appSecret || !mediaId) throw new Error('微信草稿恢复参数不完整');
+  return wechatRequestContext.run({ timeoutMs, signal, fetchFn }, async () => {
+    const accessToken = await wechatPublisher.getAccessTokenWithCache(appId, appSecret);
+    return wechatPublisher.getDraft(accessToken, mediaId);
+  });
 }
 
 export function normalizeCodeBreaks(html) {
@@ -80,7 +129,16 @@ export function validatePreparedWechatHtml(html, {
       errors.push(`第 ${index + 1} 张图片缺少 src`);
       continue;
     }
-    if (/^(?:https?:|data:|asset:|\/\/)/i.test(src)) continue;
+    if (/^https?:/i.test(src) && !/^https:\/\/mmbiz\.qpic\.cn(?:\/|$)/i.test(src)) {
+      errors.push(`第 ${index + 1} 张图片仍是未本地化的外部 URL:${src}`);
+      continue;
+    }
+    if (/^asset:/i.test(src)) continue;
+    if (/^(?:data:|\/\/)/i.test(src)) {
+      errors.push(`第 ${index + 1} 张图片使用不受支持的内联或协议相对地址:${src.slice(0, 120)}`);
+      continue;
+    }
+    if (/^https?:/i.test(src)) continue;
     const resolved = pathForHtmlAsset(src, absoluteDirPath);
     if (!resolved || !fsExists(resolved)) {
       errors.push(`第 ${index + 1} 张本地图片不存在:${src}`);

@@ -38,7 +38,7 @@ The command requires a clean worktree and a commit present on the upstream
 branch. It creates a local archive, stages and tests a separate release on the
 Droplet, runs the SQLite backup service, requires an idle queue, reasserts the
 approved model and QDII runtime values and rejects drift with a checksum that
-excludes only the two explicitly managed Opening Digest values. It preserves
+excludes exactly the environment values managed by this deployment command. It preserves
 `OPENING_DIGEST_MODEL` and `OPENING_DIGEST_WECHAT_ENABLED` unless an explicit
 deploy argument overrides either one (and only changes the protected Opening
 Digest segment ID when it is supplied). It switches the single systemd service and verifies
@@ -383,9 +383,12 @@ sudo systemctl status zen-content-hub-backup.timer
 ```
 
 Snapshots are written to `/var/lib/zen-content-hub/backups/` and retained for
-14 days. They protect against application-level database mistakes but remain on
-the same Droplet; use a separately confirmed off-host or DigitalOcean backup for
-Droplet-level disaster recovery.
+14 days. Each timestamp contains a SQLite snapshot, a compressed `WORK_DIR`
+artifact/checkpoint snapshot, and a SHA-256 manifest. Restore and verify the
+database and artifact archive as one recovery unit. These files protect against
+application-level mistakes but remain on the same Droplet; use a separately
+confirmed off-host or DigitalOcean backup for Droplet-level disaster recovery,
+and periodically test a restore into an isolated release directory.
 
 Release directories and uploaded `/tmp/zen-content-hub-*.tar` archives are not
 automatically pruned. Inventory them after live verification, preserve the

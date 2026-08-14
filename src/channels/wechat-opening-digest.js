@@ -5,6 +5,7 @@ import { JSDOM } from 'jsdom';
 import { createWechatClient } from '@wenyan-md/core/wechat';
 import { defaultHttpAdapter } from '@wenyan-md/core/http';
 import { FIXED_DRAFT_TEMPLATE_IDS } from '../lib/draft-template.js';
+import { fetchWithTimeout } from '../lib/http-timeout.js';
 import { renderOpeningDigestCover } from '../lib/opening-digest-cover.js';
 import { translationMap } from '../lib/opening-digest-translation.js';
 
@@ -14,7 +15,7 @@ export const WECHAT_DRAFT_MAX_BYTES = 1024 * 1024;
 
 export function makeWechatOpeningDigestChannel({
   renderCover = renderOpeningDigestCover,
-  api = createWechatApi(),
+  api,
 } = {}) {
   const coverCache = new Map();
   const bodyImageCache = new Map();
@@ -23,6 +24,7 @@ export function makeWechatOpeningDigestChannel({
     templateId: WECHAT_OPENING_DIGEST_TEMPLATE_ID,
     templateLocked: true,
     async publish({ payload, translation, config, acceptance = false }) {
+      const activeApi = api || createWechatApi({ timeoutMs: config.wechat.timeoutMs });
       const title = acceptance ? `[测试] Zen 开市日报 · ${payload.dateKey.slice(5)}` : `Zen 开市日报 · ${payload.dateKey}`;
       const cover = await renderCover({
         dateLabel: chineseDate(payload.dateKey), label: '开市日报',
@@ -30,25 +32,25 @@ export function makeWechatOpeningDigestChannel({
         timeoutMs: config.openingDigest.captureTimeoutMs,
       });
       const coverHash = crypto.createHash('sha256').update(cover).digest('hex');
-      const token = await api.getAccessToken(config.wechat.appId, config.wechat.appSecret);
+      const token = await activeApi.getAccessToken(config.wechat.appId, config.wechat.appSecret);
       let coverAsset = coverCache.get(coverHash);
       if (!coverAsset) {
-        coverAsset = await api.uploadMaterial(token, cover, `zen-opening-digest-${payload.dateKey}.png`);
+        coverAsset = await activeApi.uploadMaterial(token, cover, `zen-opening-digest-${payload.dateKey}.png`);
         coverCache.set(coverHash, coverAsset);
       }
-      const images = await uploadBodyImages(api, token, config.assets, bodyImageCache);
+      const images = await uploadBodyImages(activeApi, token, config.assets, bodyImageCache);
       const html = renderWechatOpeningDigestHtml({ payload, translation, images });
       const digest = translationMap(translation).get('preheader')?.text || '';
       assertWechatLimits(html, { title, digest });
       const attempts = [];
       let final;
       for (let attempt = 1; attempt <= 3; attempt++) {
-        const created = await api.addDraft(token, { title, digest, content: html, thumbMediaId: coverAsset.media_id });
+        const created = await activeApi.addDraft(token, { title, digest, content: html, thumbMediaId: coverAsset.media_id });
         const mediaId = String(created?.media_id || '');
         if (!mediaId) throw wechatError(`微信 draft/add 未返回 media_id:${JSON.stringify(created)}`);
         let saved;
         try {
-          saved = await api.getDraft(token, mediaId);
+          saved = await activeApi.getDraft(token, mediaId);
         } catch (error) {
           attempts.push({ attempt, mediaId, status: 'unverified', errors: [error.message] });
           final = { mediaId, title, status: 'unverified', errors: [`微信 draft/get 暂不可用:${error.message}`] };
@@ -60,7 +62,7 @@ export function makeWechatOpeningDigestChannel({
         if (validation.ok) break;
         if (attempt < 3) {
           try {
-            await api.deleteDraft(token, mediaId);
+            await activeApi.deleteDraft(token, mediaId);
             attempts.at(-1).deleted = true;
           } catch (error) {
             attempts.at(-1).status = 'unverified';
@@ -191,20 +193,24 @@ function renderOptions(options, translated) {
   return `<h2 data-zen-section="options" style="margin:22px 0 9px;font-size:18px;color:#08272b">期权成交量趋势</h2><p data-block-id="oic-asof" style="margin:0 0 7px;font-size:11px;color:#66787a">${inlineMarkup(asOf)}</p><table data-zen-oic width="100%" cellpadding="4" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;line-height:1.35;border:1px solid #ddd">${rows}</table><p style="margin:7px 0 18px;font-size:11px;color:#66787a">来源：OCC/OIC · ${inlineMarkup(attribution)} · 数据延迟 20 分钟 · ${escapeHtml(formatCapturedAt(options.capturedAt))}</p>`;
 }
 
-function createWechatApi() {
-  const client = createWechatClient(defaultHttpAdapter);
+export function createWechatApi({ fetchFn = globalThis.fetch, timeoutMs = 30000 } = {}) {
+  const boundedFetch = (resource, options) => fetchWithTimeout(fetchFn, resource, options, {
+    timeoutMs,
+    label: '微信 API',
+  });
+  const client = createWechatClient({ ...defaultHttpAdapter, fetch: boundedFetch });
   return {
     async getAccessToken(appId, appSecret) { return (await client.fetchAccessToken(appId, appSecret)).access_token; },
     async uploadMaterial(token, buffer, filename) { return client.uploadMaterial('image', new Blob([buffer]), filename, token); },
     async uploadContentImage(token, buffer, filename) {
       const form = new FormData(); form.append('media', new Blob([buffer]), filename);
-      const response = await fetch(`https://api.weixin.qq.com/cgi-bin/media/uploadimg?access_token=${token}`, { method: 'POST', body: form });
+      const response = await boundedFetch(`https://api.weixin.qq.com/cgi-bin/media/uploadimg?access_token=${token}`, { method: 'POST', body: form });
       const data = await response.json(); if (!response.ok || data.errcode || !data.url) throw wechatError(`微信正文图片上传失败:${JSON.stringify(data)}`); return data.url;
     },
     async addDraft(token, input) { return client.publishArticle(token, { title: input.title, digest: input.digest, content: input.content, thumb_media_id: input.thumbMediaId, show_cover_pic: 0, need_open_comment: 0, only_fans_can_comment: 0 }); },
     async getDraft(token, mediaId) { return client.getDraft(token, mediaId); },
     async deleteDraft(token, mediaId) {
-      const response = await fetch(`https://api.weixin.qq.com/cgi-bin/draft/delete?access_token=${token}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ media_id: mediaId }) });
+      const response = await boundedFetch(`https://api.weixin.qq.com/cgi-bin/draft/delete?access_token=${token}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ media_id: mediaId }) });
       const data = await response.json(); if (!response.ok || data.errcode) throw wechatError(`微信 draft/delete 失败:${JSON.stringify(data)}`); return data;
     },
   };

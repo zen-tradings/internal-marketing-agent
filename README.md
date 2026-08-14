@@ -14,7 +14,7 @@ Slack 私聊自然语言 / 频道 @Bot / PDF/文本附件 / cron
   → 通用正文用 Qwen3.8-Max；Opening Digest 英文主稿用 GPT-OSS 120B → GLM 5.2 逐句事实审计 → 系统确定性引用
   → 中央模板门禁 → 微信固定版式 / Customer.io Newsletter 固定模板
   → 常规渠道只创建草稿；`opening-digest` 为受控邮件发送/排期例外，并可在邮件成功后同步中文微信草稿
-  → QDII 查询以 Slack 回复为核心结果；草稿任务的状态通知仍为 best-effort
+  → QDII 查询以 Slack 回复为核心结果；终态通知失败时写入 SQLite outbox，连接恢复后幂等补发
 ```
 
 Node.js 负责流程控制；通用正文模型由 `.env` 的 `OPENROUTER_MODEL` 指定，生产默认 `qwen/qwen3.8-max`。Opening Digest 英文主稿可由 `OPENING_DIGEST_MODEL` 独立覆盖，生产使用 `openai/gpt-oss-120b`；该变量未设置时回退到 `OPENROUTER_MODEL`，微信中文直译仍使用通用正文模型。`OPENROUTER_ROUTER_MODEL`、`OPENROUTER_PLANNER_MODEL` 与 `OPENROUTER_REVIEW_MODEL` 分别控制路由、顶层任务规划/证据编排和逐句事实审计；生产由 `moonshotai/kimi-k3` 负责规划与方向把握，GLM 5.2 负责路由、审计和 Opening Digest 压缩。未单独设置角色模型时会继承通用正文模型。`OPENROUTER_REASONING_EFFORT` 与各角色的 `*_REASONING_EFFORT` 独立配置：正文和 Kimi 规划使用 `high`，GLM 路由与审计使用 `none`。`OPENROUTER_MAX_TOKENS` 控制每次请求中 reasoning 与最终输出共享的预算。仓库内版本化的写作 skill 在运行时加载并注入提示词，不与特定模型绑定。Exa 只负责检索与正文抓取；`alphaxiv.org` 是内置优先检索域名之一，项目不连接 AlphaXiv MCP。
@@ -126,6 +126,8 @@ launchctl kickstart -k gui/$(id -u)/com.zentrading.content-hub
 curl --fail http://127.0.0.1:8787/health
 curl --fail http://127.0.0.1:8787/ready
 ```
+
+`/health` 表示进程与本地状态可读；`/ready` 还要求 Slack Socket Mode 确实处于连接状态。Slack 瞬时离线不会阻塞已持久化任务执行，成功、失败、取消、澄清和 QDII 核心回复会写入 SQLite outbox，并在重新连接后按任务当前终态补发；过期状态通知会被丢弃，通知故障不会反向改写已完成的草稿结果。
 
 代码更新不会自动生效。把通过 CI 的明确提交按 [`deploy/README.md`](deploy/README.md) 打成不可变发布包，在独立 release 目录执行 `npm ci && npm run check`，备份 SQLite 后再切换并重启唯一的 systemd 实例；不要从本地脏工作树直接覆盖生产目录。
 
@@ -250,9 +252,9 @@ npm run test:update-golden
 
 - 新文章类型：新增 `src/workflows/<name>.js`，并在 `src/index.js` 注册。
 - 新发布渠道：新增实现 `publish()` 的 `src/channels/<name>.js`，在 `src/index.js` 注册，并先在 `src/lib/draft-template.js` 登记固定模板；未登记的真实渠道会 fail closed。
-- 新定时任务：在 workflow 的 `triggers` 中声明 `cron:<表达式>`。
+- 新定时任务：在 workflow 的 `triggers` 中声明 `cron:<表达式>`；启动时会先校验表达式和时区。需要进程重启补跑的固定日程必须同时声明稳定业务日 key 与有限补跑窗口，由数据库唯一约束阻止重复入队。
 
-保持 `runWriter()` 在每个任务独立目录中生成 `article.md` 的契约，以及发布后立即写入 `media_id` 的幂等行为。通知是附属结果，Slack 回报失败不得覆盖已创建草稿的成功状态。
+保持 `runWriter()` 在每个任务独立目录中生成 `article.md` 的契约，以及发布后立即写入 `media_id` 的幂等行为。通知是附属结果；即使进入持久 outbox，Slack 回报失败也不得覆盖已创建草稿的成功状态。
 
 ### Customer.io newsletter
 

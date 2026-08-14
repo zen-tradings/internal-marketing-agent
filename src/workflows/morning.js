@@ -1,4 +1,5 @@
 import { sharedResearch, officialFirstPolicy, envChannel, envModel, envTimeoutMs, workDirFor, buildPromptTemplate } from './shared.js';
+import { runtimeConfig } from '../config/runtime.js';
 
 const METHODOLOGY = `【晨报体例 — 专属要求】
 撰写晨会纪要体例的简报,风格紧凑、观点鲜明,总篇幅控制在一页以内:
@@ -14,7 +15,7 @@ export default {
   factReview: true,
   // 支持可选 cron 定时触发:设置 MORNING_CRON 后自动追加 cron 触发器,未设置则仅 slack。
   get triggers() {
-    const cronExpr = process.env.MORNING_CRON;
+    const cronExpr = runtimeConfig()?.workflowEnvironment?.morningCron || process.env.MORNING_CRON;
     return cronExpr ? ['slack', `cron:${cronExpr}`] : ['slack'];
   },
   get workDir() { return workDirFor('morning'); },

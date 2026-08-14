@@ -49,13 +49,37 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.match(c.cover.generatorDir, /tools\/cover-generator$/);
   assert.equal('claudeBin' in c, false);
   assert.equal(c.wechat.appId, 'wx');
+  assert.equal(c.wechat.timeoutMs, 30000);
   assert.equal(c.openingDigest.wechatEnabled, false);
   assert.equal(c.openingDigest.model, 'deepseek/deepseek-chat');
   assert.equal(c.openingDigest.earningsPythonPath, 'python3');
   assert.match(c.openingDigest.earningsWorkerPath, /python\/opening_digest_worker\.py$/);
   assert.equal(c.openingDigest.earningsWorkerTimeoutMs, 15000);
+  assert.equal(c.workflowEnvironment.channel, 'wechat-draft');
+  assert.equal(c.workflowEnvironment.newsletterEdition, 'Vol. 1');
   assert.match(c.assets.surveyImage, /assets\/zen-survey-qr\.jpg$/);
   assert.match(c.assets.footerImage, /assets\/zen-footer-qr\.png$/);
+});
+
+test('工作流环境在启动配置阶段拒绝未知渠道和无效域名', () => {
+  const base = {
+    SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
+    WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec', OPENROUTER_API_KEY: 'or-key',
+  };
+  assert.throws(() => loadConfig({ ...base, WECHAT_CHANNEL: 'customerio-opening-digest' }), /WECHAT_CHANNEL/);
+  assert.throws(() => loadConfig({ ...base, EXA_PRIORITY_DOMAINS: 'https:\/\/example.com/path' }), /无效域名/);
+});
+
+test('生产环境强制单并发，微信请求超时可配置', () => {
+  const base = {
+    NODE_ENV: 'production',
+    SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
+    SLACK_ALLOWED_USER_IDS: 'U1', SLACK_ALLOWED_CHANNEL_IDS: 'C1',
+    WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec',
+    OPENROUTER_API_KEY: 'or-key',
+  };
+  assert.equal(loadConfig({ ...base, WECHAT_TIMEOUT_MS: '12345' }).wechat.timeoutMs, 12345);
+  assert.throws(() => loadConfig({ ...base, MAX_CONCURRENCY: '2' }), /MAX_CONCURRENCY 必须为 1/);
 });
 
 test('Opening Digest 微信同步只有显式开关才启用', () => {

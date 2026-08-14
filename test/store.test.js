@@ -55,6 +55,30 @@ test('Slack 核心回复单独记录 output kind/ts，绝不伪造 media_id', ()
   assert.equal(row.media_id, null);
 });
 
+test('Slack 终态通知写入持久 outbox，失败退避后可确认发送', () => {
+  const s = openStore(':memory:');
+  s.createRun({ id: 'notify-1', workflowId: 'wechat', source: 'slack', input: 'x', notify: { channel: 'C1' } });
+  assert.equal(s.queueNotification({ runId: 'notify-1', method: 'success', notify: { channel: 'C1' }, payload: { title: 'T' }, error: 'offline' }), 1);
+  let pending = s.listPendingNotifications({ now: Date.now() });
+  assert.equal(pending.length, 1);
+  assert.equal(JSON.parse(pending[0].payload_json).title, 'T');
+  s.markNotificationFailed(pending[0].id, { error: 'retry', nextAttemptAt: Date.now() + 60000 });
+  assert.equal(s.listPendingNotifications({ now: Date.now() }).length, 0);
+  pending = s.listPendingNotifications({ now: Date.now() + 61000 });
+  assert.equal(pending[0].attempts, 1);
+  s.markNotificationSent(pending[0].id, Date.now());
+  assert.equal(s.listPendingNotifications({ now: Date.now() + 61000 }).length, 0);
+});
+
+test('cron schedule key 在数据库层阻止同工作流同业务日重复入队', () => {
+  const s = openStore(':memory:');
+  s.createRun({ id: 'cron-1', workflowId: 'opening-digest', source: 'cron', input: 'x', notify: {}, scheduleKey: '2026-08-14' });
+  assert.throws(() => s.createRun({
+    id: 'cron-2', workflowId: 'opening-digest', source: 'cron', input: 'x', notify: {}, scheduleKey: '2026-08-14',
+  }), /UNIQUE constraint failed/);
+  assert.equal(s.getRun('cron-1').schedule_key, '2026-08-14');
+});
+
 test('markInterrupted 把 running 置 interrupted', () => {
   const s = openStore(':memory:');
   s.createRun({ id: 'a', workflowId: 'w', source: 'slack', input: 'x', notify: {} });

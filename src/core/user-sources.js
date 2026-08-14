@@ -323,7 +323,7 @@ async function loadPdfTextFallback({
   await fs.mkdir(sourceDir, { recursive: true });
   const pdfPath = path.join(sourceDir, 'source.pdf');
   await fs.writeFile(pdfPath, fetched.buffer);
-  assertPdfPageLimit(pdfPath, Number(config.maxPdfPages || 120));
+  await assertPdfPageLimit(pdfPath, Number(config.maxPdfPages || 120));
   let stdout;
   try {
     ({ stdout } = await execFileAsync('pdftotext', ['-layout', '-enc', 'UTF-8', pdfPath, '-'], {

@@ -5,6 +5,7 @@ import {
   renderNewsletterEmail,
 } from '../lib/newsletter-email.js';
 import { assertRenderedTemplateMarker } from '../lib/draft-template.js';
+import { checkOutboundLeaks, configuredSecretValues } from '../lib/gate.js';
 
 export const NEWSLETTER_SENDER_EMAIL = 'support@zentradings.com';
 
@@ -17,7 +18,14 @@ export function makeChannel({ readArticle = defaultReadArticle, fetchFn = global
     id: 'customerio-draft',
     templateId: NEWSLETTER_TEMPLATE_ID,
     templateLocked: true,
-    async publish({ articlePath, config, workflow }) {
+    async publish({
+      articlePath,
+      config,
+      workflow,
+      existingRemoteId,
+      onCreated,
+      resumeFromCheckpoint = false,
+    }) {
       const cio = config.customerio || {};
       if (!cio.appApiKey) throw publishError('缺少 CUSTOMERIO_APP_API_KEY');
       const audience = resolveAudience(cio);
@@ -38,6 +46,12 @@ export function makeChannel({ readArticle = defaultReadArticle, fetchFn = global
       let markdown;
       try { markdown = await readArticle(articlePath); }
       catch (error) { const wrapped = new Error(`读取 newsletter 失败:${error.message}`); wrapped.stage = 'render'; throw wrapped; }
+      const leakGate = checkOutboundLeaks(markdown, { secretValues: configuredSecretValues(config) });
+      if (leakGate.errors.length) {
+        const error = new Error(`Newsletter 出口门禁拦截:${leakGate.errors.join('; ')}`);
+        error.stage = 'gate';
+        throw error;
+      }
 
       const article = parseNewsletterArticle(markdown, workflow?.edition || cio.edition || 'Vol. 1');
       const name = `Zen Research from Zen Trading · ${article.edition}`;
@@ -59,6 +73,20 @@ export function makeChannel({ readArticle = defaultReadArticle, fetchFn = global
         ...(cio.subscriptionTopicId ? { subscription_topic_id: cio.subscriptionTopicId } : {}),
       };
 
+      let recovered;
+      if (existingRemoteId) {
+        recovered = await fetchNewsletterById({ baseUrl, appApiKey: cio.appApiKey, id: existingRemoteId, fetchFn, timeoutMs: cio.timeoutMs });
+        assertRecoverableNewsletter(recovered, name);
+      } else if (resumeFromCheckpoint) {
+        recovered = await findNewsletterByName({ baseUrl, appApiKey: cio.appApiKey, name, fetchFn, timeoutMs: cio.timeoutMs });
+      }
+      if (recovered) {
+        const recoveredId = Number(recovered.id);
+        assertRecoverableNewsletter(recovered, name);
+        await onCreated?.({ remoteId: String(recoveredId), title: name });
+        return newsletterResult({ newsletterId: recoveredId, name, audience, audienceCount });
+      }
+
       let response;
       let data;
       let detail = '';
@@ -76,7 +104,18 @@ export function makeChannel({ readArticle = defaultReadArticle, fetchFn = global
           if (!current.ok) return { response: current, detail: await safeText(current) };
           return { response: current, data: await current.json(), detail: '' };
         }));
-      } catch (error) { throw publishError(`Customer.io 请求失败:${requestErrorMessage(error)}`); }
+      } catch (error) {
+        try {
+          recovered = await findNewsletterByName({ baseUrl, appApiKey: cio.appApiKey, name, fetchFn, timeoutMs: cio.timeoutMs });
+        } catch {}
+        if (recovered) {
+          const recoveredId = Number(recovered.id);
+          assertRecoverableNewsletter(recovered, name);
+          await onCreated?.({ remoteId: String(recoveredId), title: name });
+          return newsletterResult({ newsletterId: recoveredId, name, audience, audienceCount });
+        }
+        throw publishError(`Customer.io 请求失败:${requestErrorMessage(error)}`);
+      }
 
       if (!response.ok) {
         const domainError = unverifiedSendingDomainError(response.status, detail, cio.from);
@@ -85,15 +124,56 @@ export function makeChannel({ readArticle = defaultReadArticle, fetchFn = global
       }
       const newsletterId = data?.newsletter?.id;
       if (!newsletterId) throw publishError('Customer.io 返回成功但缺少 newsletter.id');
-      return {
-        mediaId: `customerio-newsletter:${newsletterId}`,
-        title: name,
-        audienceStage: audience.stage,
-        audienceSegmentId: audience.segmentId,
-        audienceRecipientCount: audienceCount,
-      };
+      await onCreated?.({ remoteId: String(newsletterId), title: name });
+      return newsletterResult({ newsletterId, name, audience, audienceCount });
     },
   };
+}
+
+function newsletterResult({ newsletterId, name, audience, audienceCount }) {
+  return {
+    mediaId: `customerio-newsletter:${newsletterId}`,
+    title: name,
+    audienceStage: audience.stage,
+    audienceSegmentId: audience.segmentId,
+    audienceRecipientCount: audienceCount,
+  };
+}
+
+async function fetchNewsletterById({ baseUrl, appApiKey, id, fetchFn, timeoutMs }) {
+  const numericId = Number(String(id).replace(/^customerio-newsletter:/, ''));
+  if (!Number.isInteger(numericId) || numericId <= 0) throw publishError('Customer.io 已记录的 remote_id 无效');
+  return customerIoGet({ baseUrl, appApiKey, path: `/v1/newsletters/${numericId}`, fetchFn, timeoutMs });
+}
+
+async function findNewsletterByName({ baseUrl, appApiKey, name, fetchFn, timeoutMs }) {
+  const data = await customerIoGet({ baseUrl, appApiKey, path: '/v1/newsletters?limit=100&sort=desc', fetchFn, timeoutMs });
+  const matches = (data?.newsletters || []).filter((item) => item?.name === name);
+  if (matches.length > 1) throw publishError(`Customer.io 存在 ${matches.length} 个同名草稿，拒绝自动选择`);
+  return matches[0];
+}
+
+async function customerIoGet({ baseUrl, appApiKey, path, fetchFn, timeoutMs }) {
+  let response;
+  let data;
+  let detail = '';
+  try {
+    ({ response, data, detail } = await withRequestTimeout(timeoutMs, async (signal) => {
+      const current = await fetchFn(`${baseUrl}${path}`, {
+        method: 'GET', headers: { Authorization: `Bearer ${appApiKey}` }, signal,
+      });
+      if (!current.ok) return { response: current, detail: await safeText(current) };
+      return { response: current, data: await current.json(), detail: '' };
+    }));
+  } catch (error) { throw publishError(`Customer.io 恢复查询失败:${requestErrorMessage(error)}`); }
+  if (!response.ok) throw publishError(`Customer.io 恢复查询失败:${response.status} ${detail}`.trim());
+  return data?.newsletter || data;
+}
+
+function assertRecoverableNewsletter(newsletter, name) {
+  if (!newsletter || Number(newsletter.id) <= 0) throw publishError('Customer.io 恢复结果缺少 newsletter.id');
+  if (newsletter.name !== name) throw publishError(`Customer.io 已有草稿名称不匹配:${newsletter.name || '无名称'}`);
+  if (newsletter.sent_at != null) throw publishError('Customer.io 同名 Newsletter 已发送，拒绝把已发送内容当作草稿恢复');
 }
 
 function senderEmail(value) {

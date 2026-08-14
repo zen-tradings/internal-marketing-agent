@@ -4,15 +4,35 @@ set -eu
 data_dir=/var/lib/zen-content-hub
 backup_dir="$data_dir/backups"
 database="$data_dir/runs.db"
+env_file=/etc/zen-content-hub/zen-content-hub.env
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 temporary="$backup_dir/.runs-$stamp.db.tmp"
 snapshot="$backup_dir/runs-$stamp.db"
+artifact_temporary="$backup_dir/.artifacts-$stamp.tar.gz.tmp"
+artifact_snapshot="$backup_dir/artifacts-$stamp.tar.gz"
+manifest_temporary="$backup_dir/.backup-$stamp.sha256.tmp"
+manifest="$backup_dir/backup-$stamp.sha256"
 
 install -d -o zenbot -g zenbot -m 0700 "$backup_dir"
 /usr/bin/sqlite3 "$database" ".timeout 5000" ".backup '$temporary'"
 chmod 0600 "$temporary"
 mv "$temporary" "$snapshot"
 
-# 同盘快照保留 14 天；Droplet 灾难恢复仍需独立的异地备份。
-find "$backup_dir" -maxdepth 1 -type f -name 'runs-*.db' -mtime +14 -delete
+work_dir=$(awk -F= '$1 == "WORK_DIR" { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
+case "$work_dir" in
+  /srv/zen/*|/var/lib/zen-content-hub/*) ;;
+  *) printf 'Refusing unsafe WORK_DIR for backup: %s\n' "$work_dir" >&2; exit 1 ;;
+esac
+if [ -d "$work_dir" ]; then
+  tar -C "$work_dir" -czf "$artifact_temporary" .
+else
+  tar -C "$data_dir" -czf "$artifact_temporary" --files-from /dev/null
+fi
+chmod 0600 "$artifact_temporary"
+mv "$artifact_temporary" "$artifact_snapshot"
+(cd "$backup_dir" && sha256sum "$(basename "$snapshot")" "$(basename "$artifact_snapshot")") > "$manifest_temporary"
+chmod 0600 "$manifest_temporary"
+mv "$manifest_temporary" "$manifest"
 
+# 同盘恢复单元保留 14 天；Droplet 灾难恢复仍需独立的异地备份。
+find "$backup_dir" -maxdepth 1 -type f \( -name 'runs-*.db' -o -name 'artifacts-*.tar.gz' -o -name 'backup-*.sha256' \) -mtime +14 -delete

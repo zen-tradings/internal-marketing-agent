@@ -3,14 +3,16 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from './config/index.js';
+import { installRuntimeConfig } from './config/runtime.js';
 import { openStore } from './core/store.js';
 import { createQueue } from './core/queue.js';
 import { runWriter } from './core/runner.js';
 import { createNotifier } from './core/notifier.js';
+import { deliverOrQueueNotification, flushNotificationOutbox } from './core/notification-outbox.js';
 import { formatQdiiSlackMessages, qdiiSourcesForWriter, runQdiiQuery } from './core/qdii.js';
 import { registerSlack } from './triggers/slack.js';
-import { registerCron } from './triggers/cron.js';
-import { isTransientSocketModeError } from './lib/slack-resilience.js';
+import { reconcileCronWorkflows, registerCron, validateCronConfiguration } from './triggers/cron.js';
+import { isSlackAppConnected, isTransientSocketModeError } from './lib/slack-resilience.js';
 import { runWorkDir, workflowForRun } from './lib/run-workdir.js';
 import { startHealthServer, stopHealthServer } from './lib/health.js';
 import { assertFixedDraftTemplate } from './lib/draft-template.js';
@@ -34,7 +36,7 @@ import wechatDraft from './channels/wechat-draft.js';
 import customerioDraft from './channels/customerio-draft.js';
 import { makeChannel as makeOpeningDigestChannel } from './channels/customerio-opening-digest.js';
 
-dotenv.config({ override: true });
+dotenv.config();
 
 const WORKFLOWS = {
   wechat: wechatWorkflow,
@@ -140,9 +142,12 @@ export function makeHandler(deps) {
         });
         if (!payload.results.length) throw stageError('generate', payload.failures.map((item) => `${item.code}: ${item.error}`).join('; ') || '未取得可用 QDII 持仓');
         setPhase('respond');
-        const delivered = await deliverQdiiResponse(deps.notifier, notify, payload);
+        const delivered = await deliverOrQueueNotification({
+          store, notifier: deps.notifier, runId: run.id, method: 'respond', notify,
+          payload: { messages: formatQdiiSlackMessages(payload, { language: payload.taskPlan?.language || payload.query?.language }) },
+        });
         store.setOutputKind?.(run.id, 'slack-response');
-        store.setSlackResponseTs?.(run.id, delivered.responseTs || 'delivered');
+        if (delivered.result?.responseTs) store.setSlackResponseTs?.(run.id, delivered.result.responseTs);
         store.setStatus(run.id, 'done', {
           title: `QDII holdings: ${payload.results.map((item) => item.code).join(', ')}`,
           finishedAt: Date.now(),
@@ -163,8 +168,11 @@ export function makeHandler(deps) {
         if (!qdiiPayload.results.length) throw stageError('generate', qdiiPayload.failures.map((item) => `${item.code}: ${item.error}`).join('; ') || '未取得可用 QDII 持仓');
         if (qdiiPlan.dualReply && !persisted.slack_response_ts) {
           setPhase('respond');
-          const delivered = await deliverQdiiResponse(deps.notifier, notify, qdiiPayload);
-          store.setSlackResponseTs?.(run.id, delivered.responseTs || 'delivered');
+          const delivered = await deliverOrQueueNotification({
+            store, notifier: deps.notifier, runId: run.id, method: 'respond', notify,
+            payload: { messages: formatQdiiSlackMessages(qdiiPayload, { language: qdiiPayload.taskPlan?.language || qdiiPayload.query?.language }) },
+          });
+          if (delivered.result?.responseTs) store.setSlackResponseTs?.(run.id, delivered.result.responseTs);
         }
         store.setOutputKind?.(run.id, qdiiPlan.dualReply ? 'draft-with-slack-summary' : 'draft');
         setPhase('generate');
@@ -273,6 +281,7 @@ export function makeHandler(deps) {
           onDelivery: (delivery) => store.upsertDelivery?.(run.id, delivery),
           resumeFromCheckpoint,
           contentPolicy: res.contentPolicy || {},
+          signal,
           contentMode: res.contentMode,
           source: publishContext.source,
           acceptanceId: publishContext.acceptanceId,
@@ -288,8 +297,10 @@ export function makeHandler(deps) {
       runtimeWorkflow.shouldRetry,
     );
       store.setStatus(run.id, 'done', { title, mediaId, finishedAt: Date.now() });
-      if (deps.notifier) await notifyBestEffort(deps.notifier, 'success', notify, { title, mediaId, channelId: runtimeWorkflow.channel, sourceCount, completeness });
-      else console.error('[hub] notifier 未就绪,跳过 success 通知(启动窗口期竞态)', { runId: run.id, title, mediaId });
+      await deliverOrQueueNotification({
+        store, notifier: deps.notifier, runId: run.id, method: 'success', notify,
+        payload: { title, mediaId, channelId: runtimeWorkflow.channel, sourceCount, completeness },
+      });
       for (const warning of deliveryWarnings) {
         if (deps.notifier) await notifyBestEffort(deps.notifier, 'warn', notify, warning);
       }
@@ -301,13 +312,10 @@ export function makeHandler(deps) {
           error: cancellationErrorFromSignal(signal).message,
           finishedAt: Date.now(),
         });
-        if (deps.notifier) {
-          await notifyBestEffort(deps.notifier, 'cancelled', notify, {
-            runId: run.id,
-            cleaned: cleanup.cleaned,
-            cleanupError: cleanup.error,
-          });
-        }
+        await deliverOrQueueNotification({
+          store, notifier: deps.notifier, runId: run.id, method: 'cancelled', notify,
+          payload: { runId: run.id, cleaned: cleanup.cleaned, cleanupError: cleanup.error },
+        });
         return;
       }
       if (e.needsInput || e.stage === 'needs_input') {
@@ -330,18 +338,18 @@ export function makeHandler(deps) {
             console.error('[hub] 澄清上下文写入失败:', storeError?.message || storeError);
           }
         }
-        if (deps.notifier) {
-          await notifyBestEffort(deps.notifier, 'needsInput', notify, {
-            question: e.details?.question || e.message,
-            details: e.details || {},
-          });
-        }
+        await deliverOrQueueNotification({
+          store, notifier: deps.notifier, runId: run.id, method: 'needsInput', notify,
+          payload: { question: e.details?.question || e.message, details: e.details || {} },
+        });
         return;
       }
       const stage = e.stage || 'publish';
       store.setStatus(run.id, 'failed', { stage, error: e.message, finishedAt: Date.now() });
-      if (deps.notifier) await notifyBestEffort(deps.notifier, 'failure', notify, { stage, error: e.message });
-      else console.error('[hub] notifier 未就绪,跳过 failure 通知(启动窗口期竞态)', { runId: run.id, stage, error: e.message });
+      await deliverOrQueueNotification({
+        store, notifier: deps.notifier, runId: run.id, method: 'failure', notify,
+        payload: { stage, error: e.message },
+      });
     }
   };
 }
@@ -397,37 +405,33 @@ async function notifyBestEffort(notifier, method, notify, payload) {
   }
 }
 
-async function deliverQdiiResponse(notifier, notify, payload) {
-  if (!notifier?.respond) throw stageError('respond', 'Slack responder is not ready');
-  try {
-    return await notifier.respond(notify, {
-      messages: formatQdiiSlackMessages(payload, { language: payload.taskPlan?.language || payload.query?.language }),
-    });
-  } catch (error) {
-    throw stageError('respond', `QDII Slack response failed: ${error?.message || error}`);
-  }
-}
-
 export async function start() {
-  const config = loadConfig();
+  const config = installRuntimeConfig(loadConfig());
+  validateCronConfiguration({ workflows: WORKFLOWS, timezone: config.cronTimezone });
   const store = openStore(config.dbPath);
   const now = Date.now();
   const DAY_MS = 24 * 60 * 60 * 1000;
   const runBefore = now - config.runRetentionDays * DAY_MS;
+  let prunedRuns = 0;
   for (const expired of store.listPrunableRuns(runBefore)) {
     const workflow = WORKFLOWS[expired.workflow_id];
-    if (!workflow?.workDir) continue;
-    const artifactDir = runWorkDir(workflow.workDir, expired.id);
-    try { fs.rmSync(artifactDir, { recursive: true, force: true }); }
-    catch (error) { console.error(`[hub] 历史任务目录清理失败:${artifactDir}:${error?.message || error}`); }
+    let cleaned = true;
+    if (workflow?.workDir) {
+      const artifactDir = runWorkDir(workflow.workDir, expired.id);
+      try { fs.rmSync(artifactDir, { recursive: true, force: true }); }
+      catch (error) {
+        cleaned = false;
+        console.error(`[hub] 历史任务目录清理失败，保留数据库记录待下次重试:${artifactDir}:${error?.message || error}`);
+      }
+    }
+    if (cleaned) prunedRuns += store.deletePrunableRun(expired.id, runBefore);
   }
   const pruned = store.prune({
-    runBefore,
     threadBefore: now - config.slackThreadRetentionDays * DAY_MS,
     eventBefore: now - config.slackThreadRetentionDays * DAY_MS,
   });
-  if (pruned.runs || pruned.threads || pruned.events) {
-    console.log(`[hub] 已清理历史记录:runs=${pruned.runs},threads=${pruned.threads},events=${pruned.events}`);
+  if (prunedRuns || pruned.threads || pruned.events) {
+    console.log(`[hub] 已清理历史记录:runs=${prunedRuns},threads=${pruned.threads},events=${pruned.events}`);
   }
   // 长篇直译按分块保存 checkpoint，可在进程重启后安全续跑。
   // 其它工作流仍标记 interrupted 并等待人工确认，避免自动重复创建草稿。
@@ -489,16 +493,18 @@ export async function start() {
   // 不让一次套接字断开拖垮整个进程(queue/cron 等仍存活)。
   let currentSlackApp;
   let connectPromise;
+  let outboxFlushPromise;
   let shuttingDown = false;
   const healthServer = await startHealthServer({
     ...config.health,
     status: () => {
       const queueStatus = queue.stats();
+      const slackConnected = isSlackAppConnected(currentSlackApp);
       return {
         queue: queueStatus,
-        slackConnected: Boolean(currentSlackApp),
+        slackConnected,
         shuttingDown,
-        ready: !shuttingDown && !queueStatus.stopped && Boolean(currentSlackApp),
+        ready: !shuttingDown && !queueStatus.stopped && slackConnected,
       };
     },
   });
@@ -521,6 +527,9 @@ export async function start() {
         });
         currentSlackApp = app;
         deps.notifier = createNotifier((m) => app.client.chat.postMessage(m));
+        outboxFlushPromise = flushNotificationOutbox({ store, notifier: deps.notifier })
+          .catch((error) => console.error('[hub] Slack outbox 首次补发失败:', error?.message || error))
+          .finally(() => { outboxFlushPromise = undefined; });
         console.log('⚡ Slack 已连接');
         return app;
       } catch (e) {
@@ -561,6 +570,13 @@ export async function start() {
   // 长篇直译永远卡在队列外，直到 Slack 恢复。先让队列恢复并执行，通知器随后
   // 连接成功时再接管回执/进度通知。
   void ensureSlackConnected();
+  const outboxTimer = setInterval(() => {
+    if (!deps.notifier || outboxFlushPromise) return;
+    outboxFlushPromise = flushNotificationOutbox({ store, notifier: deps.notifier })
+      .catch((error) => console.error('[hub] Slack outbox 补发失败:', error?.message || error))
+      .finally(() => { outboxFlushPromise = undefined; });
+  }, 30000);
+  outboxTimer.unref?.();
   for (const row of persistedQueued) {
     restoreRun(row);
   }
@@ -571,12 +587,20 @@ export async function start() {
     notifyChannel: config.slack.notifyChannel,
     timezone: config.cronTimezone,
   });
+  const caughtUp = await reconcileCronWorkflows({
+    workflows: WORKFLOWS,
+    enqueue,
+    notifyChannel: config.slack.notifyChannel,
+    timezone: config.cronTimezone,
+  });
+  if (caughtUp) console.log(`[hub] 启动:补排 ${caughtUp} 个错过触发窗口的定时任务`);
 
   async function shutdown(signal, exitCode = 0) {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[hub] 收到 ${signal},停止接单并等待活动任务收尾`);
     queue.stop();
+    clearInterval(outboxTimer);
     await stopHealthServer(healthServer).catch(() => {});
     if (currentSlackApp) {
       try { await currentSlackApp.stop(); } catch (error) { console.error('[hub] Slack 停止失败:', error?.message || error); }
@@ -597,6 +621,6 @@ export async function start() {
 if (import.meta.url === `file://${process.argv[1]}`) {
   start().catch((error) => {
     console.error('[hub] 启动失败:', error?.stack || error);
-    process.exitCode = 1;
+    process.exit(1);
   });
 }

@@ -13,6 +13,40 @@ const DEFAULT_PLANNER_MODEL = 'moonshotai/kimi-k3';
 const DEFAULT_PLANNER_REASONING = 'high';
 const DEFAULT_OPENING_DIGEST_MODEL = 'openai/gpt-oss-120b';
 
+export const DEPLOY_MANAGED_ENV_KEYS = Object.freeze([
+  'OPENING_DIGEST_WECHAT_ENABLED',
+  'OPENING_DIGEST_MODEL',
+  'OPENROUTER_MODEL',
+  'OPENROUTER_ROUTER_MODEL',
+  'OPENROUTER_PLANNER_MODEL',
+  'OPENROUTER_REVIEW_MODEL',
+  'OPENROUTER_REASONING_EFFORT',
+  'OPENROUTER_PLANNER_REASONING_EFFORT',
+  'OPENROUTER_REVIEW_REASONING_EFFORT',
+  'OPENROUTER_ROUTER_REASONING_EFFORT',
+  'QDII_ENABLED',
+  'QDII_PYTHON_PATH',
+  'QDII_WORKER_PATH',
+  'QDII_WORKER_TIMEOUT_MS',
+  'QDII_MAX_FUNDS_SLACK',
+  'QDII_MAX_FUNDS_DRAFT',
+  'QDII_STALE_MAX_DAYS',
+  'QDII_MAX_REPORT_BYTES',
+  'QDII_MAX_TASK_DOWNLOAD_BYTES',
+  'QDII_MAX_REPORT_CANDIDATES',
+  'CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID',
+]);
+
+const DEPLOY_MANAGED_ENV_PATTERN = `^(${DEPLOY_MANAGED_ENV_KEYS.join('|')})=`;
+
+export function unmanagedEnvironmentText(value) {
+  const managed = new Set(DEPLOY_MANAGED_ENV_KEYS);
+  return String(value || '').split('\n').filter((line) => {
+    const separator = line.indexOf('=');
+    return separator < 0 || !managed.has(line.slice(0, separator));
+  }).join('\n');
+}
+
 export function parseDeployArgs(argv) {
   const parsed = {
     activate: false,
@@ -155,7 +189,7 @@ rollback="/opt/zen-content-hub.rollback-$old_short"
 failed="/opt/zen-content-hub.failed-$short"
 switch_started=0
 env_changed=0
-env_without_managed_opening_before=$(sudo awk '$0 !~ /^(OPENING_DIGEST_MODEL|OPENING_DIGEST_WECHAT_ENABLED)=/' "$env_file" | sha256sum | awk '{ print $1 }')
+env_without_managed_before=$(sudo awk '$0 !~ /${DEPLOY_MANAGED_ENV_PATTERN}/' "$env_file" | sha256sum | awk '{ print $1 }')
 
 restore_on_error() {
   status=$?
@@ -264,8 +298,8 @@ update_env QDII_MAX_REPORT_CANDIDATES 3
 if [ "$opening_digest_segment_id" -gt 0 ]; then
   update_env CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID "$opening_digest_segment_id"
 fi
-env_without_managed_opening_after=$(sudo awk '$0 !~ /^(OPENING_DIGEST_MODEL|OPENING_DIGEST_WECHAT_ENABLED)=/' "$env_file" | sha256sum | awk '{ print $1 }')
-test "$env_without_managed_opening_after" = "$env_without_managed_opening_before"
+env_without_managed_after=$(sudo awk '$0 !~ /${DEPLOY_MANAGED_ENV_PATTERN}/' "$env_file" | sha256sum | awk '{ print $1 }')
+test "$env_without_managed_after" = "$env_without_managed_before"
 
 switch_started=1
 sudo systemctl stop zen-content-hub

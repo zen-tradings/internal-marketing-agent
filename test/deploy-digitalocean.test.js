@@ -6,11 +6,13 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
   ACTIVATE_SCRIPT,
+  DEPLOY_MANAGED_ENV_KEYS,
   PREFLIGHT_SCRIPT,
   loadDeployTarget,
   parseDeployArgs,
   parsePreflight,
   validateDeployInputs,
+  unmanagedEnvironmentText,
 } from '../scripts/deploy-digitalocean.mjs';
 
 const SHA = 'a'.repeat(40);
@@ -46,12 +48,22 @@ test('embedded remote preflight and activation scripts are valid Bash', () => {
   assert.match(ACTIVATE_SCRIPT, /check-opening-digest-python\.mjs/);
   assert.match(ACTIVATE_SCRIPT, /update_env OPENING_DIGEST_WECHAT_ENABLED/);
   assert.match(ACTIVATE_SCRIPT, /update_env OPENING_DIGEST_MODEL/);
-  assert.match(ACTIVATE_SCRIPT, /env_without_managed_opening_after/);
-  assert.match(ACTIVATE_SCRIPT, /\^\(OPENING_DIGEST_MODEL\|OPENING_DIGEST_WECHAT_ENABLED\)=/);
+  assert.match(ACTIVATE_SCRIPT, /env_without_managed_after/);
   assert.match(ACTIVATE_SCRIPT, /update_env QDII_ENABLED true/);
   assert.match(ACTIVATE_SCRIPT, /QDII_PYTHON_PATH \/opt\/zen-content-hub\/\.venv\/bin\/python/);
   assert.match(ACTIVATE_SCRIPT, /QDII_WORKER_PATH \/opt\/zen-content-hub\/python\/qdii_worker\.py/);
   assert.match(ACTIVATE_SCRIPT, /update_env CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID/);
+});
+
+test('deployment environment guard permits every managed update and rejects unrelated drift', () => {
+  const before = ['UNRELATED=keep', ...DEPLOY_MANAGED_ENV_KEYS.map((key) => `${key}=old`), 'TAIL=keep'].join('\n');
+  const afterManagedChanges = ['UNRELATED=keep', ...DEPLOY_MANAGED_ENV_KEYS.map((key) => `${key}=new`), 'TAIL=keep'].join('\n');
+  assert.equal(unmanagedEnvironmentText(afterManagedChanges), unmanagedEnvironmentText(before));
+  assert.notEqual(
+    unmanagedEnvironmentText(afterManagedChanges.replace('UNRELATED=keep', 'UNRELATED=changed')),
+    unmanagedEnvironmentText(before),
+  );
+  for (const key of DEPLOY_MANAGED_ENV_KEYS) assert.match(ACTIVATE_SCRIPT, new RegExp(`(?:\\||\\()${key}(?:\\||\\))`));
 });
 
 test('deploy target must come from an explicit DigitalOcean target file', () => {

@@ -1,7 +1,8 @@
 import { sharedResearch, officialFirstPolicy, envModel, envTimeoutMs, workDirFor } from './shared.js';
+import { runtimeConfig } from '../config/runtime.js';
 
 export function newsletterEdition() {
-  const raw = String(process.env.NEWSLETTER_EDITION || 'Vol. 1').trim();
+  const raw = String(runtimeConfig()?.workflowEnvironment?.newsletterEdition || process.env.NEWSLETTER_EDITION || 'Vol. 1').trim();
   const match = raw.match(/^vol\.?\s*(\d+)$/i);
   return match ? `Vol. ${match[1]}` : raw;
 }

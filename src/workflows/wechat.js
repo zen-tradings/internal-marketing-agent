@@ -1,4 +1,5 @@
 import { sharedResearch, officialFirstPolicy, envChannel, envModel, envTimeoutMs, buildPromptTemplate } from './shared.js';
+import { runtimeConfig } from '../config/runtime.js';
 
 export default {
   id: 'wechat',
@@ -7,7 +8,7 @@ export default {
   sourcePolicy: officialFirstPolicy(),
   factReview: true,
   triggers: ['slack'],
-  get workDir() { return process.env.WORK_DIR || '/srv/zen/wechat'; }, // 保持现状,不带子目录
+  get workDir() { return runtimeConfig()?.workDir || process.env.WORK_DIR || '/srv/zen/wechat'; }, // 保持现状,不带子目录
   get model() { return envModel(); },
   get channel() { return envChannel(); },   // 默认真实渠道;本地演练用 HUB_DRY_RUN=1 或设 WECHAT_CHANNEL=mock
   get timeoutMs() { return envTimeoutMs(); },

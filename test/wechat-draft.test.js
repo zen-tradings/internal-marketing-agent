@@ -54,6 +54,8 @@ test('publish 调 renderAndPublish 并传入固定尾图后返回 mediaId/title'
   assert.equal(calledWith.opts.file, '/x/article.md');
   assert.equal(calledWith.opts.finalSurveyPath, '/assets/survey.jpg');
   assert.equal(calledWith.opts.finalFooterPath, '/assets/footer.png');
+  assert.equal(calledWith.opts.appId, 'wx');
+  assert.equal(calledWith.opts.appSecret, 's');
 });
 
 test('renderAndPublish 抛错 → stage=publish', async () => {
@@ -105,17 +107,43 @@ test('微信发布不再检查公网 IP 或调用旧出口钩子', async () => {
   assert.equal(result.mediaId, 'MEDIA-X');
 });
 
-test('publish 成功后恢复 process.env 的原值', async () => {
+test('publish 显式传递凭据且不修改 process.env', async () => {
   const prevAppId = process.env.WECHAT_APP_ID;
   const prevAppSecret = process.env.WECHAT_APP_SECRET;
   const channel = makeChannel({
     ...stubCover,
-    renderAndPublish: async () => 'MEDIA-9',
+    renderAndPublish: async (_content, options) => {
+      assert.equal(options.appId, 'wx');
+      assert.equal(options.appSecret, 's');
+      return 'MEDIA-9';
+    },
     readArticle: async () => ({ markdown: VALID_MD, title: 't' }),
   });
   await channel.publish({ articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's' } } });
   assert.equal(process.env.WECHAT_APP_ID, prevAppId);
   assert.equal(process.env.WECHAT_APP_SECRET, prevAppSecret);
+});
+
+test('publish 成功立即持久化 remote id，恢复时校验远端标题且不重复发布', async () => {
+  const created = [];
+  let publishCalls = 0;
+  const channel = makeChannel({
+    ...stubCover,
+    renderAndPublish: async () => { publishCalls += 1; return 'WX-41'; },
+    recoverDraft: async () => ({ news_item: [{ title: '测试标题' }] }),
+    readArticle: async () => ({ markdown: VALID_MD, title: '测试标题' }),
+  });
+  await channel.publish({
+    articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's', timeoutMs: 30000 } },
+    onCreated: (value) => created.push(value),
+  });
+  const recovered = await channel.publish({
+    articlePath: '/x/a.md', config: { wechat: { appId: 'wx', appSecret: 's', timeoutMs: 30000 } },
+    existingRemoteId: 'WX-41',
+  });
+  assert.equal(publishCalls, 1);
+  assert.deepEqual(created, [{ remoteId: 'WX-41', title: '测试标题' }]);
+  assert.deepEqual(recovered, { mediaId: 'WX-41', title: '测试标题' });
 });
 
 test('publish 前先生成封面并写入 frontmatter(传给 renderAndPublish 前文件已含 cover)', async () => {

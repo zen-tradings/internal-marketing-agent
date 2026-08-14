@@ -23,9 +23,12 @@ export function isTaskCancelled(error, signal) {
   );
 }
 
+const FETCH_BASE_TRANSPORT = Symbol('zen.fetchBaseTransport');
+const FETCH_REBIND_TRANSPORT = Symbol('zen.fetchRebindTransport');
+
 export function withTaskCancellation(fetchFn, signal) {
   if (!signal) return fetchFn;
-  return (resource, options = {}) => {
+  const wrapped = (resource, options = {}) => {
     throwIfTaskCancelled(signal);
     const requestSignal = options?.signal;
     const combinedSignal = requestSignal && requestSignal !== signal
@@ -33,4 +36,29 @@ export function withTaskCancellation(fetchFn, signal) {
       : signal;
     return fetchFn(resource, { ...options, signal: combinedSignal });
   };
+  const rebindInner = fetchFn?.[FETCH_REBIND_TRANSPORT];
+  Object.defineProperties(wrapped, {
+    [FETCH_BASE_TRANSPORT]: {
+      value: fetchFn?.[FETCH_BASE_TRANSPORT] || fetchFn,
+    },
+    [FETCH_REBIND_TRANSPORT]: {
+      value: (nextTransport) => withTaskCancellation(
+        rebindInner ? rebindInner(nextTransport) : nextTransport,
+        signal,
+      ),
+    },
+  });
+  return wrapped;
+}
+
+// 安全下载需要在完成 DNS 校验后替换最底层的网络 transport，同时保留取消、
+// 观测等上层装饰器。不能依赖函数对象与 globalThis.fetch 的直接相等关系；
+// 一旦 fetch 被取消包装器装饰，那种判断会悄悄关闭 DNS pinning。
+export function fetchUsesGlobalTransport(fetchFn) {
+  return (fetchFn?.[FETCH_BASE_TRANSPORT] || fetchFn) === globalThis.fetch;
+}
+
+export function rebindFetchTransport(fetchFn, nextTransport) {
+  const rebind = fetchFn?.[FETCH_REBIND_TRANSPORT];
+  return rebind ? rebind(nextTransport) : nextTransport;
 }

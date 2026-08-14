@@ -6,11 +6,14 @@ import https from 'node:https';
 import net from 'node:net';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import { spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
 import {
   cancellationErrorFromSignal,
+  fetchUsesGlobalTransport,
+  rebindFetchTransport,
   throwIfTaskCancelled,
 } from '../lib/task-cancellation.js';
 import { isGoogleDocUrl, resolveGoogleDocsSource } from '../lib/google-docs.js';
@@ -45,6 +48,7 @@ const DEFAULT_LIMITS = {
   maxAssetBytes: 40 * 1024 * 1024,
   maxSingleAssetBytes: 10 * 1024 * 1024,
 };
+const execFileAsync = promisify(execFile);
 const DOCUMENT_BLOCK_TYPES = new Set([
   'heading', 'paragraph', 'quote', 'list_item', 'figure', 'table', 'equation', 'code', 'reference',
 ]);
@@ -726,12 +730,11 @@ async function sourceDocumentFromPdf({
     contentType: 'application/pdf',
   });
   const pdfPath = path.join(workDir, 'translation-source.pdf');
-  fs.writeFileSync(pdfPath, pdfBuffer);
-  const pages = assertPdfPageLimit(pdfPath, limits.maxPdfPages);
+  await fs.promises.writeFile(pdfPath, pdfBuffer);
+  const { pages, output: info } = await readPdfInfo(pdfPath, limits.maxPdfPages, { signal });
   if (scope?.kind === 'pages' && scope.endPage > pages) {
     throw new Error(`指定翻译范围超过 PDF 页数:${scope.endPage}/${pages}`);
   }
-  const info = runCommand('pdfinfo', [pdfPath], { timeout: 15000 });
   const title = cleanPdfMeta(/^Title:\s+(.+)$/mi.exec(info)?.[1])
     || path.basename(new URL(sourceUrl).pathname, '.pdf')
     || 'PDF 原文';
@@ -747,7 +750,7 @@ async function sourceDocumentFromPdf({
     onProgress,
   });
   const expectedPageIds = pdfPageIds(scope, pages);
-  const popplerTextCharacters = pdfTextCharacters(pdfPath, scope, pages);
+  const popplerTextCharacters = await pdfTextCharacters(pdfPath, scope, pages, { signal });
   const document = await sourceDocumentFromHtml({
     html: converted.html,
     sourceUrl,
@@ -834,15 +837,15 @@ function pdfPageIds(scope, totalPages) {
   return Array.from({ length: end - start + 1 }, (_, index) => start + index);
 }
 
-function pdfTextCharacters(pdfPath, scope, totalPages) {
+async function pdfTextCharacters(pdfPath, scope, totalPages, { signal } = {}) {
   const firstPage = scope?.kind === 'pages' ? scope.startPage : 1;
   const lastPage = scope?.kind === 'pages' ? scope.endPage : totalPages;
-  const text = runCommand('pdftotext', [
+  const text = await runCommand('pdftotext', [
     '-f', String(firstPage),
     '-l', String(lastPage),
     pdfPath,
     '-',
-  ], { timeout: 60000 });
+  ], { timeout: 60000, signal });
   return text.replace(/\s+/g, '').length;
 }
 
@@ -1415,6 +1418,7 @@ export async function safeFetchResource({
   maxBytes = limits.maxSourceBytes,
   method = 'GET',
   body,
+  pinnedFetchFactory = pinnedHttpFetch,
 }) {
   const requestMethod = String(method || 'GET').toUpperCase();
   if (!['GET', 'POST'].includes(requestMethod)) throw new Error(`安全下载不支持请求方法:${requestMethod}`);
@@ -1424,7 +1428,9 @@ export async function safeFetchResource({
   let currentHeaders = { ...headers };
   for (let redirects = 0; redirects <= limits.maxRedirects; redirects += 1) {
     const resolved = await resolveSafeHttpUrl(current, { dnsLookup });
-    const requestFetch = fetchFn === globalThis.fetch ? pinnedHttpFetch(resolved.addresses) : fetchFn;
+    const requestFetch = fetchUsesGlobalTransport(fetchFn)
+      ? rebindFetchTransport(fetchFn, pinnedFetchFactory(resolved.addresses))
+      : fetchFn;
     const response = await callFetch(fetchWithRetry, requestFetch, current, {
       redirect: 'manual',
       method: requestMethod,
@@ -3348,20 +3354,23 @@ function isAcademicBodyStart(value) {
   return /^(?:abstract|摘要|introduction|引言|executivesummary|执行摘要)$/.test(normalized);
 }
 
-export function assertPdfPageLimit(pdfPath, maxPdfPages, spawn = spawnSync) {
-  const result = spawn('pdfinfo', [pdfPath], {
-    encoding: 'utf8',
+export async function readPdfInfo(pdfPath, maxPdfPages, { signal, execute } = {}) {
+  const output = await runCommand('pdfinfo', [pdfPath], {
     timeout: 15000,
     maxBuffer: 1024 * 1024,
-    killSignal: 'SIGKILL',
+    signal,
+    execute,
+    missingMessage: 'PDF 页数校验缺少 Poppler 命令 pdfinfo',
+    failureLabel: 'PDF 页数检查失败',
   });
-  if (result.error?.code === 'ENOENT') throw new Error('PDF 页数校验缺少 Poppler 命令 pdfinfo');
-  if (result.error) throw new Error(`PDF 页数检查失败:${safeError(result.error)}`);
-  if (result.status !== 0) throw new Error(`PDF 页数检查失败:${String(result.stderr || '').slice(0, 300)}`);
-  const pages = Number(/^Pages:\s+(\d+)/mi.exec(result.stdout || '')?.[1] || 0);
+  const pages = Number(/^Pages:\s+(\d+)/mi.exec(output)?.[1] || 0);
   if (!pages) throw new Error('PDF 页数识别失败');
   if (pages > maxPdfPages) throw new Error(`PDF 页数超过上限:${pages}/${maxPdfPages}`);
-  return pages;
+  return { pages, output };
+}
+
+export async function assertPdfPageLimit(pdfPath, maxPdfPages, options) {
+  return (await readPdfInfo(pdfPath, maxPdfPages, options)).pages;
 }
 
 export function assertPdfResponse({
@@ -3401,17 +3410,25 @@ function isSlackPrivateFileUrl(rawUrl) {
   }
 }
 
-function runCommand(command, args, { timeout = 30000 } = {}) {
-  const result = spawnSync(command, args, {
-    encoding: 'utf8',
-    timeout,
-    maxBuffer: 32 * 1024 * 1024,
-    killSignal: 'SIGKILL',
-  });
-  if (result.error?.code === 'ENOENT') throw new Error(`PDF 元数据校验缺少 Poppler 命令 ${command}`);
-  if (result.error) throw new Error(`${command} 执行失败:${safeError(result.error)}`);
-  if (result.status !== 0) throw new Error(`${command} 执行失败:${String(result.stderr || '').slice(0, 300)}`);
-  return String(result.stdout || '');
+async function runCommand(command, args, {
+  timeout = 30000,
+  maxBuffer = 32 * 1024 * 1024,
+  signal,
+  execute = execFileAsync,
+  missingMessage = `PDF 元数据校验缺少 Poppler 命令 ${command}`,
+  failureLabel = `${command} 执行失败`,
+} = {}) {
+  try {
+    const result = await execute(command, args, {
+      encoding: 'utf8', timeout, maxBuffer, signal, killSignal: 'SIGKILL',
+    });
+    return String(result?.stdout ?? result ?? '');
+  } catch (error) {
+    if (signal?.aborted) throw cancellationErrorFromSignal(signal);
+    if (error?.code === 'ENOENT') throw new Error(missingMessage);
+    const detail = error?.stderr ? String(error.stderr).slice(0, 300) : safeError(error);
+    throw new Error(`${failureLabel}:${detail}`);
+  }
 }
 
 function assertUsableArticleResponse(html, url) {
