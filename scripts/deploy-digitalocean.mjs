@@ -404,14 +404,16 @@ export function activateRemote({ target, commit, model, reasoning, plannerModel,
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-content-hub-deploy-'));
   const short = commit.slice(0, 12);
   const archive = path.join(temporaryDir, `zen-content-hub-${short}.tar.gz`);
+  const remoteScript = `/tmp/zen-content-hub-activate-${short}.sh`;
+  const encodedScript = Buffer.from(ACTIVATE_SCRIPT, 'utf8').toString('base64');
   try {
     run('git', ['archive', '--format=tar.gz', `--output=${archive}`, commit]);
     run('scp', [...SSH_OPTIONS, archive, `${target}:/tmp/zen-content-hub-${short}.tar.gz`]);
     return run('ssh', [
       ...SSH_OPTIONS,
       target,
-      `bash -s -- ${commit} ${model} ${reasoning} ${plannerModel} ${plannerReasoning} ${openingDigestModel} ${openingDigestWechatEnabled} ${openingDigestSegmentId}`,
-    ], { input: ACTIVATE_SCRIPT, quiet: true });
+      `printf '%s' '${encodedScript}' | base64 -d > ${remoteScript} && bash ${remoteScript} ${commit} ${model} ${reasoning} ${plannerModel} ${plannerReasoning} ${openingDigestModel} ${openingDigestWechatEnabled} ${openingDigestSegmentId}; status=$?; rm -f ${remoteScript}; exit $status`,
+    ], { quiet: true });
   } finally {
     fs.rmSync(temporaryDir, { recursive: true, force: true });
   }
