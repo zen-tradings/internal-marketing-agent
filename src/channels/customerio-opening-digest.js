@@ -12,13 +12,15 @@ import { easternDateKey } from '../lib/us-equity-calendar.js';
 import { auditOpeningDigestArticle } from '../lib/opening-digest-content.js';
 import { translateOpeningDigestPayload } from '../lib/opening-digest-translation.js';
 import { makeWechatOpeningDigestChannel } from './wechat-opening-digest.js';
+import { acquireRuntimeResource, runtimeFetch } from '../config/runtime.js';
 
 const SENDER = 'support@zentradings.com';
 const CUSTOMERIO_MIN_SCHEDULE_LEAD_MS = 5 * 60 * 1000;
 export const CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['customerio-opening-digest'];
 
 export function makeChannel({
-  readArticle = (file) => fs.readFile(file, 'utf8'), fetchFn = globalThis.fetch,
+  readArticle = (file) => fs.readFile(file, 'utf8'),
+  fetchFn = (...args) => runtimeFetch(globalThis.fetch)(...args),
   now = () => new Date(), captureOptions = captureTrendingOptionsTable,
   renderCover = renderOpeningDigestCover, uploadAsset = uploadCustomerIoAsset,
   collectMetrics = collectOpeningMetrics,
@@ -38,6 +40,7 @@ export function makeChannel({
       const dateKey = easternDateKey(current);
       const diagnostics = [];
       const traceMetadata = {};
+      const releaseCustomerio = await acquireRuntimeResource('customerio-write');
       try {
         const articleSource = await readArticle(articlePath);
         const articleAudit = auditOpeningDigestArticle({ article: articleSource, asOf: current });
@@ -232,7 +235,8 @@ export function makeChannel({
         }
         return publishResult({ newsletterId, name, digest, audience, deliveries, deliveryWarnings });
       } finally {
-        await appendOpeningDiagnostics(articlePath, diagnostics, { contentMode, ...traceMetadata });
+        try { await appendOpeningDiagnostics(articlePath, diagnostics, { contentMode, ...traceMetadata }); }
+        finally { releaseCustomerio(); }
       }
     },
   };

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runtimeFetch, withRuntimeResource } from '../config/runtime.js';
 
 const DEFAULT_GENERATOR_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -36,6 +37,7 @@ const COVER_SYSTEM_PROMPT = `你负责从 Zen Trading 公众号文章中提取�
 // Ask OpenRouter to extract cover data from article content. Parsing or validation failures return null so
 // generateCover retains its existing example-data-plus-title fallback instead of failing cover generation.
 export async function buildCoverData({ title, markdown, writer, fetchFn = globalThis.fetch }) {
+  fetchFn = runtimeFetch(fetchFn);
   const controller = new AbortController();
   const timeoutMs = Number(writer?.coverTimeoutMs || 30000);
   let timer;
@@ -142,6 +144,7 @@ export async function generateCover({
   buildDataFn = buildCoverData,
   processTimeoutMs = Number(writer?.coverProcessTimeoutMs || 90000),
   keepTemp = false,
+  signal,
 }) {
   const examplePath = path.join(generatorDir, 'samples', 'example.json');
   let exampleData;
@@ -172,7 +175,7 @@ export async function generateCover({
   await fs.writeFile(dataPath, JSON.stringify(data, null, 2));
 
   try {
-    return await new Promise((resolve, reject) => {
+    return await withRuntimeResource('browser', () => new Promise((resolve, reject) => {
       let cp;
       let settled = false;
       const finish = (fn, value) => {
@@ -196,7 +199,7 @@ export async function generateCover({
         else finish(reject, Object.assign(new Error(`封面生成失败 code=${code}`), { stage: 'cover' }));
       });
       cp.on('error', (e) => finish(reject, Object.assign(e, { stage: 'cover' })));
-    });
+    }), signal);
   } finally {
     if (!keepTemp) await fs.rm(workDir, { recursive: true, force: true });
   }

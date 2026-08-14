@@ -22,12 +22,26 @@ export function loadConfig(env = process.env) {
   const slackAllowedChannelIds = csvValues(env.SLACK_ALLOWED_CHANNEL_IDS);
   const production = String(env.NODE_ENV || '').toLowerCase() === 'production';
   const maxConcurrency = positiveIntegerOrThrow(env.MAX_CONCURRENCY, 1, 'MAX_CONCURRENCY');
+  const resources = {
+    browserConcurrency: positiveIntegerOrThrow(env.BROWSER_CONCURRENCY, 1, 'BROWSER_CONCURRENCY'),
+    wechatWriteConcurrency: positiveIntegerOrThrow(env.WECHAT_WRITE_CONCURRENCY, 1, 'WECHAT_WRITE_CONCURRENCY'),
+    customerioWriteConcurrency: positiveIntegerOrThrow(env.CUSTOMERIO_WRITE_CONCURRENCY, 1, 'CUSTOMERIO_WRITE_CONCURRENCY'),
+    openrouterConcurrency: positiveIntegerOrThrow(env.OPENROUTER_CONCURRENCY, 2, 'OPENROUTER_CONCURRENCY'),
+    exaSearchQps: positiveNumber(env.EXA_SEARCH_QPS, 8, 'EXA_SEARCH_QPS'),
+  };
+  const slackPostIntervalMs = positiveNumber(env.SLACK_POST_INTERVAL_MS, 1000, 'SLACK_POST_INTERVAL_MS');
   const workDir = env.WORK_DIR || '/srv/zen/wechat';
   const dbPath = env.DB_PATH || path.resolve(env.HOME || '.', 'zen-content-hub', 'runs.db');
   if (production) {
     if (!slackAllowedUserIds.length) throw new Error('生产环境必须配置 SLACK_ALLOWED_USER_IDS');
     if (!slackAllowedChannelIds.length) throw new Error('生产环境必须配置 SLACK_ALLOWED_CHANNEL_IDS');
-    if (maxConcurrency !== 1) throw new Error('生产环境 MAX_CONCURRENCY 必须为 1');
+    if (maxConcurrency > 2) throw new Error('生产环境 MAX_CONCURRENCY 只能为 1 或 2');
+    if (resources.browserConcurrency !== 1) throw new Error('生产环境 BROWSER_CONCURRENCY 必须为 1');
+    if (resources.wechatWriteConcurrency !== 1) throw new Error('生产环境 WECHAT_WRITE_CONCURRENCY 必须为 1');
+    if (resources.customerioWriteConcurrency !== 1) throw new Error('生产环境 CUSTOMERIO_WRITE_CONCURRENCY 必须为 1');
+    if (resources.openrouterConcurrency > 2) throw new Error('生产环境 OPENROUTER_CONCURRENCY 不得超过 2');
+    if (resources.exaSearchQps > 8) throw new Error('生产环境 EXA_SEARCH_QPS 不得超过 8');
+    if (slackPostIntervalMs < 1000) throw new Error('生产环境 SLACK_POST_INTERVAL_MS 不得小于 1000');
     if (!path.isAbsolute(workDir)) throw new Error('生产环境 WORK_DIR 必须是绝对路径');
     if (!path.isAbsolute(dbPath)) throw new Error('生产环境 DB_PATH 必须是绝对路径');
   }
@@ -36,6 +50,7 @@ export function loadConfig(env = process.env) {
     dbPath,
     maxConcurrency,
     maxQueueSize: positiveIntegerOrThrow(env.MAX_QUEUE_SIZE, 100, 'MAX_QUEUE_SIZE'),
+    resources,
     defaultTimeoutMs: positiveNumber(env.DEFAULT_TIMEOUT_MS, 10 * 60 * 1000, 'DEFAULT_TIMEOUT_MS'),
     runRetentionDays: positiveIntegerOrThrow(env.RUN_RETENTION_DAYS, 90, 'RUN_RETENTION_DAYS'),
     slackThreadRetentionDays: positiveIntegerOrThrow(env.SLACK_THREAD_RETENTION_DAYS, 30, 'SLACK_THREAD_RETENTION_DAYS'),
@@ -128,6 +143,7 @@ export function loadConfig(env = process.env) {
       allowedChannelIds: slackAllowedChannelIds,
       rateLimitPerMinute: positiveIntegerOrThrow(env.SLACK_RATE_LIMIT_PER_MINUTE, 10, 'SLACK_RATE_LIMIT_PER_MINUTE'),
       editDebounceMs: nonNegativeInteger(env.SLACK_EDIT_DEBOUNCE_MS, 5000, 'SLACK_EDIT_DEBOUNCE_MS'),
+      postIntervalMs: slackPostIntervalMs,
     },
     documents: {
       googleDocsAccessToken: env.GOOGLE_DOCS_ACCESS_TOKEN || '',

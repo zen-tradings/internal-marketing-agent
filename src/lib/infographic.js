@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runtimeFetch, withRuntimeResource } from '../config/runtime.js';
 
 const DEFAULT_GENERATOR_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -86,6 +87,7 @@ export async function buildInfographicPlan({
   timeoutMs: timeoutOption,
   fetchFn = globalThis.fetch,
 }) {
+  fetchFn = runtimeFetch(fetchFn);
   const controller = new AbortController();
   const timeoutMs = Number(timeoutOption) > 0 ? Number(timeoutOption) : 45000;
   let timer;
@@ -224,6 +226,7 @@ export async function generateArticleInfographics({
   buildPlanFn = buildInfographicPlan,
   processTimeoutMs = Number(infographic?.processTimeoutMs || 90000),
   keepTemp = false,
+  signal,
 }) {
   const warnings = [];
   const images = [];
@@ -257,7 +260,7 @@ export async function generateArticleInfographics({
       const dataPath = path.join(workDir, `data-${index + 1}.json`);
       await fs.writeFile(dataPath, JSON.stringify({ syntax: item.syntax }, null, 2));
       try {
-        await runRenderer({ generatorDir, dataPath, outPath, spawnFn, processTimeoutMs });
+        await withRuntimeResource('browser', () => runRenderer({ generatorDir, dataPath, outPath, spawnFn, processTimeoutMs }), signal);
         await fs.access(outPath);
       } catch (e) {
         warnings.push(`第 ${index + 1} 张信息图渲染失败,已跳过:${String(e.message || e).slice(0, 160)}`);

@@ -14,6 +14,14 @@ test('loadConfig 读取 env 并给出默认值', () => {
   const c = loadConfig(env);
   assert.equal(c.workDir, '/srv/zen');
   assert.equal(c.maxConcurrency, 1);              // 默认
+  assert.deepEqual(c.resources, {
+    browserConcurrency: 1,
+    wechatWriteConcurrency: 1,
+    customerioWriteConcurrency: 1,
+    openrouterConcurrency: 2,
+    exaSearchQps: 8,
+  });
+  assert.equal(c.slack.postIntervalMs, 1000);
   assert.equal(c.defaultTimeoutMs, 600000);       // 默认 10min
   assert.equal('egress' in c, false);
   assert.equal(c.writer.openrouterApiKey, 'or-key');
@@ -70,7 +78,7 @@ test('工作流环境在启动配置阶段拒绝未知渠道和无效域名', ()
   assert.throws(() => loadConfig({ ...base, EXA_PRIORITY_DOMAINS: 'https:\/\/example.com/path' }), /无效域名/);
 });
 
-test('生产环境强制单并发，微信请求超时可配置', () => {
+test('生产环境允许已验证的 1-2 并发并锁住重资源上限', () => {
   const base = {
     NODE_ENV: 'production',
     SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
@@ -79,7 +87,12 @@ test('生产环境强制单并发，微信请求超时可配置', () => {
     OPENROUTER_API_KEY: 'or-key',
   };
   assert.equal(loadConfig({ ...base, WECHAT_TIMEOUT_MS: '12345' }).wechat.timeoutMs, 12345);
-  assert.throws(() => loadConfig({ ...base, MAX_CONCURRENCY: '2' }), /MAX_CONCURRENCY 必须为 1/);
+  assert.equal(loadConfig({ ...base, MAX_CONCURRENCY: '2' }).maxConcurrency, 2);
+  assert.throws(() => loadConfig({ ...base, MAX_CONCURRENCY: '3' }), /只能为 1 或 2/);
+  assert.throws(() => loadConfig({ ...base, BROWSER_CONCURRENCY: '2' }), /BROWSER_CONCURRENCY 必须为 1/);
+  assert.throws(() => loadConfig({ ...base, OPENROUTER_CONCURRENCY: '3' }), /不得超过 2/);
+  assert.throws(() => loadConfig({ ...base, EXA_SEARCH_QPS: '9' }), /不得超过 8/);
+  assert.throws(() => loadConfig({ ...base, SLACK_POST_INTERVAL_MS: '999' }), /不得小于 1000/);
 });
 
 test('Opening Digest 微信同步只有显式开关才启用', () => {

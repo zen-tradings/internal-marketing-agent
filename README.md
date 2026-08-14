@@ -6,7 +6,7 @@ Zen Content Hub is a single-instance, long-running content orchestration service
 
 ```text
 Slack direct-message prompt / channel @Bot / PDF or text attachment / cron
-  → message/edit debounce, revision deduplication, SQLite enqueue, single-instance concurrency control
+  → message/edit debounce, per-thread revision mutex, SQLite priority enqueue, single-instance concurrency control
   → translation: scope detection → structured HTML/PDF → chunked translation and integrity gates
   → WeChat Analysis V2: original prompt → TaskContract → SearchPlan → EvidenceMatrix → evidence-led editorial brief
   → user PDF/Notion/Google Docs/GitHub/URL + latest primary sources + preferred sources + open cross-checking
@@ -132,7 +132,9 @@ curl --fail http://127.0.0.1:8787/health
 curl --fail http://127.0.0.1:8787/ready
 ```
 
-`/health` means the process and local state are readable. `/ready` additionally requires an active Slack Socket Mode connection. A transient Slack outage does not block persisted tasks: success, failure, cancellation, clarification, and core QDII replies enter the SQLite outbox and are delivered according to the task's current terminal state after reconnection. Stale notifications are discarded, and notification failures never rewrite a completed draft as failed.
+`/health` means the process and local state are readable. `/ready` additionally requires an active Slack Socket Mode connection. Both expose only aggregate queue and resource-gate counts (`active`, `pending`, `waiting`, and limits), never task text, user/channel IDs, or credentials. A transient Slack outage does not block persisted tasks: success, failure, cancellation, clarification, and core QDII replies enter the SQLite outbox and are delivered according to the task's current terminal state after reconnection. Stale notifications are discarded, and notification failures never rewrite a completed draft as failed.
+
+Production remains one Node.js process and one SQLite WAL database. The validated 1 vCPU/2 GB host runs at `MAX_CONCURRENCY=2`; a third task stays queued. Opening Digest has non-preemptive queue priority. Browser work, WeChat writes, and Customer.io writes remain serialized; OpenRouter is capped at two in-flight calls, Exa Search at 8 QPS, and Slack posts at one per channel per second. The application default remains one task for unvalidated environments, and production startup rejects values above two.
 
 Code changes do not hot-reload. Package a specific CI-approved commit as an immutable release according to [`deploy/README.md`](deploy/README.md), run `npm ci && npm run check` in an independent release directory, verify the SQLite/runtime-asset recovery unit, and only then switch and restart the single systemd instance. Never overwrite `/opt/zen-content-hub` from a dirty local worktree.
 
@@ -159,7 +161,7 @@ User URLs and Slack attachments are read in full before cross-checking against t
 
 PDFs, Notion, Google Docs, and GitHub repositories/files enter as first-class user sources but are not automatically treated as official facts. Private Slack files use the Bot token. Analytical PDFs use Datalab for structured parsing when available or Poppler for searchable text otherwise; scanned files fail explicitly without OCR. A task becomes `needs_input` only when user material and a primary source each carry clear evidence that conflicts on a core premise in a way that time or measurement cannot explain. The Bot asks one precise question in the original thread and does not repeat the conflict after an answer. Missing material, unverified models, and audit issues do not cause clarification loops; the system uses risk, impact, source, and confidence to choose a local repair or retain the issue for review.
 
-To stop work, send `@ZenBot 停止当前任务`, `停止进程`, `取消任务`, `stop the current task`, `cancel task`, or `abort this job` in the original task thread or channel. Queued work is removed immediately. Running work aborts network requests, becomes `cancelled`, and deletes its own `runs/<run-id>/` directory while ZenBot remains online. Once WeChat or Customer.io draft creation begins, the task is not force-killed because a remote draft may already exist without a locally persisted `media_id`; the Bot reports this state clearly. Ordinary workflows create drafts only. `opening-digest` follows its separate audience and send gates.
+To stop work, send `@ZenBot 停止当前任务`, `停止进程`, `取消任务`, `stop the current task`, `cancel task`, or `abort this job` in the original task thread. Queued work is removed immediately. Running work aborts network requests, becomes `cancelled`, and deletes its own `runs/<run-id>/` directory while ZenBot remains online. A channel-level stop is accepted only when exactly one task matches; otherwise the Bot lists the matching runs and asks you to stop from the original thread. Once WeChat or Customer.io draft creation begins, the task is not force-killed because a remote draft may already exist without a locally persisted `media_id`; the Bot reports this state clearly. Ordinary workflows create drafts only. `opening-digest` follows its separate audience and send gates.
 
 ## Workflows
 
@@ -295,7 +297,7 @@ Preserve the contract that `runWriter()` creates `article.md` inside each task's
 
 ### Customer.io Newsletter
 
-The Newsletter workflow uses the Customer.io App API and fixed `zen-customerio/zen-research@5` template to create a Newsletter Broadcast draft named `Zen Research from Zen Trading · Vol. N`. It never sets `send_now` or `scheduled_at`. Rendered HTML must carry that template identifier or the Customer.io call is blocked.
+The Newsletter workflow uses the Customer.io App API and fixed `zen-customerio/zen-research@5` template to create a Newsletter Broadcast draft named `Zen Research from Zen Trading · Vol. N`. The remote name and email subject never receive a run suffix. Before creation, SQLite records the deterministic operation key `cio:newsletter:create:v1:<run-id>`, canonical payload hash, and same-name ID snapshot. An ambiguous response is recovered only from one verified new draft; otherwise the Bot retries creation once, persists that retry budget across restarts, warns about possible duplicate drafts after a successful retry, and stops in `needs_review` after a second ambiguous result. It never sets `send_now` or `scheduled_at`. Rendered HTML must carry the fixed template identifier or the Customer.io call is blocked.
 
 The desktop layout uses compact spacing. At widths up to 640px, shell horizontal padding becomes 4px and body/footer padding becomes 8px so data tables approach the card edges. The footer always displays `700 Leahy St, Redwood City, CA 94061` and company LinkedIn `https://www.linkedin.com/company/110921483`; neither environment variables nor a task may override them.
 

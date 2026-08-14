@@ -15,7 +15,7 @@
    → enqueue 落库(SQLite runs 表,状态 queued)
 
 ② 排队     src/core/queue.js + src/core/store.js
-   有界队列限流、限并发出队，状态 queued → running。每个活动任务拥有独立 AbortController
+   有界优先级队列限流、最多双并发出队，状态 queued → running。Opening Digest 只优先待执行任务、不抢占；每个活动任务拥有独立 AbortController
    和 generate/publish 阶段标记；Slack 中英文停止指令可在 generate 阶段取消任务并清理
    run 目录，进入外部 publish 阶段后拒绝强杀。崩溃重启时 running 会被标 interrupted；
    管理员显式重新排队后，持久化 queued 任务会在下次启动恢复，避免历史中断任务被自动误发。

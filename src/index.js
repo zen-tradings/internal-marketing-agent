@@ -3,9 +3,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from './config/index.js';
-import { installRuntimeConfig } from './config/runtime.js';
+import { installResourceGovernor, installRuntimeConfig } from './config/runtime.js';
 import { openStore } from './core/store.js';
 import { createQueue } from './core/queue.js';
+import { createResourceGovernor } from './core/resource-governor.js';
 import { runWriter } from './core/runner.js';
 import { createNotifier } from './core/notifier.js';
 import { deliverOrQueueNotification, flushNotificationOutbox } from './core/notification-outbox.js';
@@ -275,6 +276,12 @@ export function makeHandler(deps) {
           existingRemoteId: store.getRun(run.id)?.remote_id || '',
           existingDeliveries: store.listDeliveries?.(run.id) || [],
           onCreated: ({ remoteId }) => store.setRemoteId(run.id, remoteId),
+          remoteOperations: {
+            get: (operation) => store.getRemoteOperation?.(run.id, operation),
+            prepare: (entry) => store.prepareRemoteOperation?.({ runId: run.id, ...entry }),
+            increment: (operation) => store.incrementRemoteOperationAttempt?.(run.id, operation),
+            update: (operation, patch) => store.updateRemoteOperation?.(run.id, operation, patch),
+          },
           onDelivery: (delivery) => store.upsertDelivery?.(run.id, delivery),
           resumeFromCheckpoint,
           contentPolicy: res.contentPolicy || {},
@@ -404,6 +411,10 @@ async function notifyBestEffort(notifier, method, notify, payload) {
 
 export async function start() {
   const config = installRuntimeConfig(loadConfig());
+  const governor = installResourceGovernor(createResourceGovernor({
+    ...config.resources,
+    fetchFn: globalThis.fetch,
+  }));
   validateCronConfiguration({ workflows: WORKFLOWS, timezone: config.cronTimezone });
   const store = openStore(config.dbPath);
   const now = Date.now();
@@ -442,12 +453,12 @@ export async function start() {
 
   const deps = {
     store,
-    runWriter,
+    runWriter: (args) => runWriter({ ...args, fetchFn: governor.fetch }),
     workflows: WORKFLOWS,
     channels: CHANNELS,
     config,
     notifier: undefined,
-    runQdiiQuery,
+    runQdiiQuery: (args) => runQdiiQuery({ ...args, fetchFn: governor.fetch }),
   };
   const handler = makeHandler(deps);
 
@@ -463,6 +474,7 @@ export async function start() {
     source: rowOrRun.source,
     input: rowOrRun.input,
     notify: {},
+    priority: Number(rowOrRun.priority || 0),
     restored: true,
   });
   const enqueue = (t) => {
@@ -470,7 +482,11 @@ export async function start() {
     // Acknowledge on receipt instead of waiting for queue execution, giving the user immediate feedback.
     // Guard both the startup-window notifier race and acknowledgement failures; neither may prevent enqueueing.
     try {
-      Promise.resolve(deps.notifier?.ack?.(t.notify, t.input)).catch((e) => {
+      Promise.resolve(deps.notifier?.ack?.({
+        ...t.notify,
+        runId: result.id,
+        queueState: queue.state(result.id),
+      }, t.input)).catch((e) => {
         console.error('[hub] notifier.ack 失败(已忽略)', e.message);
       });
     } catch (e) {
@@ -499,6 +515,7 @@ export async function start() {
       const slackConnected = isSlackAppConnected(currentSlackApp);
       return {
         queue: queueStatus,
+        resources: governor.stats(),
         slackConnected,
         shuttingDown,
         ready: !shuttingDown && !queueStatus.stopped && slackConnected,
@@ -521,9 +538,10 @@ export async function start() {
           cancelTask,
           store,
           workflowIds: Object.keys(WORKFLOWS),
+          fetchFn: governor.fetch,
         });
         currentSlackApp = app;
-        deps.notifier = createNotifier((m) => app.client.chat.postMessage(m));
+        deps.notifier = createNotifier(app.zenPostMessage || ((m) => app.client.chat.postMessage(m)));
         outboxFlushPromise = flushNotificationOutbox({ store, notifier: deps.notifier })
           .catch((error) => console.error('[hub] Slack outbox 首次补发失败:', error?.message || error))
           .finally(() => { outboxFlushPromise = undefined; });

@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS runs (
   schedule_key TEXT,
   error TEXT,
   notify_json TEXT,
+  priority INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   started_at INTEGER,
   finished_at INTEGER,
@@ -26,6 +27,23 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
 CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at);
+
+CREATE TABLE IF NOT EXISTS remote_operations (
+  run_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  operation_key TEXT NOT NULL UNIQUE,
+  payload_sha256 TEXT NOT NULL,
+  before_ids_json TEXT NOT NULL DEFAULT '[]',
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL,
+  remote_id TEXT,
+  last_error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (run_id, operation),
+  FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_remote_operations_state ON remote_operations(state, updated_at);
 
 CREATE TABLE IF NOT EXISTS run_deliveries (
   run_id TEXT NOT NULL,
@@ -115,14 +133,16 @@ export function openStore(dbPath) {
   ensureColumn(db, 'runs', 'output_kind', 'TEXT');
   ensureColumn(db, 'runs', 'slack_response_ts', 'TEXT');
   ensureColumn(db, 'runs', 'schedule_key', 'TEXT');
+  ensureColumn(db, 'runs', 'priority', 'INTEGER NOT NULL DEFAULT 0');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_runs_queue_order ON runs(status, priority DESC, created_at ASC)');
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_workflow_schedule
     ON runs(workflow_id, schedule_key) WHERE schedule_key IS NOT NULL`);
   return {
-    createRun({ id, workflowId, source, input, notify, scheduleKey }) {
+    createRun({ id, workflowId, source, input, notify, scheduleKey, priority = 0 }) {
       return db.prepare(
-        `INSERT INTO runs (id, workflow_id, source, input, status, notify_json, schedule_key, created_at)
-         VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)`
-      ).run(id, workflowId, source, input, JSON.stringify(notify ?? {}), scheduleKey || null, Date.now()).changes;
+        `INSERT INTO runs (id, workflow_id, source, input, status, notify_json, schedule_key, priority, created_at)
+         VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)`
+      ).run(id, workflowId, source, input, JSON.stringify(notify ?? {}), scheduleKey || null, priority, Date.now()).changes;
     },
     setStatus(id, status, patch = {}) {
       const cols = { status, stage: patch.stage, title: patch.title,
@@ -221,7 +241,44 @@ export function openStore(dbPath) {
         WHERE id = ? AND sent_at IS NULL
       `).run(String(error || '').slice(0, 1000), Number(nextAttemptAt) || Date.now(), id).changes;
     },
-    listByStatus(status) { return db.prepare('SELECT * FROM runs WHERE status = ? ORDER BY created_at').all(status); },
+    listByStatus(status) { return db.prepare('SELECT * FROM runs WHERE status = ? ORDER BY priority DESC, created_at').all(status); },
+    getRemoteOperation(runId, operation) {
+      return db.prepare('SELECT * FROM remote_operations WHERE run_id = ? AND operation = ?').get(runId, operation);
+    },
+    prepareRemoteOperation({ runId, operation, operationKey, payloadSha256, beforeIds = [] }) {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO remote_operations
+          (run_id, operation, operation_key, payload_sha256, before_ids_json, attempt_count, state, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 0, 'prepared', ?, ?)
+        ON CONFLICT(run_id, operation) DO UPDATE SET
+          updated_at = excluded.updated_at
+      `).run(runId, operation, operationKey, payloadSha256, JSON.stringify(beforeIds), now, now);
+      return db.prepare('SELECT * FROM remote_operations WHERE run_id = ? AND operation = ?').get(runId, operation);
+    },
+    incrementRemoteOperationAttempt(runId, operation) {
+      db.prepare(`
+        UPDATE remote_operations
+        SET attempt_count = attempt_count + 1, state = 'attempting', updated_at = ?
+        WHERE run_id = ? AND operation = ? AND attempt_count < 2 AND remote_id IS NULL
+      `).run(Date.now(), runId, operation);
+      return db.prepare('SELECT * FROM remote_operations WHERE run_id = ? AND operation = ?').get(runId, operation);
+    },
+    updateRemoteOperation(runId, operation, patch = {}) {
+      const columns = {
+        state: patch.state,
+        remote_id: patch.remoteId,
+        last_error: patch.lastError === undefined ? undefined : String(patch.lastError || '').slice(0, 1000),
+        updated_at: Date.now(),
+      };
+      const sets = [], values = [];
+      for (const [column, value] of Object.entries(columns)) {
+        if (value !== undefined) { sets.push(`${column} = ?`); values.push(value); }
+      }
+      values.push(runId, operation);
+      db.prepare(`UPDATE remote_operations SET ${sets.join(', ')} WHERE run_id = ? AND operation = ?`).run(...values);
+      return db.prepare('SELECT * FROM remote_operations WHERE run_id = ? AND operation = ?').get(runId, operation);
+    },
     getSlackThread(threadKey) {
       const row = db.prepare('SELECT * FROM slack_threads WHERE thread_key = ?').get(threadKey);
       if (!row) return undefined;

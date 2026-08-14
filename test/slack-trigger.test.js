@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createSlackIntentClassifier,
+  createKeyedMutex,
   buildSlackThreadInput,
   isSlackStopCommand,
   mergeSlackThreadMessages,
@@ -82,6 +83,25 @@ test('中英文停止表达只匹配独立控制指令', () => {
   assert.equal(isSlackStopCommand('analyze process technology'), false);
   assert.match(slackStopResponse({ kind: 'active', run: { id: 'r1' } }), /正在中断任务 r1/);
   assert.match(slackStopResponse({ kind: 'too-late' }), /草稿创建阶段/);
+  assert.match(slackStopResponse({
+    kind: 'ambiguous',
+    runs: [{ id: 'run-1', notify: { ts: '1.1' } }, { id: 'run-2', notify: { ts: '2.2' } }],
+  }), /多个可停止任务.*原任务线程/s);
+});
+
+test('同 Slack 线程互斥而不同线程不互相阻塞', async () => {
+  const mutex = createKeyedMutex();
+  const order = [];
+  let release;
+  const blocker = new Promise((resolve) => { release = resolve; });
+  const first = mutex.run('C1:1', async () => { order.push('same-1-start'); await blocker; order.push('same-1-end'); });
+  const second = mutex.run('C1:1', async () => { order.push('same-2'); });
+  const other = mutex.run('C1:2', async () => { order.push('other'); });
+  await other;
+  assert.deepEqual(order, ['same-1-start', 'other']);
+  release();
+  await Promise.all([first, second]);
+  assert.deepEqual(order, ['same-1-start', 'other', 'same-1-end', 'same-2']);
 });
 
 test('自然语言路由:裸链接是研究素材并默认公众号分析,只有显式翻译才走直译', async () => {

@@ -7,6 +7,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { execFile } from 'node:child_process';
+import { acquireRuntimeResource } from '../config/runtime.js';
 import { promisify } from 'node:util';
 import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
@@ -1585,7 +1586,10 @@ async function renderWithBrowser({
   const executablePath = config.browserExecutablePath
     || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   if (!fs.existsSync(executablePath)) throw new Error(`找不到浏览器:${executablePath}`);
-  const browser = await playwright.chromium.launch({
+  const releaseBrowser = await acquireRuntimeResource('browser', signal);
+  let browser;
+  try {
+    browser = await playwright.chromium.launch({
     executablePath,
     headless: true,
     args: [
@@ -1594,7 +1598,11 @@ async function renderWithBrowser({
       '--disable-extensions',
       `--host-resolver-rules=MAP ${sourceHost} ${resolverTarget}, MAP * ~NOTFOUND`,
     ],
-  });
+    });
+  } catch (error) {
+    releaseBrowser();
+    throw error;
+  }
   const abortBrowser = () => { void browser.close().catch(() => {}); };
   signal?.addEventListener('abort', abortBrowser, { once: true });
   try {
@@ -1650,7 +1658,8 @@ async function renderWithBrowser({
     throw error;
   } finally {
     signal?.removeEventListener('abort', abortBrowser);
-    await browser.close();
+    try { await browser.close(); }
+    finally { releaseBrowser(); }
   }
 }
 
@@ -3062,11 +3071,18 @@ async function rasterizeTableHtml({ html, target, config = {}, signal }) {
   catch { throw new Error('原文表格转图片需要 playwright-core'); }
   const executablePath = browserExecutable(config);
   if (!executablePath) throw new Error('找不到用于原文表格转图片的 Chrome/Chromium');
-  const browser = await playwright.chromium.launch({
+  const releaseBrowser = await acquireRuntimeResource('browser', signal);
+  let browser;
+  try {
+    browser = await playwright.chromium.launch({
     executablePath,
     headless: true,
     args: ['--disable-background-networking', '--disable-default-apps', '--disable-extensions', '--disable-network-service'],
-  });
+    });
+  } catch (error) {
+    releaseBrowser();
+    throw error;
+  }
   const abortBrowser = () => { void browser.close().catch(() => {}); };
   signal?.addEventListener('abort', abortBrowser, { once: true });
   try {
@@ -3106,6 +3122,7 @@ html,body{margin:0;padding:0;background:#fff}
   } finally {
     signal?.removeEventListener('abort', abortBrowser);
     await browser.close().catch(() => {});
+    releaseBrowser();
   }
 }
 
@@ -3169,8 +3186,10 @@ async function rasterizeImageToPng({ buffer, contentType, target, config }) {
   catch { throw new Error('原文图片转 PNG 需要 playwright-core'); }
   const executablePath = browserExecutable(config);
   if (!executablePath) throw new Error('找不到原文图片转换浏览器');
-  const browser = await playwright.chromium.launch({ executablePath, headless: true, args: ['--disable-network'] });
+  const releaseBrowser = await acquireRuntimeResource('browser');
+  let browser;
   try {
+    browser = await playwright.chromium.launch({ executablePath, headless: true, args: ['--disable-network'] });
     const page = await browser.newPage({ viewport: { width: 1400, height: 1000 }, deviceScaleFactor: 2 });
     const dataUrl = `data:${contentType};base64,${buffer.toString('base64')}`;
     await page.setContent(`<style>html,body{margin:0;background:white}img{display:block;max-width:1400px;height:auto}</style><img id="asset" src="${dataUrl}">`);
@@ -3183,7 +3202,8 @@ async function rasterizeImageToPng({ buffer, contentType, target, config }) {
     });
     await page.locator('#asset').screenshot({ path: target, type: 'png', omitBackground: false });
   } finally {
-    await browser.close();
+    try { await browser?.close(); }
+    finally { releaseBrowser(); }
   }
 }
 

@@ -8,6 +8,7 @@ import { FIXED_DRAFT_TEMPLATE_IDS } from '../lib/draft-template.js';
 import { fetchWithTimeout } from '../lib/http-timeout.js';
 import { renderOpeningDigestCover } from '../lib/opening-digest-cover.js';
 import { translationMap } from '../lib/opening-digest-translation.js';
+import { withRuntimeResource } from '../config/runtime.js';
 
 export const WECHAT_OPENING_DIGEST_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['wechat-opening-digest'];
 export const WECHAT_DRAFT_MAX_CHARS = 20000;
@@ -31,6 +32,7 @@ export function makeWechatOpeningDigestChannel({
         executablePath: config.openingDigest.browserExecutablePath,
         timeoutMs: config.openingDigest.captureTimeoutMs,
       });
+      return withRuntimeResource('wechat-write', async () => {
       const coverHash = crypto.createHash('sha256').update(cover).digest('hex');
       const token = await activeApi.getAccessToken(config.wechat.appId, config.wechat.appSecret);
       let coverAsset = coverCache.get(coverHash);
@@ -73,6 +75,7 @@ export function makeWechatOpeningDigestChannel({
         }
       }
       return { ...final, htmlChars: html.length, htmlBytes: Buffer.byteLength(html), attempts };
+      });
     },
   };
 }

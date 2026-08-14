@@ -13,6 +13,7 @@ import { recoverWechatDraft, renderAndPublishWithFinalFooter, stripFinalTailMark
 import { normalizeWideTables as defaultNormalizeWideTables } from '../lib/mobile-tables.js';
 import { normalizeIndentedCodeBlocks as defaultNormalizeIndentedCodeBlocks } from '../lib/code-blocks.js';
 import { FIXED_DRAFT_TEMPLATE_IDS } from '../lib/draft-template.js';
+import { withRuntimeResource } from '../config/runtime.js';
 
 // Rendering options must exactly match wenyan-mcp dist/publish.js.
 // Body copy always uses the standard WeChat layout. Authorized or source-native code uses light highlighting.
@@ -112,10 +113,10 @@ export function makeChannel({
 
       if (existingRemoteId) {
         try {
-          const recovered = await recoverDraft({
+          const recovered = await withRuntimeResource('wechat-write', () => recoverDraft({
             appId, appSecret, mediaId: existingRemoteId,
             timeoutMs: config.wechat.timeoutMs, signal,
-          });
+          }), signal);
           const recoveredTitle = recovered?.news_item?.[0]?.title
             || recovered?.content?.news_item?.[0]?.title
             || '';
@@ -223,6 +224,7 @@ export function makeChannel({
             writer: config.writer,
             infographic: config.infographic || {},
             generatorDir: config.infographic?.generatorDir || undefined,
+            signal,
           });
         } catch (e) {
           infographicResult = { markdown, images: [], warnings: [`信息图生成异常,已跳过:${e.message}`] };
@@ -267,6 +269,7 @@ export function makeChannel({
             markdown,
             writer: config.writer,
             generatorDir: config.cover?.generatorDir || undefined,
+            signal,
           });
           if (runId) await fs.writeFile(coverOwnerPath, runId, 'utf8');
         }
@@ -279,7 +282,7 @@ export function makeChannel({
       }
 
       try {
-        const mediaId = await renderAndPublish(undefined, {
+        const mediaId = await withRuntimeResource('wechat-write', () => renderAndPublish(undefined, {
           ...RENDER_OPTS,
           file: articlePath,
           appId,
@@ -288,7 +291,7 @@ export function makeChannel({
           signal,
           finalSurveyPath: assetsConfig.surveyImage,
           finalFooterPath: assetsConfig.footerImage,
-        }, getInputContent);
+        }, getInputContent), signal);
         await onCreated?.({ remoteId: String(mediaId), title });
         return { mediaId, title };
       } catch (e) { const err = new Error(`发布失败:${e.message}`); err.stage = 'publish'; throw err; }
