@@ -22,8 +22,10 @@ export function parseDeployArgs(argv) {
     reasoning: DEFAULT_REASONING,
     plannerModel: DEFAULT_PLANNER_MODEL,
     plannerReasoning: DEFAULT_PLANNER_REASONING,
-    openingDigestModel: DEFAULT_OPENING_DIGEST_MODEL,
-    openingDigestWechatEnabled: false,
+    // Preserve the protected production values unless an operator explicitly
+    // requests a change for this release.
+    openingDigestModel: undefined,
+    openingDigestWechatEnabled: undefined,
     openingDigestSegmentId: 0,
   };
   for (let index = 0; index < argv.length; index++) {
@@ -54,21 +56,23 @@ export function loadDeployTarget({ target = '', targetFile = TARGET_FILE } = {})
   return config.ZEN_DEPLOY_SSH_TARGET;
 }
 
-export function validateDeployInputs({ target, commit, model, reasoning, plannerModel, plannerReasoning, openingDigestModel = DEFAULT_OPENING_DIGEST_MODEL, openingDigestWechatEnabled, openingDigestSegmentId = 0 }) {
+export function validateDeployInputs({ target, commit, model, reasoning, plannerModel, plannerReasoning, openingDigestModel, openingDigestWechatEnabled, openingDigestSegmentId = 0 }) {
   if (!/^[a-z_][a-z0-9_-]*@[a-z0-9_.:-]+$/i.test(target)) {
     throw new Error('Invalid SSH target; expected user@host with no shell metacharacters');
   }
   if (!/^[a-f0-9]{40}$/i.test(commit)) throw new Error('Deploy commit must be a full 40-character SHA');
   if (typeof model !== 'string' || !/^[a-z0-9._/-]+$/i.test(model)) throw new Error('Invalid OpenRouter model id');
   if (typeof plannerModel !== 'string' || !/^[a-z0-9._/-]+$/i.test(plannerModel)) throw new Error('Invalid OpenRouter planner model id');
-  if (typeof openingDigestModel !== 'string' || !/^[a-z0-9._/-]+$/i.test(openingDigestModel)) throw new Error('Invalid Opening Digest model id');
+  if (openingDigestModel != null && (typeof openingDigestModel !== 'string' || !/^[a-z0-9._/-]+$/i.test(openingDigestModel))) {
+    throw new Error('Invalid Opening Digest model id');
+  }
   if (!['low', 'medium', 'high'].includes(reasoning)) {
     throw new Error('Reasoning must be low, medium, or high');
   }
   if (!['low', 'medium', 'high'].includes(plannerReasoning)) {
     throw new Error('Planner reasoning must be low, medium, or high');
   }
-  if (![true, false, 'true', 'false'].includes(openingDigestWechatEnabled)) {
+  if (openingDigestWechatEnabled != null && ![true, false, 'true', 'false'].includes(openingDigestWechatEnabled)) {
     throw new Error('Opening Digest WeChat enabled must be true or false');
   }
   if (!Number.isInteger(Number(openingDigestSegmentId)) || Number(openingDigestSegmentId) < 0) {
@@ -369,6 +373,18 @@ export async function main(argv = process.argv.slice(2)) {
     console.log('Preflight only. Re-run with --activate to back up, stage, switch, and verify the release.');
     return;
   }
+  const openingDigestModel = options.openingDigestModel
+    || preflight.env_OPENING_DIGEST_MODEL
+    || DEFAULT_OPENING_DIGEST_MODEL;
+  const openingDigestWechatEnabled = options.openingDigestWechatEnabled
+    ?? (preflight.env_OPENING_DIGEST_WECHAT_ENABLED || false);
+  validateDeployInputs({
+    ...options,
+    target,
+    commit,
+    openingDigestModel,
+    openingDigestWechatEnabled,
+  });
   const effectiveRouterModel = preflight.env_OPENROUTER_ROUTER_MODEL || preflight.env_OPENROUTER_MODEL;
   const effectivePlannerModel = preflight.env_OPENROUTER_PLANNER_MODEL || preflight.env_OPENROUTER_MODEL;
   const effectiveReviewModel = preflight.env_OPENROUTER_REVIEW_MODEL || preflight.env_OPENROUTER_MODEL;
@@ -384,8 +400,8 @@ export async function main(argv = process.argv.slice(2)) {
     reasoning: options.reasoning,
     plannerModel: options.plannerModel,
     plannerReasoning: options.plannerReasoning,
-    openingDigestModel: options.openingDigestModel,
-    openingDigestWechatEnabled: options.openingDigestWechatEnabled,
+    openingDigestModel,
+    openingDigestWechatEnabled,
     openingDigestSegmentId: options.openingDigestSegmentId,
   });
   console.log(output.trim());

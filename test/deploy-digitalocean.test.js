@@ -15,7 +15,7 @@ import {
 
 const SHA = 'a'.repeat(40);
 
-test('DigitalOcean deploy defaults to read-only preflight with isolated Opening Digest writer settings', () => {
+test('DigitalOcean deploy defaults to read-only preflight and preserves Opening Digest settings unless explicitly overridden', () => {
   assert.deepEqual(parseDeployArgs([]), {
     activate: false,
     commit: 'HEAD',
@@ -24,8 +24,8 @@ test('DigitalOcean deploy defaults to read-only preflight with isolated Opening 
     reasoning: 'high',
     plannerModel: 'moonshotai/kimi-k3',
     plannerReasoning: 'high',
-    openingDigestModel: 'openai/gpt-oss-120b',
-    openingDigestWechatEnabled: false,
+    openingDigestModel: undefined,
+    openingDigestWechatEnabled: undefined,
     openingDigestSegmentId: 0,
   });
   assert.equal(parseDeployArgs(['--activate', '--commit', SHA]).activate, true);
