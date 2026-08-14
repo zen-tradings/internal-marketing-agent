@@ -187,8 +187,12 @@ old_sha=$(cat "$active/.deploy-commit")
 old_short=$(printf '%.12s' "$old_sha")
 rollback="/opt/zen-content-hub.rollback-$old_short"
 failed="/opt/zen-content-hub.failed-$short"
+backup_helper=/usr/local/sbin/zen-content-hub-backup
+backup_helper_backup="$backup_helper.pre-$short"
 switch_started=0
 env_changed=0
+backup_helper_changed=0
+backup_helper_had_previous=0
 env_without_managed_before=$(sudo awk '$0 !~ /${DEPLOY_MANAGED_ENV_PATTERN}/' "$env_file" | sha256sum | awk '{ print $1 }')
 
 restore_on_error() {
@@ -199,6 +203,13 @@ restore_on_error() {
     if [ -d "$rollback" ]; then sudo mv "$rollback" "$active" || true; fi
   fi
   if [ "$env_changed" -eq 1 ] && [ -f "$env_backup" ]; then sudo cp -a "$env_backup" "$env_file" || true; fi
+  if [ "$backup_helper_changed" -eq 1 ]; then
+    if [ "$backup_helper_had_previous" -eq 1 ] && [ -f "$backup_helper_backup" ]; then
+      sudo mv -f "$backup_helper_backup" "$backup_helper" || true
+    else
+      sudo rm -f "$backup_helper" || true
+    fi
+  fi
   if [ "$switch_started" -eq 1 ]; then sudo systemctl start zen-content-hub || true; fi
   exit "$status"
 }
@@ -211,6 +222,7 @@ test ! -e "$stage"
 test ! -e "$rollback"
 test ! -e "$failed"
 test ! -e "$env_backup"
+test ! -e "$backup_helper_backup"
 for key in OPENROUTER_ROUTER_MODEL OPENROUTER_REVIEW_MODEL; do
   value=$(sudo awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
   if [ -z "$value" ]; then
@@ -244,10 +256,19 @@ sudo -u zenbot env \
   node "$stage/scripts/check-opening-digest-python.mjs"
 sudo -u zenbot npm --prefix "$stage" run check
 
-before_backup_manifest=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 -type f -name 'runs-*.db' -printf '%f\n' 2>/dev/null | sort | sha256sum | awk '{ print $1 }')
+if [ -f "$backup_helper" ]; then
+  sudo cp -a "$backup_helper" "$backup_helper_backup"
+  backup_helper_had_previous=1
+fi
+sudo install -o root -g root -m 0755 "$stage/deploy/zen-content-hub-backup" "$backup_helper"
+backup_helper_changed=1
+before_backup_manifest=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 -type f -name 'backup-*.sha256' -printf '%f\n' 2>/dev/null | sort | sha256sum | awk '{ print $1 }')
 sudo systemctl start zen-content-hub-backup.service
-after_backup_manifest=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 -type f -name 'runs-*.db' -printf '%f\n' | sort | sha256sum | awk '{ print $1 }')
+after_backup_manifest=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 -type f -name 'backup-*.sha256' -printf '%f\n' | sort | sha256sum | awk '{ print $1 }')
 test "$after_backup_manifest" != "$before_backup_manifest"
+latest_backup_manifest=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 -type f -name 'backup-*.sha256' -printf '%T@ %f\n' | sort -nr | sed -n '1s/^[^ ]* //p')
+test -n "$latest_backup_manifest"
+(cd /var/lib/zen-content-hub/backups && sudo sha256sum -c "$latest_backup_manifest")
 
 port=$(sudo awk -F= '$1 == "HEALTH_PORT" { print $2 }' "$env_file" | tail -n 1)
 ready=$(curl -fsS --max-time 5 "http://127.0.0.1:$port/ready")
@@ -346,6 +367,7 @@ printf 'deployed_commit=%s\n' "$sha"
 printf 'previous_commit=%s\n' "$old_sha"
 printf 'rollback=%s\n' "$rollback"
 printf 'env_backup=%s\n' "$env_backup"
+printf 'backup_helper_backup=%s\n' "$backup_helper_backup"
 printf 'main_pid=%s\n' "$main_pid"
 printf 'ready=%s\n' "$ready"
 `;

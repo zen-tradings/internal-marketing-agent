@@ -41,8 +41,11 @@ approved model and QDII runtime values and rejects drift with a checksum that
 excludes exactly the environment values managed by this deployment command. It preserves
 `OPENING_DIGEST_MODEL` and `OPENING_DIGEST_WECHAT_ENABLED` unless an explicit
 deploy argument overrides either one (and only changes the protected Opening
-Digest segment ID when it is supplied). It switches the single systemd service and verifies
-the marker, main PID and `/ready`. A failed activation restores
+Digest segment ID when it is supplied). The versioned backup helper is installed
+transactionally before the backup and restored with the prior application on failure;
+the deployment verifies the database-and-artifact manifest before switching. It then
+switches the single systemd service and verifies the marker, main PID and `/ready`.
+A failed activation restores
 the previous release and protected environment file. The DigitalOcean metadata
 check is a deployment-target guard only; it is not an application startup,
 publishing or public-IP gate.
