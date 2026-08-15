@@ -25,7 +25,7 @@ npm run deploy:digitalocean
 After reviewing the preflight output, activate the exact pushed commit:
 
 ```bash
-npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --max-concurrency 2 --opening-digest-model openai/gpt-oss-120b --opening-digest-wechat-enabled true --activate
+npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --max-concurrency 2 --opening-digest-model openai/gpt-oss-120b --opening-digest-wechat-enabled true --sync-discord-config --activate
 ```
 
 需要同时切换 Opening Digest 的受控测试受众时，必须通过同一事务化部署命令传入已在 Customer.io 核验的 segment ID；部署失败会连同受保护环境文件一起回滚：
@@ -263,10 +263,14 @@ sudo -u zenbot env DOTENV_CONFIG_PATH=/etc/zen-content-hub/zen-content-hub.env n
 
 The command fetches webhook metadata but does not post a message. Copy the
 reported `channel_id` into `DISCORD_OPENING_DIGEST_CHANNEL_ID`, rerun the check,
-then set `DISCORD_OPENING_DIGEST_ENABLED=true`. The normal immutable deployment
-preserves these unmanaged Discord values; it never accepts the webhook secret
-as a command-line argument. Restart only through the normal deployment flow so
-the single-instance rule remains intact.
+then set `DISCORD_OPENING_DIGEST_ENABLED=true`. On the first release, add
+`--sync-discord-config` to the normal activation command. It reads the five
+Discord values only from the gitignored local `.env`, transfers them in a
+permission-restricted temporary file, validates the live webhook without
+posting, and removes the file. Later deployments preserve those values unless
+the flag is explicitly supplied again; the webhook secret is never accepted as
+a command-line argument or printed. Restart only through the normal deployment
+flow so the single-instance rule remains intact.
 
 Install and start the unit after reviewing all paths and configuration:
 
