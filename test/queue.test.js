@@ -94,7 +94,47 @@ test('活动任务可按 Slack 频道取消并触发 AbortSignal', async () => {
   assert.equal(result.kind, 'active');
   assert.equal(result.run.id, 'active-cancel');
   await result.done;
-  assert.deepEqual(q.stats(), { active: 0, pending: 0, stopped: false });
+  assert.deepEqual(q.stats(), {
+    active: 0, pending: 0, pendingByPriority: { high: 0, normal: 0 }, stopped: false,
+  });
+});
+
+test('Opening Digest 只在待执行队列中优先且同优先级保持 FIFO', async () => {
+  const store = openStore(':memory:');
+  let release;
+  const blocker = new Promise((resolve) => { release = resolve; });
+  const order = [];
+  const q = createQueue({
+    store,
+    maxConcurrency: 1,
+    handler: async (run) => {
+      order.push(run.id);
+      if (run.id === 'active') await blocker;
+    },
+  });
+  q.enqueue({ id: 'active', workflowId: 'wechat', source: 'slack', input: 'a', notify: {} });
+  q.enqueue({ id: 'normal-1', workflowId: 'wechat', source: 'slack', input: 'b', notify: {} });
+  q.enqueue({ id: 'opening', workflowId: 'opening-digest', source: 'cron', input: 'c', notify: {} });
+  q.enqueue({ id: 'normal-2', workflowId: 'email', source: 'slack', input: 'd', notify: {} });
+  assert.deepEqual(q.stats().pendingByPriority, { high: 1, normal: 2 });
+  release();
+  await q.whenIdle();
+  assert.deepEqual(order, ['active', 'opening', 'normal-1', 'normal-2']);
+  assert.equal(store.getRun('opening').priority, 100);
+});
+
+test('频道中有多个匹配任务时拒绝含糊停止', async () => {
+  const store = openStore(':memory:');
+  let release;
+  const blocker = new Promise((resolve) => { release = resolve; });
+  const q = createQueue({ store, maxConcurrency: 2, handler: async () => blocker });
+  q.enqueue({ id: 'r1', workflowId: 'wechat', source: 'slack', input: 'a', notify: { channel: 'C1', user: 'U1', ts: '1' } });
+  q.enqueue({ id: 'r2', workflowId: 'email', source: 'slack', input: 'b', notify: { channel: 'C1', user: 'U1', ts: '2' } });
+  const result = q.cancel({ channel: 'C1', user: 'U1' });
+  assert.equal(result.kind, 'ambiguous');
+  assert.deepEqual(result.runs.map((run) => run.id).sort(), ['r1', 'r2']);
+  release();
+  await q.whenIdle();
 });
 
 test('排队任务取消后从队列移除并标记 cancelled', async () => {

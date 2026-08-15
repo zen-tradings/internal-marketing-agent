@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { chromium } from 'playwright-core';
+import { acquireRuntimeResource } from '../config/runtime.js';
 
 export const OPENING_COVER_WIDTH = 1240;
 export const OPENING_COVER_HEIGHT = 620;
@@ -13,6 +14,7 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 
 export async function renderOpeningDigestCover({ dateLabel, label = 'Opening Digest', executablePath, timeoutMs = 30000 }) {
   if (!executablePath) throw coverError('缺少 OPENING_DIGEST_BROWSER_EXECUTABLE');
+  const releaseBrowser = await acquireRuntimeResource('browser');
   let browser;
   try {
     const background = await loadOpeningCoverBackground();
@@ -47,7 +49,8 @@ export async function renderOpeningDigestCover({ dateLabel, label = 'Opening Dig
     if (error?.stage === 'cover') throw error;
     throw coverError(`Opening Digest 封面渲染失败:${error.message}`);
   } finally {
-    await browser?.close();
+    try { await browser?.close(); }
+    finally { releaseBrowser(); }
   }
 }
 

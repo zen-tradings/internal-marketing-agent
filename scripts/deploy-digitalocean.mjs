@@ -14,6 +14,13 @@ const DEFAULT_PLANNER_REASONING = 'high';
 const DEFAULT_OPENING_DIGEST_MODEL = 'openai/gpt-oss-120b';
 
 export const DEPLOY_MANAGED_ENV_KEYS = Object.freeze([
+  'MAX_CONCURRENCY',
+  'BROWSER_CONCURRENCY',
+  'WECHAT_WRITE_CONCURRENCY',
+  'CUSTOMERIO_WRITE_CONCURRENCY',
+  'OPENROUTER_CONCURRENCY',
+  'EXA_SEARCH_QPS',
+  'SLACK_POST_INTERVAL_MS',
   'OPENING_DIGEST_WECHAT_ENABLED',
   'OPENING_DIGEST_MODEL',
   'OPENROUTER_MODEL',
@@ -56,6 +63,7 @@ export function parseDeployArgs(argv) {
     reasoning: DEFAULT_REASONING,
     plannerModel: DEFAULT_PLANNER_MODEL,
     plannerReasoning: DEFAULT_PLANNER_REASONING,
+    maxConcurrency: 2,
     // Preserve the protected production values unless an operator explicitly
     // requests a change for this release.
     openingDigestModel: undefined,
@@ -65,7 +73,7 @@ export function parseDeployArgs(argv) {
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === '--activate') parsed.activate = true;
-    else if (['--commit', '--target', '--model', '--reasoning', '--planner-model', '--planner-reasoning', '--opening-digest-model', '--opening-digest-wechat-enabled', '--opening-digest-segment-id'].includes(arg)) {
+    else if (['--commit', '--target', '--model', '--reasoning', '--planner-model', '--planner-reasoning', '--max-concurrency', '--opening-digest-model', '--opening-digest-wechat-enabled', '--opening-digest-segment-id'].includes(arg)) {
       const value = argv[++index];
       if (!value) throw new Error(`${arg} requires a value`);
       const key = arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
@@ -90,7 +98,7 @@ export function loadDeployTarget({ target = '', targetFile = TARGET_FILE } = {})
   return config.ZEN_DEPLOY_SSH_TARGET;
 }
 
-export function validateDeployInputs({ target, commit, model, reasoning, plannerModel, plannerReasoning, openingDigestModel, openingDigestWechatEnabled, openingDigestSegmentId = 0 }) {
+export function validateDeployInputs({ target, commit, model, reasoning, plannerModel, plannerReasoning, maxConcurrency = 2, openingDigestModel, openingDigestWechatEnabled, openingDigestSegmentId = 0 }) {
   if (!/^[a-z_][a-z0-9_-]*@[a-z0-9_.:-]+$/i.test(target)) {
     throw new Error('Invalid SSH target; expected user@host with no shell metacharacters');
   }
@@ -105,6 +113,9 @@ export function validateDeployInputs({ target, commit, model, reasoning, planner
   }
   if (!['low', 'medium', 'high'].includes(plannerReasoning)) {
     throw new Error('Planner reasoning must be low, medium, or high');
+  }
+  if (![1, 2].includes(Number(maxConcurrency))) {
+    throw new Error('Production max concurrency must be 1 or 2');
   }
   if (openingDigestWechatEnabled != null && ![true, false, 'true', 'false'].includes(openingDigestWechatEnabled)) {
     throw new Error('Opening Digest WeChat enabled must be true or false');
@@ -162,7 +173,7 @@ process.stdin.on("end", () => {
   console.log("queue_active=" + Number(value.queue?.active || 0));
   console.log("queue_pending=" + Number(value.queue?.pending || 0));
 });'
-for key in OPENROUTER_MODEL OPENROUTER_ROUTER_MODEL OPENROUTER_PLANNER_MODEL OPENROUTER_REVIEW_MODEL OPENROUTER_REASONING_EFFORT OPENROUTER_PLANNER_REASONING_EFFORT OPENROUTER_REVIEW_REASONING_EFFORT OPENROUTER_ROUTER_REASONING_EFFORT CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID OPENING_DIGEST_MODEL OPENING_DIGEST_WECHAT_ENABLED; do
+for key in MAX_CONCURRENCY BROWSER_CONCURRENCY WECHAT_WRITE_CONCURRENCY CUSTOMERIO_WRITE_CONCURRENCY OPENROUTER_CONCURRENCY EXA_SEARCH_QPS SLACK_POST_INTERVAL_MS OPENROUTER_MODEL OPENROUTER_ROUTER_MODEL OPENROUTER_PLANNER_MODEL OPENROUTER_REVIEW_MODEL OPENROUTER_REASONING_EFFORT OPENROUTER_PLANNER_REASONING_EFFORT OPENROUTER_REVIEW_REASONING_EFFORT OPENROUTER_ROUTER_REASONING_EFFORT CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID OPENING_DIGEST_MODEL OPENING_DIGEST_WECHAT_ENABLED; do
   value=$(sudo awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
   printf '%s=%s\n' "env_$key" "$value"
 done
@@ -177,6 +188,7 @@ planner_reasoning=$5
 opening_digest_model=$6
 opening_digest_wechat_enabled=$7
 opening_digest_segment_id=$8
+max_concurrency=$9
 short=$(printf '%.12s' "$sha")
 active=/opt/zen-content-hub
 stage="/opt/zen-content-hub.release-$short"
@@ -298,6 +310,13 @@ sudo cp -a "$env_file" "$env_backup"
 env_changed=1
 update_env OPENING_DIGEST_WECHAT_ENABLED "$opening_digest_wechat_enabled"
 update_env OPENING_DIGEST_MODEL "$opening_digest_model"
+update_env MAX_CONCURRENCY "$max_concurrency"
+update_env BROWSER_CONCURRENCY 1
+update_env WECHAT_WRITE_CONCURRENCY 1
+update_env CUSTOMERIO_WRITE_CONCURRENCY 1
+update_env OPENROUTER_CONCURRENCY 2
+update_env EXA_SEARCH_QPS 8
+update_env SLACK_POST_INTERVAL_MS 1000
 update_env OPENROUTER_MODEL "$model"
 update_env OPENROUTER_ROUTER_MODEL z-ai/glm-5.2
 update_env OPENROUTER_PLANNER_MODEL "$planner_model"
@@ -349,6 +368,13 @@ test "$main_pid" -gt 0
 test "$(ps -o comm= -p "$main_pid" | tr -d ' ')" = node
 test "$(sudo awk -F= '$1 == "OPENING_DIGEST_WECHAT_ENABLED" { print $2 }' "$env_file" | tail -n 1)" = "$opening_digest_wechat_enabled"
 test "$(sudo awk -F= '$1 == "OPENING_DIGEST_MODEL" { print $2 }' "$env_file" | tail -n 1)" = "$opening_digest_model"
+test "$(sudo awk -F= '$1 == "MAX_CONCURRENCY" { print $2 }' "$env_file" | tail -n 1)" = "$max_concurrency"
+test "$(sudo awk -F= '$1 == "BROWSER_CONCURRENCY" { print $2 }' "$env_file" | tail -n 1)" = 1
+test "$(sudo awk -F= '$1 == "WECHAT_WRITE_CONCURRENCY" { print $2 }' "$env_file" | tail -n 1)" = 1
+test "$(sudo awk -F= '$1 == "CUSTOMERIO_WRITE_CONCURRENCY" { print $2 }' "$env_file" | tail -n 1)" = 1
+test "$(sudo awk -F= '$1 == "OPENROUTER_CONCURRENCY" { print $2 }' "$env_file" | tail -n 1)" = 2
+test "$(sudo awk -F= '$1 == "EXA_SEARCH_QPS" { print $2 }' "$env_file" | tail -n 1)" = 8
+test "$(sudo awk -F= '$1 == "SLACK_POST_INTERVAL_MS" { print $2 }' "$env_file" | tail -n 1)" = 1000
 test "$(sudo awk -F= '$1 == "OPENROUTER_MODEL" { print $2 }' "$env_file" | tail -n 1)" = "$model"
 test "$(sudo awk -F= '$1 == "OPENROUTER_REASONING_EFFORT" { print $2 }' "$env_file" | tail -n 1)" = "$reasoning"
 test "$(sudo awk -F= '$1 == "OPENROUTER_PLANNER_MODEL" { print $2 }' "$env_file" | tail -n 1)" = "$planner_model"
@@ -400,7 +426,7 @@ export function assertLocalRelease(commit, run = runCommand) {
   run('git', ['merge-base', '--is-ancestor', commit, '@{upstream}'], { quiet: true });
 }
 
-export function activateRemote({ target, commit, model, reasoning, plannerModel, plannerReasoning, openingDigestModel = DEFAULT_OPENING_DIGEST_MODEL, openingDigestWechatEnabled, openingDigestSegmentId = 0 }, run = runCommand) {
+export function activateRemote({ target, commit, model, reasoning, plannerModel, plannerReasoning, maxConcurrency = 2, openingDigestModel = DEFAULT_OPENING_DIGEST_MODEL, openingDigestWechatEnabled, openingDigestSegmentId = 0 }, run = runCommand) {
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-content-hub-deploy-'));
   const short = commit.slice(0, 12);
   const archive = path.join(temporaryDir, `zen-content-hub-${short}.tar.gz`);
@@ -412,7 +438,7 @@ export function activateRemote({ target, commit, model, reasoning, plannerModel,
     return run('ssh', [
       ...SSH_OPTIONS,
       target,
-      `printf '%s' '${encodedScript}' | base64 -d > ${remoteScript} && bash ${remoteScript} ${commit} ${model} ${reasoning} ${plannerModel} ${plannerReasoning} ${openingDigestModel} ${openingDigestWechatEnabled} ${openingDigestSegmentId}; status=$?; rm -f ${remoteScript}; exit $status`,
+      `printf '%s' '${encodedScript}' | base64 -d > ${remoteScript} && bash ${remoteScript} ${commit} ${model} ${reasoning} ${plannerModel} ${plannerReasoning} ${openingDigestModel} ${openingDigestWechatEnabled} ${openingDigestSegmentId} ${maxConcurrency}; status=$?; rm -f ${remoteScript}; exit $status`,
     ], { quiet: true });
   } finally {
     fs.rmSync(temporaryDir, { recursive: true, force: true });
@@ -458,6 +484,7 @@ export async function main(argv = process.argv.slice(2)) {
     reasoning: options.reasoning,
     plannerModel: options.plannerModel,
     plannerReasoning: options.plannerReasoning,
+    maxConcurrency: options.maxConcurrency,
     openingDigestModel,
     openingDigestWechatEnabled,
     openingDigestSegmentId: options.openingDigestSegmentId,

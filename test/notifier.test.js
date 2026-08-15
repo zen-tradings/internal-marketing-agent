@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createNotifier } from '../src/core/notifier.js';
+import { createNotifier, createSlackPostScheduler } from '../src/core/notifier.js';
 
 test('success/failure 文案带关键信息', async () => {
   const sent = [];
@@ -51,18 +51,41 @@ test('入队回执显示 Prompt 修订、精确实体、链接数量与完整要
     promptEntities: ['Opus 5', 'Kimi K2'],
     userUrlCount: 1,
     freshnessRequirement: '最新信息',
+    runId: '1786332000123-abc',
+    queueState: 'running',
   }, 'please compare Opus 5 and Kimi K2 using https://example.com/source');
   await n.needsInput({ channel: 'C', ts: '1' }, {
     question: '请确认 Opus 5 的官方发布链接。',
     details: { conflicts: [{ description: '用户链接与官方页面的型号不同' }] },
   });
   assert.match(sent[0].text, /Prompt 修订:3/);
+  assert.match(sent[0].text, /正在执行 · 任务 178633200012/);
   assert.match(sent[0].text, /Opus 5、Kimi K2/);
   assert.match(sent[0].text, /用户链接:1/);
   assert.match(sent[0].text, /完整要求/);
   assert.match(sent[1].text, /需要确认/);
   assert.match(sent[1].text, /用户链接与官方页面的型号不同/);
   assert.match(sent[1].text, /请确认 Opus 5/);
+});
+
+test('Slack 出站调度优先终态并丢弃同线程过时进度', async () => {
+  const sent = [];
+  let release;
+  const firstBlocked = new Promise((resolve) => { release = resolve; });
+  const scheduled = createSlackPostScheduler(async (message) => {
+    sent.push(message.text);
+    if (message.text === 'first') await firstBlocked;
+    return { ts: String(sent.length) };
+  }, { intervalMs: 1 });
+  const first = scheduled({ channel: 'C', thread_ts: '1', text: 'first' }, { priority: 2, kind: 'ack' });
+  await new Promise((resolve) => setImmediate(resolve));
+  const progress = scheduled({ channel: 'C', thread_ts: '1', text: 'old progress' }, { priority: 1, kind: 'progress' });
+  const terminal = scheduled({ channel: 'C', thread_ts: '1', text: 'done' }, { priority: 3, kind: 'terminal' });
+  const ack = scheduled({ channel: 'C', thread_ts: '2', text: 'second ack' }, { priority: 2, kind: 'ack' });
+  release();
+  assert.equal((await progress).reason, 'superseded-by-terminal');
+  await Promise.all([first, terminal, ack]);
+  assert.deepEqual(sent, ['first', 'done', 'second ack']);
 });
 
 test('QDII respond 是线程内核心多段回复并返回最后一条 ts', async () => {

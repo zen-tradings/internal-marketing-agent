@@ -40,6 +40,37 @@ function config(overrides = {}) {
   };
 }
 
+function memoryRemoteOperations() {
+  let record;
+  return {
+    get() { return record; },
+    prepare({ operation, operationKey, payloadSha256, beforeIds }) {
+      record ||= {
+        operation,
+        operation_key: operationKey,
+        payload_sha256: payloadSha256,
+        before_ids_json: JSON.stringify(beforeIds),
+        attempt_count: 0,
+        state: 'prepared',
+        remote_id: null,
+      };
+      return { ...record };
+    },
+    increment() {
+      if (record.attempt_count < 2 && !record.remote_id) record.attempt_count += 1;
+      record.state = 'attempting';
+      return { ...record };
+    },
+    update(_operation, patch) {
+      if (patch.state !== undefined) record.state = patch.state;
+      if (patch.remoteId !== undefined) record.remote_id = patch.remoteId;
+      if (patch.lastError !== undefined) record.last_error = patch.lastError;
+      return { ...record };
+    },
+    snapshot() { return { ...record }; },
+  };
+}
+
 test('newsletter article:规范化 Vol. 版号并渲染品牌/退订/反馈结构', () => {
   const parsed = parseNewsletterArticle(ARTICLE);
   assert.equal(parsed.edition, 'Vol. 1');
@@ -138,6 +169,123 @@ test('Customer.io channel:创建后立即持久化 remote id，恢复任务不�
   assert.equal(posts, 1);
   assert.equal(recovered.mediaId, 'customerio-newsletter:41');
   assert.equal(created.length, 2);
+});
+
+test('Customer.io channel:后台确定性操作不改变草稿名称或邮件标题', async () => {
+  const operations = memoryRemoteOperations();
+  let createPayload;
+  const channel = makeChannel({
+    readArticle: async () => ARTICLE,
+    fetchFn: async (url, options) => {
+      if (url.endsWith('/customer_count')) return { ok: true, status: 200, async json() { return { count: 3 }; } };
+      if (options.method === 'GET') return { ok: true, status: 200, async json() { return { newsletters: [] }; } };
+      createPayload = JSON.parse(options.body);
+      return { ok: true, status: 200, async json() { return { newsletter: { id: 42 } }; } };
+    },
+  });
+  const result = await channel.publish({
+    articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' },
+    runId: 'run-42', remoteOperations: operations,
+  });
+  assert.equal(result.title, 'Zen Research from Zen Trading · Vol. 1');
+  assert.equal(createPayload.name, 'Zen Research from Zen Trading · Vol. 1');
+  assert.equal(createPayload.subject, 'Zen Research from Zen Trading · Vol. 1 | HBM supply');
+  assert.equal(operations.snapshot().operation_key, 'cio:newsletter:create:v1:run-42');
+  assert.equal(operations.snapshot().attempt_count, 1);
+  assert.equal(operations.snapshot().remote_id, '42');
+});
+
+test('Customer.io channel:首次创建结果不明时回读失败后只重试一次并给出重复风险 warning', async () => {
+  const operations = memoryRemoteOperations();
+  let posts = 0;
+  const channel = makeChannel({
+    readArticle: async () => ARTICLE,
+    sleep: async () => {},
+    fetchFn: async (url, options) => {
+      if (url.endsWith('/customer_count')) return { ok: true, status: 200, async json() { return { count: 3 }; } };
+      if (options.method === 'GET') return { ok: true, status: 200, async json() { return { newsletters: [] }; } };
+      posts += 1;
+      if (posts === 1) throw Object.assign(new Error('socket timeout'), { name: 'AbortError' });
+      return { ok: true, status: 200, async json() { return { newsletter: { id: 43 } }; } };
+    },
+  });
+  const result = await channel.publish({
+    articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' },
+    runId: 'run-retry', remoteOperations: operations,
+  });
+  assert.equal(posts, 2);
+  assert.equal(result.mediaId, 'customerio-newsletter:43');
+  assert.match(result.deliveryWarnings[0], /可能存在同名重复草稿/);
+  assert.equal(operations.snapshot().attempt_count, 2);
+});
+
+test('Customer.io channel:创建结果不明但差集唯一时自动认领且不再 POST', async () => {
+  const operations = memoryRemoteOperations();
+  let posts = 0;
+  let listCalls = 0;
+  const channel = makeChannel({
+    readArticle: async () => ARTICLE,
+    sleep: async () => {},
+    fetchFn: async (url, options) => {
+      if (url.endsWith('/customer_count')) return { ok: true, status: 200, async json() { return { count: 3 }; } };
+      if (options.method === 'GET') {
+        listCalls += 1;
+        return {
+          ok: true, status: 200,
+          async json() {
+            return listCalls === 1 ? { newsletters: [] } : {
+              newsletters: [{
+                id: 44,
+                name: 'Zen Research from Zen Trading · Vol. 1',
+                sent_at: null,
+                recipient_segment_ids: [17],
+              }],
+            };
+          },
+        };
+      }
+      posts += 1;
+      throw Object.assign(new Error('socket timeout'), { name: 'AbortError' });
+    },
+  });
+  const result = await channel.publish({
+    articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' },
+    runId: 'run-recover', remoteOperations: operations,
+  });
+  assert.equal(posts, 1);
+  assert.equal(result.mediaId, 'customerio-newsletter:44');
+  assert.equal(operations.snapshot().remote_id, '44');
+});
+
+test('Customer.io channel:两次不明确后进入 needs_review 且绝不第三次 POST', async () => {
+  const operations = memoryRemoteOperations();
+  let posts = 0;
+  const channel = makeChannel({
+    readArticle: async () => ARTICLE,
+    sleep: async () => {},
+    fetchFn: async (url, options) => {
+      if (url.endsWith('/customer_count')) return { ok: true, status: 200, async json() { return { count: 3 }; } };
+      if (options.method === 'GET') return { ok: true, status: 200, async json() { return { newsletters: [] }; } };
+      posts += 1;
+      throw Object.assign(new Error('socket timeout'), { name: 'AbortError' });
+    },
+  });
+  await assert.rejects(channel.publish({
+    articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' },
+    runId: 'run-fail', remoteOperations: operations,
+  }), (error) => {
+    assert.equal(error.stage, 'needs_review');
+    assert.match(error.message, /两次创建请求/);
+    return true;
+  });
+  assert.equal(posts, 2);
+  assert.equal(operations.snapshot().attempt_count, 2);
+  assert.equal(operations.snapshot().state, 'needs_review');
+  await assert.rejects(channel.publish({
+    articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' },
+    runId: 'run-fail', remoteOperations: operations, resumeFromCheckpoint: true,
+  }), /已停止继续创建/);
+  assert.equal(posts, 2, '重启或外层重试不得产生第三次 POST');
 });
 
 test('Customer.io channel:正文含真实密钥或本地路径时在上传前拦截', async () => {

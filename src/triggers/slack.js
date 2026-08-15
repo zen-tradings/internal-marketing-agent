@@ -3,6 +3,7 @@ import { extractExplicitEntityVersions, extractUserUrls } from '../core/analysis
 import { attachmentsFromSlackMessages, normalizeSlackAttachments } from '../core/user-sources.js';
 import { detectQdiiTaskPlan } from '../core/qdii.js';
 import { decodeBasicHtmlEntities } from '../lib/html-entities.js';
+import { createSlackPostScheduler } from '../core/notifier.js';
 const { App } = boltPkg;
 
 export function cleanSlackText(text) {
@@ -249,7 +250,32 @@ export function slackStopResponse(result) {
   if (result?.kind === 'too-late') {
     return '⚠️ 当前任务已经进入草稿创建阶段。为避免出现“草稿已创建但本地没有记录”，此时不再强制中断；本次只会创建草稿，不会发送或排期。';
   }
+  if (result?.kind === 'ambiguous') {
+    const runs = (result.runs || []).slice(0, 8)
+      .map((run) => `• ${String(run.id || '').slice(0, 12)} · 线程 ${run.notify?.ts || '未知'}`)
+      .join('\n');
+    return `⚠️ 当前频道有多个可停止任务，未执行含糊停止。请回到需要停止的原任务线程发送“停止”。${runs ? `\n${runs}` : ''}`;
+  }
   return 'ℹ️ 当前频道没有可停止的运行中或排队任务。';
+}
+
+export function createKeyedMutex() {
+  const tails = new Map();
+  return {
+    async run(key, fn) {
+      const previous = tails.get(key) || Promise.resolve();
+      let release;
+      const gate = new Promise((resolve) => { release = resolve; });
+      const tail = previous.catch(() => {}).then(() => gate);
+      tails.set(key, tail);
+      await previous.catch(() => {});
+      try { return await fn(); }
+      finally {
+        release();
+        if (tails.get(key) === tail) tails.delete(key);
+      }
+    },
+  };
 }
 
 export function mergeSlackThreadMessages(messages, incoming) {
@@ -291,10 +317,16 @@ export async function registerSlack({
   cancelTask,
   store,
   onReady,
+  fetchFn = globalThis.fetch,
   workflowIds = [],
   defaultWorkflowId = 'wechat',
 }) {
   const app = new App({ token: config.slack.botToken, appToken: config.slack.appToken, socketMode: true, logLevel: 'warn' });
+  const postMessage = createSlackPostScheduler(
+    (payload) => app.client.chat.postMessage(payload),
+    { intervalMs: Number(config.slack.postIntervalMs || 1000) },
+  );
+  app.zenPostMessage = postMessage;
   // Catch Bolt dispatch-layer errors such as handler throws to prevent propagation. Finty state-machine crashes do
   // not reach this handler; the process-level guard in index.js tolerates them and reconnects.
   app.error(async (error) => { console.error('[slack] bolt error:', (error && error.message) || error); });
@@ -319,7 +351,8 @@ export async function registerSlack({
     return true;
   };
   let botId = '';
-  const classify = createSlackIntentClassifier(config);
+  const classify = createSlackIntentClassifier(config, fetchFn);
+  const threadMutex = createKeyedMutex();
   const handle = async ({
     channel,
     ts,
@@ -359,11 +392,11 @@ export async function registerSlack({
           user,
           reason: `Slack 用户 ${user || 'unknown'} 请求停止当前任务`,
         }) || { kind: 'none' };
-        await app.client.chat.postMessage({
+        await postMessage({
           channel,
           thread_ts: rootTs,
           text: slackStopResponse(result),
-        });
+        }, { priority: 3, kind: 'terminal' });
         return;
       } catch (error) {
         store?.releaseSlackEvent?.(eventKey);
@@ -371,9 +404,10 @@ export async function registerSlack({
       }
     }
     let enqueued = false;
+    const rootTs = threadTs || ts;
+    const threadKey = `${channel}:${rootTs}`;
     try {
-      const rootTs = threadTs || ts;
-      const threadKey = `${channel}:${rootTs}`;
+      await threadMutex.run(threadKey, async () => {
       const previous = store?.getSlackThread?.(threadKey);
       const isThreadRevision = Boolean(previous && (isEdit || threadTs));
       if (isThreadRevision && previous?.last_run_id) {
@@ -386,11 +420,11 @@ export async function registerSlack({
             : `Slack 用户 ${user || 'unknown'} 在线程补充了 Prompt，旧修订已被替换`,
         });
         if (result?.kind === 'too-late') {
-          await app.client.chat.postMessage({
+          await postMessage({
             channel,
             thread_ts: rootTs,
             text: '⚠️ 这条任务已经进入草稿创建阶段或已经创建草稿，当前编辑/补充不会覆盖它。请重新 @zenbot 提交完整 Prompt，避免产生无法确认的新旧版本。',
-          });
+          }, { priority: 3, kind: 'terminal' });
           return;
         }
         if (result?.done) await result.done;
@@ -459,6 +493,7 @@ export async function registerSlack({
       } catch (error) {
         console.error('[slack] 线程上下文写入失败(任务已入队):', error?.message || error);
       }
+      });
     } catch (error) {
       if (!enqueued) store?.releaseSlackEvent?.(eventKey);
       throw error;

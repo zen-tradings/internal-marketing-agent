@@ -31,6 +31,26 @@ test('setMediaId 只写 media_id/title,不改变 status(支撑发布幂等判断
   assert.equal(r.status, 'running', 'setMediaId 不应改变 status(早写落库,收尾状态由 setStatus 负责)');
 });
 
+test('优先级和 Customer.io 远端操作跨重启所需状态均持久化', () => {
+  const s = openStore(':memory:');
+  s.createRun({ id: 'cio-1', workflowId: 'email', source: 'slack', input: 'x', notify: {}, priority: 7 });
+  assert.equal(s.getRun('cio-1').priority, 7);
+  let operation = s.prepareRemoteOperation({
+    runId: 'cio-1',
+    operation: 'create-newsletter',
+    operationKey: 'cio:newsletter:create:v1:cio-1',
+    payloadSha256: 'abc',
+    beforeIds: ['10', '11'],
+  });
+  assert.equal(operation.attempt_count, 0);
+  assert.deepEqual(JSON.parse(operation.before_ids_json), ['10', '11']);
+  operation = s.incrementRemoteOperationAttempt('cio-1', 'create-newsletter');
+  assert.equal(operation.attempt_count, 1);
+  operation = s.updateRemoteOperation('cio-1', 'create-newsletter', { state: 'confirmed', remoteId: '42' });
+  assert.equal(operation.remote_id, '42');
+  assert.equal(s.getRemoteOperation('cio-1', 'create-newsletter').state, 'confirmed');
+});
+
 test('Opening Digest 双渠道结果按 run_id + destination 幂等记录', () => {
   const s = openStore(':memory:');
   s.createRun({ id: 'od-1', workflowId: 'opening-digest', source: 'cron', input: 'digest', notify: {} });

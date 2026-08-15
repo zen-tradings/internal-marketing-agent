@@ -26,6 +26,7 @@ test('DigitalOcean deploy defaults to read-only preflight and preserves Opening 
     reasoning: 'high',
     plannerModel: 'moonshotai/kimi-k3',
     plannerReasoning: 'high',
+    maxConcurrency: 2,
     openingDigestModel: undefined,
     openingDigestWechatEnabled: undefined,
     openingDigestSegmentId: 0,
@@ -34,6 +35,7 @@ test('DigitalOcean deploy defaults to read-only preflight and preserves Opening 
   assert.equal(parseDeployArgs(['--opening-digest-segment-id', '19']).openingDigestSegmentId, '19');
   assert.equal(parseDeployArgs(['--opening-digest-wechat-enabled', 'true']).openingDigestWechatEnabled, 'true');
   assert.equal(parseDeployArgs(['--opening-digest-model', 'openai/gpt-oss-20b']).openingDigestModel, 'openai/gpt-oss-20b');
+  assert.equal(parseDeployArgs(['--max-concurrency', '1']).maxConcurrency, '1');
   assert.throws(() => parseDeployArgs(['--unknown']), /Unknown argument/);
 });
 
@@ -48,6 +50,13 @@ test('embedded remote preflight and activation scripts are valid Bash', () => {
   assert.match(ACTIVATE_SCRIPT, /check-opening-digest-python\.mjs/);
   assert.match(ACTIVATE_SCRIPT, /update_env OPENING_DIGEST_WECHAT_ENABLED/);
   assert.match(ACTIVATE_SCRIPT, /update_env OPENING_DIGEST_MODEL/);
+  assert.match(ACTIVATE_SCRIPT, /update_env MAX_CONCURRENCY "\$max_concurrency"/);
+  assert.match(ACTIVATE_SCRIPT, /update_env BROWSER_CONCURRENCY 1/);
+  assert.match(ACTIVATE_SCRIPT, /update_env WECHAT_WRITE_CONCURRENCY 1/);
+  assert.match(ACTIVATE_SCRIPT, /update_env CUSTOMERIO_WRITE_CONCURRENCY 1/);
+  assert.match(ACTIVATE_SCRIPT, /update_env OPENROUTER_CONCURRENCY 2/);
+  assert.match(ACTIVATE_SCRIPT, /update_env EXA_SEARCH_QPS 8/);
+  assert.match(ACTIVATE_SCRIPT, /update_env SLACK_POST_INTERVAL_MS 1000/);
   assert.match(ACTIVATE_SCRIPT, /env_without_managed_after/);
   assert.match(ACTIVATE_SCRIPT, /update_env QDII_ENABLED true/);
   assert.match(ACTIVATE_SCRIPT, /QDII_PYTHON_PATH \/opt\/zen-content-hub\/\.venv\/bin\/python/);
@@ -84,6 +93,7 @@ test('deployment inputs reject shell injection and invalid reasoning', () => {
   assert.doesNotThrow(() => validateDeployInputs({
     target: 'root@203.0.113.8', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
     plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
+    maxConcurrency: 2,
     openingDigestModel: 'openai/gpt-oss-120b',
     openingDigestWechatEnabled: true,
     openingDigestSegmentId: '19',
@@ -117,6 +127,10 @@ test('deployment inputs reject shell injection and invalid reasoning', () => {
     plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
     openingDigestWechatEnabled: true, openingDigestSegmentId: '-1',
   }), /segment ID must be/);
+  assert.throws(() => validateDeployInputs({
+    target: 'root@example.com', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
+    plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high', maxConcurrency: '3',
+  }), /max concurrency must be 1 or 2/);
 });
 
 test('preflight requires DigitalOcean metadata, healthy idle service and valid marker', () => {

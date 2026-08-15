@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
 import {
   NEWSLETTER_TEMPLATE_ID,
   parseNewsletterArticle,
@@ -6,6 +7,8 @@ import {
 } from '../lib/newsletter-email.js';
 import { assertRenderedTemplateMarker } from '../lib/draft-template.js';
 import { checkOutboundLeaks, configuredSecretValues } from '../lib/gate.js';
+import { withRuntimeResource } from '../config/runtime.js';
+import { cancellationErrorFromSignal, throwIfTaskCancelled } from '../lib/task-cancellation.js';
 
 export const NEWSLETTER_SENDER_EMAIL = 'support@zentradings.com';
 
@@ -13,7 +16,11 @@ async function defaultReadArticle(articlePath) {
   return fs.readFile(articlePath, 'utf8');
 }
 
-export function makeChannel({ readArticle = defaultReadArticle, fetchFn = globalThis.fetch } = {}) {
+export function makeChannel({
+  readArticle = defaultReadArticle,
+  fetchFn = globalThis.fetch,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
   return {
     id: 'customerio-draft',
     templateId: NEWSLETTER_TEMPLATE_ID,
@@ -25,6 +32,9 @@ export function makeChannel({ readArticle = defaultReadArticle, fetchFn = global
       existingRemoteId,
       onCreated,
       resumeFromCheckpoint = false,
+      runId,
+      remoteOperations,
+      signal,
     }) {
       const cio = config.customerio || {};
       if (!cio.appApiKey) throw publishError('缺少 CUSTOMERIO_APP_API_KEY');
@@ -77,7 +87,7 @@ export function makeChannel({ readArticle = defaultReadArticle, fetchFn = global
       if (existingRemoteId) {
         recovered = await fetchNewsletterById({ baseUrl, appApiKey: cio.appApiKey, id: existingRemoteId, fetchFn, timeoutMs: cio.timeoutMs });
         assertRecoverableNewsletter(recovered, name);
-      } else if (resumeFromCheckpoint) {
+      } else if (resumeFromCheckpoint && (!runId || !remoteOperations)) {
         recovered = await findNewsletterByName({ baseUrl, appApiKey: cio.appApiKey, name, fetchFn, timeoutMs: cio.timeoutMs });
       }
       if (recovered) {
@@ -87,56 +97,236 @@ export function makeChannel({ readArticle = defaultReadArticle, fetchFn = global
         return newsletterResult({ newsletterId: recoveredId, name, audience, audienceCount });
       }
 
-      let response;
-      let data;
-      let detail = '';
-      try {
-        ({ response, data, detail } = await withRequestTimeout(cio.timeoutMs, async (signal) => {
-          const current = await fetchFn(`${baseUrl}/v1/newsletters`, {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${cio.appApiKey}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(payload),
-            signal,
-          });
-          if (!current.ok) return { response: current, detail: await safeText(current) };
-          return { response: current, data: await current.json(), detail: '' };
-        }));
-      } catch (error) {
-        try {
-          recovered = await findNewsletterByName({ baseUrl, appApiKey: cio.appApiKey, name, fetchFn, timeoutMs: cio.timeoutMs });
-        } catch {}
-        if (recovered) {
-          const recoveredId = Number(recovered.id);
-          assertRecoverableNewsletter(recovered, name);
-          await onCreated?.({ remoteId: String(recoveredId), title: name });
-          return newsletterResult({ newsletterId: recoveredId, name, audience, audienceCount });
-        }
-        throw publishError(`Customer.io 请求失败:${requestErrorMessage(error)}`);
-      }
-
-      if (!response.ok) {
-        const domainError = unverifiedSendingDomainError(response.status, detail, cio.from);
-        if (domainError) throw publishError(domainError);
-        throw publishError(`Customer.io 创建草稿失败:${response.status} ${response.statusText || ''} ${detail}`.trim());
-      }
-      const newsletterId = data?.newsletter?.id;
-      if (!newsletterId) throw publishError('Customer.io 返回成功但缺少 newsletter.id');
-      await onCreated?.({ remoteId: String(newsletterId), title: name });
-      return newsletterResult({ newsletterId, name, audience, audienceCount });
+      return withRuntimeResource('customerio-write', () => createNewsletterDraft({
+        baseUrl,
+        cio,
+        payload,
+        name,
+        audience,
+        audienceCount,
+        fetchFn,
+        sleep,
+        signal,
+        runId,
+        remoteOperations,
+        onCreated,
+      }), signal);
     },
   };
 }
 
-function newsletterResult({ newsletterId, name, audience, audienceCount }) {
+async function createNewsletterDraft({
+  baseUrl, cio, payload, name, audience, audienceCount, fetchFn, sleep, signal,
+  runId, remoteOperations, onCreated,
+}) {
+  if (!runId || !remoteOperations) {
+    const newsletterId = await postNewsletter({ baseUrl, cio, payload, fetchFn });
+    await onCreated?.({ remoteId: String(newsletterId), title: name });
+    return newsletterResult({ newsletterId, name, audience, audienceCount });
+  }
+
+  const operation = 'create-newsletter';
+  const operationKey = `cio:newsletter:create:v1:${runId}`;
+  const payloadSha256 = crypto.createHash('sha256').update(stableJson(payload)).digest('hex');
+  let record = remoteOperations.get(operation);
+  if (!record) {
+    const before = await listMatchingNewsletters({ baseUrl, cio, name, fetchFn });
+    record = remoteOperations.prepare({
+      operation,
+      operationKey,
+      payloadSha256,
+      beforeIds: before.map((item) => String(item.id)),
+    });
+  }
+  if (record.payload_sha256 !== payloadSha256) {
+    throw publishError('Customer.io 后台操作请求哈希与当前草稿不一致，拒绝复用旧操作');
+  }
+  if (record.remote_id) {
+    const newsletter = await fetchNewsletterById({
+      baseUrl, appApiKey: cio.appApiKey, id: record.remote_id, fetchFn, timeoutMs: cio.timeoutMs,
+    });
+    assertRecoverableNewsletter(newsletter, name);
+    await onCreated?.({ remoteId: String(record.remote_id), title: name });
+    return newsletterResult({ newsletterId: record.remote_id, name, audience, audienceCount });
+  }
+
+  const beforeIds = new Set(parseIdSnapshot(record.before_ids_json));
+  if (Number(record.attempt_count || 0) > 0) {
+    const recovered = await recoverCreatedNewsletter({
+      baseUrl, cio, name, audience, beforeIds, fetchFn, sleep, signal,
+    });
+    if (recovered) return confirmRecovered({
+      recovered, record, remoteOperations, onCreated, name, audience, audienceCount, runId,
+    });
+  }
+  while (Number(record.attempt_count || 0) < 2) {
+    throwIfTaskCancelled(signal);
+    record = remoteOperations.increment(operation);
+    if (!record || Number(record.attempt_count || 0) > 2) break;
+    try {
+      const newsletterId = await postNewsletter({ baseUrl, cio, payload, fetchFn });
+      remoteOperations.update(operation, { state: 'confirmed', remoteId: String(newsletterId), lastError: '' });
+      await onCreated?.({ remoteId: String(newsletterId), title: name });
+      return newsletterResult({
+        newsletterId, name, audience, audienceCount,
+        deliveryWarnings: Number(record.attempt_count) > 1
+          ? [`Customer.io 自动重试已成功，但第一次请求结果不明，可能存在同名重复草稿。任务:${runId}`]
+          : [],
+      });
+    } catch (error) {
+      if (!isAmbiguousCreateError(error)) throw error;
+      record = remoteOperations.update(operation, {
+        state: 'ambiguous',
+        lastError: requestErrorMessage(error),
+      });
+      const recovered = await recoverCreatedNewsletter({
+        baseUrl, cio, name, audience, beforeIds, fetchFn, sleep, signal,
+      });
+      if (recovered) return confirmRecovered({
+        recovered, record, remoteOperations, onCreated, name, audience, audienceCount, runId,
+      });
+    }
+  }
+
+  remoteOperations.update(operation, {
+    state: 'needs_review',
+    lastError: '两次创建请求后仍无法唯一确认 newsletter.id',
+  });
+  const error = publishError(`Customer.io 两次创建请求后仍无法唯一确认草稿，已停止继续创建；请人工检查同名草稿。任务:${runId}`);
+  error.stage = 'needs_review';
+  throw error;
+}
+
+async function postNewsletter({ baseUrl, cio, payload, fetchFn }) {
+  let response;
+  let data;
+  let detail = '';
+  try {
+    ({ response, data, detail } = await withRequestTimeout(cio.timeoutMs, async (requestSignal) => {
+      const current = await fetchFn(`${baseUrl}/v1/newsletters`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${cio.appApiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: requestSignal,
+      });
+      if (!current.ok) return { response: current, detail: await safeText(current) };
+      return { response: current, data: await current.json(), detail: '' };
+    }));
+  } catch (error) {
+    const wrapped = publishError(`Customer.io 请求失败:${requestErrorMessage(error)}`);
+    wrapped.ambiguousCreate = true;
+    throw wrapped;
+  }
+  if (!response.ok) {
+    const domainError = unverifiedSendingDomainError(response.status, detail, cio.from);
+    if (domainError) throw publishError(domainError);
+    const error = publishError(`Customer.io 创建草稿失败:${response.status} ${response.statusText || ''} ${detail}`.trim());
+    if (Number(response.status) >= 500) error.ambiguousCreate = true;
+    throw error;
+  }
+  const newsletterId = Number(data?.newsletter?.id);
+  if (!Number.isInteger(newsletterId) || newsletterId <= 0) {
+    const error = publishError('Customer.io 返回成功但缺少 newsletter.id');
+    error.ambiguousCreate = true;
+    throw error;
+  }
+  return newsletterId;
+}
+
+async function recoverCreatedNewsletter({ baseUrl, cio, name, audience, beforeIds, fetchFn, sleep, signal }) {
+  for (const delay of [2000, 5000, 10000]) {
+    await cancellableSleep(delay, signal, sleep);
+    let matches;
+    try { matches = await listMatchingNewsletters({ baseUrl, cio, name, fetchFn }); }
+    catch { continue; }
+    const candidates = matches.filter((item) => !beforeIds.has(String(item.id))
+      && item.sent_at == null
+      && recipientMatches(item, audience.segmentId)
+      && topicMatches(item, cio.subscriptionTopicId));
+    if (candidates.length === 1) return candidates[0];
+  }
+  return undefined;
+}
+
+async function listMatchingNewsletters({ baseUrl, cio, name, fetchFn }) {
+  const data = await customerIoGet({
+    baseUrl,
+    appApiKey: cio.appApiKey,
+    path: '/v1/newsletters?limit=100&sort=desc',
+    fetchFn,
+    timeoutMs: cio.timeoutMs,
+  });
+  return (data?.newsletters || []).filter((item) => item?.name === name && Number(item?.id) > 0);
+}
+
+async function confirmRecovered({ recovered, record, remoteOperations, onCreated, name, audience, audienceCount, runId }) {
+  const remoteId = String(recovered.id);
+  remoteOperations.update('create-newsletter', { state: 'confirmed', remoteId, lastError: '' });
+  await onCreated?.({ remoteId, title: name });
+  return newsletterResult({
+    newsletterId: remoteId,
+    name,
+    audience,
+    audienceCount,
+    deliveryWarnings: Number(record?.attempt_count || 0) > 1
+      ? [`Customer.io 第二次创建请求经回读恢复，但第一次请求结果不明，可能存在同名重复草稿。任务:${runId}`]
+      : [],
+  });
+}
+
+function recipientMatches(newsletter, segmentId) {
+  const ids = newsletter?.recipient_segment_ids;
+  return Array.isArray(ids) && ids.map(Number).includes(Number(segmentId));
+}
+
+function topicMatches(newsletter, topicId) {
+  return !topicId || Number(newsletter?.subscription_topic_id) === Number(topicId);
+}
+
+function parseIdSnapshot(value) {
+  try {
+    const parsed = JSON.parse(value || '[]');
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch { return []; }
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function isAmbiguousCreateError(error) {
+  return error?.ambiguousCreate === true;
+}
+
+async function cancellableSleep(ms, signal, sleep) {
+  throwIfTaskCancelled(signal);
+  if (!signal) return sleep(ms);
+  let onAbort;
+  try {
+    await Promise.race([
+      sleep(ms),
+      new Promise((_, reject) => {
+        onAbort = () => reject(cancellationErrorFromSignal(signal));
+        signal.addEventListener('abort', onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
+
+function newsletterResult({ newsletterId, name, audience, audienceCount, deliveryWarnings = [] }) {
   return {
     mediaId: `customerio-newsletter:${newsletterId}`,
     title: name,
     audienceStage: audience.stage,
     audienceSegmentId: audience.segmentId,
     audienceRecipientCount: audienceCount,
+    deliveryWarnings,
   };
 }
 

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { chromium } from 'playwright-core';
+import { acquireRuntimeResource } from '../config/runtime.js';
 
 const MIN_IMAGE_BYTES = 20 * 1024;
 // The screenshot is now a same-session consistency checkpoint only. It is not
@@ -32,12 +33,14 @@ export async function captureTrendingOptionsTable({
 }
 
 async function captureAtScale({ url, storageStatePath, executablePath, timeoutMs, deviceScaleFactor }) {
-  const browser = await chromium.launch({
-    executablePath,
-    headless: true,
-    args: ['--disable-background-networking', '--disable-component-update', '--disable-dev-shm-usage'],
-  });
+  const releaseBrowser = await acquireRuntimeResource('browser');
+  let browser;
   try {
+    browser = await chromium.launch({
+      executablePath,
+      headless: true,
+      args: ['--disable-background-networking', '--disable-component-update', '--disable-dev-shm-usage'],
+    });
     const context = await browser.newContext({
       storageState: storageStatePath,
       viewport: { width: 1440, height: 1200 },
@@ -72,7 +75,10 @@ async function captureAtScale({ url, storageStatePath, executablePath, timeoutMs
       buffer, data, rows: data.rows.length, capturedAt: new Date().toISOString(),
       deviceScaleFactor, width, height,
     };
-  } finally { await browser.close(); }
+  } finally {
+    try { await browser?.close(); }
+    finally { releaseBrowser(); }
+  }
 }
 
 async function looksLikeLogin(page) {

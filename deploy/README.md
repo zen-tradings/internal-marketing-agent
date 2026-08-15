@@ -25,13 +25,13 @@ npm run deploy:digitalocean
 After reviewing the preflight output, activate the exact pushed commit:
 
 ```bash
-npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --opening-digest-model openai/gpt-oss-120b --opening-digest-wechat-enabled true --activate
+npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --max-concurrency 2 --opening-digest-model openai/gpt-oss-120b --opening-digest-wechat-enabled true --activate
 ```
 
 需要同时切换 Opening Digest 的受控测试受众时，必须通过同一事务化部署命令传入已在 Customer.io 核验的 segment ID；部署失败会连同受保护环境文件一起回滚：
 
 ```bash
-npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --activate --opening-digest-segment-id 19
+npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --max-concurrency 2 --activate --opening-digest-segment-id 19
 ```
 
 The command requires a clean worktree and a commit present on the upstream
@@ -81,8 +81,14 @@ DATALAB_MODE=balanced
 CRON_TIMEZONE=America/Los_Angeles
 HEALTH_HOST=127.0.0.1
 HEALTH_PORT=8080
-MAX_CONCURRENCY=1
+# This validated 1 vCPU/2GB host uses two task slots but remains one process.
+MAX_CONCURRENCY=2
 MAX_QUEUE_SIZE=100
+BROWSER_CONCURRENCY=1
+WECHAT_WRITE_CONCURRENCY=1
+CUSTOMERIO_WRITE_CONCURRENCY=1
+OPENROUTER_CONCURRENCY=2
+EXA_SEARCH_QPS=8
 QDII_ENABLED=true
 QDII_PYTHON_PATH=.venv/bin/python
 QDII_WORKER_PATH=/opt/zen-content-hub/python/qdii_worker.py
@@ -109,6 +115,7 @@ GOOGLE_DOCS_REFRESH_TOKEN=replace-if-private-google-docs-are-used
 GOOGLE_DOCS_ACCESS_TOKEN=
 GITHUB_TOKEN=replace-if-private-github-repositories-are-used
 SLACK_EDIT_DEBOUNCE_MS=5000
+SLACK_POST_INTERVAL_MS=1000
 SLACK_ALLOWED_USER_IDS=U0123456789
 SLACK_ALLOWED_CHANNEL_IDS=C0123456789
 ```
@@ -154,7 +161,7 @@ refresh token for short-lived access tokens automatically.
 
 The application does not enforce a public-IP allowlist and does not reject
 proxy environment variables. Outbound routing follows the host and Node.js
-runtime configuration. The health endpoint exposes queue counts only and
+runtime configuration. The health endpoint exposes aggregate queue and resource-gate counts only and
 should remain on loopback or behind an authenticated monitoring agent.
 
 ## Opening Digest OIC browser state
