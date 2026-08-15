@@ -12,6 +12,7 @@ import { easternDateKey } from '../lib/us-equity-calendar.js';
 import { auditOpeningDigestArticle } from '../lib/opening-digest-content.js';
 import { translateOpeningDigestPayload } from '../lib/opening-digest-translation.js';
 import { makeWechatOpeningDigestChannel } from './wechat-opening-digest.js';
+import { renderDiscordOpeningDigest } from './discord-opening-digest.js';
 import { acquireRuntimeResource, runtimeFetch } from '../config/runtime.js';
 
 const SENDER = 'support@zentradings.com';
@@ -32,7 +33,7 @@ export function makeChannel({
     id: 'customerio-opening-digest',
     templateId: CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID,
     templateLocked: true,
-    async publish({ articlePath, config, workflow, source = 'manual', existingRemoteId = '', existingDeliveries = [], onCreated, onDelivery, contentMode = 'editorial', acceptanceId = '' }) {
+    async publish({ articlePath, config, workflow, source = 'manual', existingRemoteId = '', existingDeliveries = [], onCreated, onDelivery, onDeferredDelivery, contentMode = 'editorial', acceptanceId = '' }) {
       const cio = config.customerio || {};
       const digest = config.openingDigest || {};
       assertDigestConfig(cio, digest);
@@ -203,6 +204,32 @@ export function makeChannel({
         const deliveries = [{ destination: 'customerio', status: emailAlreadySent ? 'existing' : 'delivered', mediaId: `customerio-newsletter:${newsletterId}`, title: name }];
         await onDelivery?.(deliveries[0]);
         const deliveryWarnings = [];
+        if (source === 'cron' && config.discord?.openingDigestEnabled) {
+          try {
+            if (typeof onDeferredDelivery !== 'function') throw new Error('Discord 持久投递器未装配');
+            const messages = renderDiscordOpeningDigest(openingPayload, { coverImageUrl: headerImageUrl });
+            const queued = await onDeferredDelivery({
+              destination: 'discord',
+              title: `Zen Opening Digest · ${dateKey}`,
+              payload: { schemaVersion: 1, dateKey, messages },
+            });
+            const delivery = {
+              destination: 'discord',
+              status: queued?.state === 'delivered' ? 'delivered' : queued?.state === 'failed' ? 'failed' : 'pending',
+              mediaId: '',
+              title: `Zen Opening Digest · ${dateKey}`,
+              details: { messageCount: messages.length },
+            };
+            deliveries.push(delivery);
+            traceMetadata.discord = { status: delivery.status, messageCount: messages.length };
+          } catch (error) {
+            const delivery = { destination: 'discord', status: 'failed', mediaId: '', title: '', error: error.message };
+            deliveries.push(delivery);
+            await onDelivery?.(delivery);
+            traceMetadata.discord = { status: 'failed', error: error.message };
+            deliveryWarnings.push(`Opening Digest 邮件已成功，但 Discord #newsletter-feed 无法进入持久投递队列:${error.message}`);
+          }
+        }
         if (digest.wechatEnabled) {
           try {
             const translated = await translatePayload(openingPayload, {

@@ -6,6 +6,7 @@ const targets = [
   ['Exa', 'https://api.exa.ai/search', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }],
   ['WeChat', 'https://api.weixin.qq.com/cgi-bin/token', {}],
   ['Customer.io', 'https://api.customer.io/v1/newsletters', {}],
+  ['Discord', 'https://discord.com/api/v10/gateway', {}],
 ];
 
 for (const [name, url, init] of targets) {

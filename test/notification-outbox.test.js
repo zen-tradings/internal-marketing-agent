@@ -84,3 +84,15 @@ test('即时发送成功会确认同一任务遗留的待发通知', async () =>
   assert.equal(result.delivered, true);
   assert.equal(store.listPendingNotifications().length, 0);
 });
+
+test('带命名空间的 Discord 告警用 warn 发送且与其他 warning 分开去重', async () => {
+  const store = openStore(':memory:');
+  store.createRun({ id: 'od-warning', workflowId: 'opening-digest', source: 'cron', input: 'x', notify: { channel: 'C1' } });
+  store.setStatus('od-warning', 'done', { finishedAt: 1 });
+  store.queueNotification({ runId: 'od-warning', method: 'warn:discord', notify: { channel: 'C1' }, payload: 'discord failed' });
+  store.queueNotification({ runId: 'od-warning', method: 'warn:wechat', notify: { channel: 'C1' }, payload: 'wechat failed' });
+  const calls = [];
+  const result = await flushNotificationOutbox({ store, notifier: { warn: async (_notify, payload) => calls.push(payload) } });
+  assert.deepEqual(result, { delivered: 2, failed: 0 });
+  assert.deepEqual(calls, ['discord failed', 'wechat failed']);
+});

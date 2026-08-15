@@ -10,6 +10,7 @@ import { createResourceGovernor } from './core/resource-governor.js';
 import { runWriter } from './core/runner.js';
 import { createNotifier } from './core/notifier.js';
 import { deliverOrQueueNotification, flushNotificationOutbox } from './core/notification-outbox.js';
+import { flushDiscordDeliveryOutbox, queueDiscordDelivery } from './core/delivery-outbox.js';
 import { formatQdiiSlackMessages, qdiiSourcesForWriter, runQdiiQuery } from './core/qdii.js';
 import { registerSlack } from './triggers/slack.js';
 import { reconcileCronWorkflows, registerCron, validateCronConfiguration } from './triggers/cron.js';
@@ -283,6 +284,11 @@ export function makeHandler(deps) {
             update: (operation, patch) => store.updateRemoteOperation?.(run.id, operation, patch),
           },
           onDelivery: (delivery) => store.upsertDelivery?.(run.id, delivery),
+          onDeferredDelivery: (delivery) => {
+            const row = queueDiscordDelivery({ store, runId: run.id, ...delivery });
+            deps.kickDeliveryOutbox?.();
+            return row;
+          },
           resumeFromCheckpoint,
           contentPolicy: res.contentPolicy || {},
           signal,
@@ -450,6 +456,8 @@ export async function start() {
   // Restore only persisted tasks explicitly queued. Interrupted tasks require an explicit administrative requeue
   // to prevent an old task from creating an unexpected draft after restart.
   const persistedQueued = store.listByStatus('queued');
+  let deliveryFlushPromise;
+  let shuttingDown = false;
 
   const deps = {
     store,
@@ -459,6 +467,30 @@ export async function start() {
     config,
     notifier: undefined,
     runQdiiQuery: (args) => runQdiiQuery({ ...args, fetchFn: governor.fetch }),
+  };
+  deps.kickDeliveryOutbox = () => {
+    if (shuttingDown || deliveryFlushPromise || !config.discord.openingDigestEnabled) return deliveryFlushPromise;
+    deliveryFlushPromise = flushDiscordDeliveryOutbox({
+      store,
+      config,
+      fetchFn: governor.fetch,
+      onTerminalFailure: async ({ row, error, attempts }) => {
+        const run = store.getRun(row.run_id);
+        let notify = {};
+        try { notify = JSON.parse(run?.notify_json || '{}'); } catch {}
+        await deliverOrQueueNotification({
+          store,
+          notifier: deps.notifier,
+          runId: row.run_id,
+          method: 'warn:discord',
+          notify,
+          payload: `Opening Digest 邮件已成功，但 Discord #newsletter-feed 在 ${attempts} 次尝试后仍投递失败:${error?.message || error}`,
+        });
+      },
+    }).catch((error) => {
+      console.error('[hub] Discord delivery outbox 补发失败:', error?.message || error);
+    }).finally(() => { deliveryFlushPromise = undefined; });
+    return deliveryFlushPromise;
   };
   const handler = makeHandler(deps);
 
@@ -507,7 +539,6 @@ export async function start() {
   let currentSlackApp;
   let connectPromise;
   let outboxFlushPromise;
-  let shuttingDown = false;
   const healthServer = await startHealthServer({
     ...config.health,
     status: () => {
@@ -516,6 +547,7 @@ export async function start() {
       return {
         queue: queueStatus,
         resources: governor.stats(),
+        deliveries: store.deliveryOutboxStats(),
         slackConnected,
         shuttingDown,
         ready: !shuttingDown && !queueStatus.stopped && slackConnected,
@@ -584,11 +616,14 @@ export async function start() {
   // connectSlack retries after a transient outage; awaiting it here would keep recovered long translations outside
   // the queue. Restore and execute the queue first, then let the notifier take over when Slack reconnects.
   void ensureSlackConnected();
+  void deps.kickDeliveryOutbox();
   const outboxTimer = setInterval(() => {
-    if (!deps.notifier || outboxFlushPromise) return;
-    outboxFlushPromise = flushNotificationOutbox({ store, notifier: deps.notifier })
-      .catch((error) => console.error('[hub] Slack outbox 补发失败:', error?.message || error))
-      .finally(() => { outboxFlushPromise = undefined; });
+    void deps.kickDeliveryOutbox();
+    if (deps.notifier && !outboxFlushPromise) {
+      outboxFlushPromise = flushNotificationOutbox({ store, notifier: deps.notifier })
+        .catch((error) => console.error('[hub] Slack outbox 补发失败:', error?.message || error))
+        .finally(() => { outboxFlushPromise = undefined; });
+    }
   }, 30000);
   outboxTimer.unref?.();
   for (const row of persistedQueued) {
@@ -623,7 +658,7 @@ export async function start() {
     const timeout = new Promise((resolve) => {
       setTimeout(resolve, 25000);
     });
-    await Promise.race([queue.whenIdle(), timeout]);
+    await Promise.race([Promise.all([queue.whenIdle(), deliveryFlushPromise].filter(Boolean)), timeout]);
     try { store.close(); } catch {}
     process.exit(exitCode);
   }

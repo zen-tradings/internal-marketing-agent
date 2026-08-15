@@ -542,6 +542,33 @@ test('双渠道严格先完成 Customer.io，再用同一冻结 payload 创建�
   assert.equal(result.deliveries.find((item) => item.destination === 'wechat').mediaId, 'wx-media-1');
 });
 
+test('Discord 只在正式 cron 邮件成功后把同一冻结英文 payload 加入持久队列', async () => {
+  const { channel } = standardChannel();
+  const enabled = config();
+  enabled.discord = { openingDigestEnabled: true };
+  const queued = [];
+  const formal = await channel.publish({
+    articlePath: '/tmp/article.md',
+    config: enabled,
+    source: 'cron',
+    onDeferredDelivery: async (delivery) => { queued.push(delivery); return { state: 'pending' }; },
+  });
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].destination, 'discord');
+  assert.equal(queued[0].payload.dateKey, '2026-08-10');
+  assert.ok(queued[0].payload.messages.length >= 4);
+  assert.equal(formal.deliveries.find((item) => item.destination === 'discord').status, 'pending');
+
+  await channel.publish({
+    articlePath: '/tmp/article.md',
+    config: enabled,
+    source: 'acceptance',
+    acceptanceId: 'acceptance-run-1234',
+    onDeferredDelivery: async (delivery) => { queued.push(delivery); return { state: 'pending' }; },
+  });
+  assert.equal(queued.length, 1);
+});
+
 test('zero audience and failed audience preflight do not block configured test1 delivery', async () => {
   for (const fetchMode of ['zero', 'failed']) {
     const requests = [];
