@@ -232,12 +232,16 @@ trap restore_on_error ERR
 
 metadata=http://169.254.169.254/metadata/v1
 test -n "$(curl -fsS --max-time 3 "$metadata/id")"
-test -f "$archive"
-test ! -e "$stage"
-test ! -e "$rollback"
-test ! -e "$failed"
-test ! -e "$env_backup"
-test ! -e "$backup_helper_backup"
+if [ ! -f "$archive" ]; then
+  printf 'deployment_conflict=missing-archive:%s\\n' "$archive" >&2
+  exit 1
+fi
+for candidate in "$stage" "$rollback" "$failed" "$env_backup" "$backup_helper_backup"; do
+  if [ -e "$candidate" ]; then
+    printf 'deployment_conflict=existing-path:%s\\n' "$candidate" >&2
+    exit 1
+  fi
+done
 for key in OPENROUTER_ROUTER_MODEL OPENROUTER_REVIEW_MODEL; do
   value=$(sudo awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
   if [ -z "$value" ]; then
