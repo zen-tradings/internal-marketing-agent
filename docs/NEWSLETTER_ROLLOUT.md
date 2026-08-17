@@ -4,13 +4,13 @@
 
 本节中的发送结果和人数是当时的运维记录，不是 Customer.io 的实时状态。每次创建或扩容前都必须运行 `npm run check:customerio`，并以 Customer.io Review 页显示的人数为最终依据。
 
-- 命名格式：`Zen Research from Zen Trading · Vol. N`
+- Customer.io 草稿命名格式：`Zen Research日报 · YYYY-MM-DD`（以任务创建日为准）。
 - Slack 入口：私聊自然语言或频道 `@Bot`；`邮件：<本期主题>`、`email: <topic>` 继续兼容。
 - 常规 `email:` 工作流只在 Customer.io 创建草稿，不会自动发送或排期；`opening-digest` 是独立的受控发送/排期例外。
 - Customer.io 内部测试分组：`Newsletter · Internal Beta`，segment ID `17`。
 - Customer.io Pilot 分组：`Newsletter · Pilot`，segment ID `18`。这是第二批扩容名单，当前为空，加入人员前不能创建 Pilot 草稿。
 - 全量候选分组：`Valid Email Address`，segment ID `6`。切换前仍要在 Review 页核对订阅偏好与预计人数。
-- 新生成草稿的主题和邮件内品牌统一为 `Zen Research from Zen Trading · Vol. N`；不自动改写历史草稿或已发送邮件。
+- 新生成草稿的后台名称使用上述日期格式；邮件主题和邮件内品牌继续为 `Zen Research from Zen Trading · Vol. N`。不自动改写历史草稿或已发送邮件。
 - 仓库生成的 Customer.io 模板页脚实体地址固定为 `700 Leahy St, Redwood City, CA 94061`；环境变量、Prompt 和单次任务都不能覆盖。历史草稿和已发送邮件不会被回溯改写。
 - `Vol. 1` 已向内部 segment `17` 发送体验版：修正版 newsletter ID `5` 的 3 条消息全部 delivered，failed/suppressed 均为 0。
 

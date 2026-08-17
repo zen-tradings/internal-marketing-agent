@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeChannel } from '../src/channels/customerio-draft.js';
+import { makeChannel, newsletterDraftName } from '../src/channels/customerio-draft.js';
 import {
   NEWSLETTER_COMPANY_ADDRESS,
   NEWSLETTER_COMPANY_LINKEDIN_URL,
@@ -21,6 +21,8 @@ Demand remains strong and **supply matters**.
 ## What we're watching
 - Lead times
 - [Company filings](https://example.com/filing)`;
+const CREATED_AT = Date.UTC(2026, 7, 17, 12, 0, 0);
+const DRAFT_NAME = 'Zen Research日报 · 2026-08-17';
 
 function config(overrides = {}) {
   return {
@@ -122,11 +124,11 @@ test('Customer.io channel:只创建内部 segment 草稿,绝不夹带发送或�
       return { ok: true, status: 200, statusText: 'OK', async json() { return { newsletter: { id: 41 } }; } };
     },
   });
-  const result = await channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' } });
+  const result = await channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' }, createdAt: CREATED_AT });
   const [preflight, request] = requests;
 
   assert.equal(result.mediaId, 'customerio-newsletter:41');
-  assert.equal(result.title, 'Zen Research from Zen Trading · Vol. 1');
+  assert.equal(result.title, DRAFT_NAME);
   assert.equal(result.audienceStage, 'internal');
   assert.equal(result.audienceSegmentId, 17);
   assert.equal(result.audienceRecipientCount, 3);
@@ -141,6 +143,7 @@ test('Customer.io channel:只创建内部 segment 草稿,绝不夹带发送或�
     and: [{ or: [{ segment: { id: 17 } }] }],
   });
   assert.equal(request.payload.type, 'email');
+  assert.equal(request.payload.name, DRAFT_NAME);
   assert.equal(request.payload.subject, 'Zen Research from Zen Trading · Vol. 1 | HBM supply');
   assert.equal(request.payload.from, 'Zen Trading <support@zentradings.com>');
   assert.ok(!('send_now' in request.payload));
@@ -158,17 +161,23 @@ test('Customer.io channel:创建后立即持久化 remote id，恢复任务不�
         posts += 1;
         return { ok: true, status: 200, async json() { return { newsletter: { id: 41 } }; } };
       }
-      return { ok: true, status: 200, async json() { return { newsletter: { id: 41, name: 'Zen Research from Zen Trading · Vol. 1', sent_at: null } }; } };
+      return { ok: true, status: 200, async json() { return { newsletter: { id: 41, name: DRAFT_NAME, sent_at: null } }; } };
     },
   });
-  await channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' }, onCreated: (value) => created.push(value) });
+  await channel.publish({ articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' }, createdAt: CREATED_AT, onCreated: (value) => created.push(value) });
   const recovered = await channel.publish({
-    articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' },
+    articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' }, createdAt: CREATED_AT,
     existingRemoteId: '41', onCreated: (value) => created.push(value), resumeFromCheckpoint: true,
   });
   assert.equal(posts, 1);
   assert.equal(recovered.mediaId, 'customerio-newsletter:41');
   assert.equal(created.length, 2);
+});
+
+test('Customer.io channel:草稿名称使用任务创建日，避免恢复时跨日改名', () => {
+  assert.equal(newsletterDraftName(CREATED_AT), DRAFT_NAME);
+  assert.equal(newsletterDraftName(Date.UTC(2026, 0, 2, 0, 0, 0)), 'Zen Research日报 · 2026-01-02');
+  assert.throws(() => newsletterDraftName('not-a-date'), /任务创建时间无效/);
 });
 
 test('Customer.io channel:后台确定性操作不改变草稿名称或邮件标题', async () => {
@@ -185,10 +194,10 @@ test('Customer.io channel:后台确定性操作不改变草稿名称或邮件标
   });
   const result = await channel.publish({
     articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' },
-    runId: 'run-42', remoteOperations: operations,
+    runId: 'run-42', createdAt: CREATED_AT, remoteOperations: operations,
   });
-  assert.equal(result.title, 'Zen Research from Zen Trading · Vol. 1');
-  assert.equal(createPayload.name, 'Zen Research from Zen Trading · Vol. 1');
+  assert.equal(result.title, DRAFT_NAME);
+  assert.equal(createPayload.name, DRAFT_NAME);
   assert.equal(createPayload.subject, 'Zen Research from Zen Trading · Vol. 1 | HBM supply');
   assert.equal(operations.snapshot().operation_key, 'cio:newsletter:create:v1:run-42');
   assert.equal(operations.snapshot().attempt_count, 1);
@@ -236,7 +245,7 @@ test('Customer.io channel:创建结果不明但差集唯一时自动认领且不
             return listCalls === 1 ? { newsletters: [] } : {
               newsletters: [{
                 id: 44,
-                name: 'Zen Research from Zen Trading · Vol. 1',
+                name: DRAFT_NAME,
                 sent_at: null,
                 recipient_segment_ids: [17],
               }],
@@ -250,7 +259,7 @@ test('Customer.io channel:创建结果不明但差集唯一时自动认领且不
   });
   const result = await channel.publish({
     articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' },
-    runId: 'run-recover', remoteOperations: operations,
+    runId: 'run-recover', createdAt: CREATED_AT, remoteOperations: operations,
   });
   assert.equal(posts, 1);
   assert.equal(result.mediaId, 'customerio-newsletter:44');

@@ -273,6 +273,7 @@ export function makeHandler(deps) {
           notify,
           notifier: deps.notifier,
           runId: run.id,
+          createdAt: persisted.created_at,
           existingRemoteId: store.getRun(run.id)?.remote_id || '',
           existingDeliveries: store.listDeliveries?.(run.id) || [],
           onCreated: ({ remoteId }) => store.setRemoteId(run.id, remoteId),
