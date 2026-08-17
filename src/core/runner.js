@@ -478,7 +478,7 @@ export async function runWriter({
 
 function openingDigestFallbackArticle(asOf) {
   const date = easternDateKey(asOf);
-  return `---\ntitle: Zen Opening Digest\nsubject: Zen Opening Digest · ${date}\npreheader: Market signals and available opening data.\nedition: ${date}\n---\nEditorial update unavailable for this edition.\n`;
+  return `---\ntitle: Zen Opening Digest\nsubject: Zen Research日报 · ${date}\npreheader: Market signals and available opening data.\nedition: ${date}\n---\nEditorial update unavailable for this edition.\n`;
 }
 
 async function runAnalysisV2({

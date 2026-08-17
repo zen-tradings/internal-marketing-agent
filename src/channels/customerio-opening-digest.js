@@ -17,6 +17,7 @@ import { acquireRuntimeResource, runtimeFetch } from '../config/runtime.js';
 const SENDER = 'support@zentradings.com';
 const CUSTOMERIO_MIN_SCHEDULE_LEAD_MS = 5 * 60 * 1000;
 export const CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['customerio-opening-digest'];
+export const OPENING_DIGEST_NEWSLETTER_TITLE = 'Zen Research日报';
 
 export function makeChannel({
   readArticle = (file) => fs.readFile(file, 'utf8'),
@@ -65,9 +66,7 @@ export function makeChannel({
         if (acceptance && !/^[a-z0-9-]{8,80}$/i.test(acceptanceId)) {
           throw publishError('Opening Digest 验收邮件缺少安全的 acceptance ID');
         }
-        const name = acceptance
-          ? `[TEST] Zen Opening Digest · ${dateKey} · ${acceptanceId}`
-          : `Zen Opening Digest · ${dateKey}`;
+        const name = openingDigestNewsletterName(dateKey, { acceptance, acceptanceId });
         let newsletterId = Number(existingRemoteId) || 0;
         let remote;
         if (newsletterId) {
@@ -159,9 +158,7 @@ export function makeChannel({
           name,
           type: 'email',
           recipients: { and: [{ or: [{ segment: { id: digest.segmentId } }] }] },
-          subject: acceptance
-            ? `[TEST] Zen Opening Digest · ${displayDate(dateKey)}`
-            : `Zen Opening Digest · ${displayDate(dateKey)}`,
+          subject: openingDigestNewsletterSubject(dateKey, { acceptance }),
           preheader_text: article.preheader,
           body,
           from: cio.from,
@@ -284,7 +281,7 @@ export async function publishHistoricalOpeningDigestWechat({
   });
   const remote = remoteData?.newsletter || remoteData;
   const segments = Array.isArray(remote?.recipient_segment_ids) ? remote.recipient_segment_ids.map(Number) : [];
-  const expectedName = `Zen Opening Digest · ${dateKey}`;
+  const expectedName = openingDigestNewsletterName(dateKey);
   if (Number(remote?.id) !== Number(newsletterId) || remote?.name !== expectedName || remote?.sent_at == null
     || segments.length !== 1 || segments[0] !== Number(historicalSegmentId)
     || Number(remote?.subscription_topic_id) !== Number(digest.subscriptionTopicId)) {
@@ -357,6 +354,16 @@ export async function publishHistoricalOpeningDigestWechat({
 async function readJson(filename, label) {
   try { return JSON.parse(await fs.readFile(filename, 'utf8')); }
   catch (error) { throw publishError(`历史同源目录缺少或损坏${label}:${error.message}`); }
+}
+
+function openingDigestNewsletterName(dateKey, { acceptance = false, acceptanceId = '' } = {}) {
+  const base = `${OPENING_DIGEST_NEWSLETTER_TITLE} · ${dateKey}`;
+  return acceptance ? `[TEST] ${base} · ${acceptanceId}` : base;
+}
+
+function openingDigestNewsletterSubject(dateKey, { acceptance = false } = {}) {
+  const base = `${OPENING_DIGEST_NEWSLETTER_TITLE} · ${dateKey}`;
+  return acceptance ? `[TEST] ${base}` : base;
 }
 
 function assertExistingNewsletter(remote, { newsletterId, name, segmentId, subscriptionTopicId }) {
