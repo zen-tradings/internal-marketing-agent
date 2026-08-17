@@ -64,6 +64,9 @@ test('embedded remote preflight and activation scripts are valid Bash', () => {
   assert.match(ACTIVATE_SCRIPT, /update_env CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID/);
   assert.match(ACTIVATE_SCRIPT, /install -o root -g root -m 0755 "\$stage\/deploy\/zen-content-hub-backup" "\$backup_helper"/);
   assert.match(ACTIVATE_SCRIPT, /backup_helper_changed/);
+  assert.match(ACTIVATE_SCRIPT, /deployment_failed_phase=/);
+  assert.match(ACTIVATE_SCRIPT, /phase=stage-validation/);
+  assert.match(ACTIVATE_SCRIPT, /\[ "\$switch_started" -eq 0 \] && \[ -d "\$stage" \]/);
   assert.match(ACTIVATE_SCRIPT, /find \/var\/lib\/zen-content-hub\/backups[^\n]+backup-\*\.sha256/);
   assert.match(ACTIVATE_SCRIPT, /sha256sum -c "\$latest_backup_manifest"/);
 });
