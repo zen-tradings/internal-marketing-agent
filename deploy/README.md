@@ -39,8 +39,8 @@ branch. It creates a local archive, stages and tests a separate release on the
 Droplet, runs the SQLite backup service, requires an idle queue, reasserts the
 approved model and QDII runtime values and rejects drift with a checksum that
 excludes exactly the environment values managed by this deployment command. It preserves
-`OPENING_DIGEST_MODEL` and `OPENING_DIGEST_WECHAT_ENABLED` unless an explicit
-deploy argument overrides either one (and only changes the protected Opening
+`OPENING_DIGEST_MODEL`, `OPENING_DIGEST_WECHAT_ENABLED`, and the current
+`MAX_CONCURRENCY` unless an explicit deploy argument overrides them (and only changes the protected Opening
 Digest segment ID when it is supplied). The versioned backup helper is installed
 transactionally before the backup and restored with the prior application on failure;
 the deployment verifies the database-and-artifact manifest before switching. It then

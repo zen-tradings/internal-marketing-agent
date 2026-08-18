@@ -12,13 +12,14 @@ import {
   loadDiscordDeployConfig,
   parseDeployArgs,
   parsePreflight,
+  resolveMaxConcurrency,
   validateDeployInputs,
   unmanagedEnvironmentText,
 } from '../scripts/deploy-digitalocean.mjs';
 
 const SHA = 'a'.repeat(40);
 
-test('DigitalOcean deploy defaults to read-only preflight and preserves Opening Digest settings unless explicitly overridden', () => {
+test('DigitalOcean deploy defaults to read-only preflight and preserves protected production settings unless explicitly overridden', () => {
   assert.deepEqual(parseDeployArgs([]), {
     activate: false,
     commit: 'HEAD',
@@ -27,7 +28,7 @@ test('DigitalOcean deploy defaults to read-only preflight and preserves Opening 
     reasoning: 'high',
     plannerModel: 'moonshotai/kimi-k3',
     plannerReasoning: 'high',
-    maxConcurrency: 2,
+    maxConcurrency: undefined,
     openingDigestModel: undefined,
     openingDigestWechatEnabled: undefined,
     openingDigestSegmentId: 0,
@@ -40,6 +41,15 @@ test('DigitalOcean deploy defaults to read-only preflight and preserves Opening 
   assert.equal(parseDeployArgs(['--max-concurrency', '1']).maxConcurrency, '1');
   assert.equal(parseDeployArgs(['--sync-discord-config']).syncDiscordConfig, true);
   assert.throws(() => parseDeployArgs(['--unknown']), /Unknown argument/);
+});
+
+test('activation preserves the preflight concurrency unless an operator explicitly overrides it', () => {
+  assert.equal(resolveMaxConcurrency({ requested: undefined, current: '1' }), '1');
+  assert.equal(resolveMaxConcurrency({ requested: '2', current: '1' }), '2');
+  assert.throws(
+    () => resolveMaxConcurrency({ requested: undefined, current: '' }),
+    /did not report MAX_CONCURRENCY/,
+  );
 });
 
 test('embedded remote preflight and activation scripts are valid Bash', () => {
