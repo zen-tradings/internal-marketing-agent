@@ -69,7 +69,9 @@ export function parseDeployArgs(argv) {
     reasoning: DEFAULT_REASONING,
     plannerModel: DEFAULT_PLANNER_MODEL,
     plannerReasoning: DEFAULT_PLANNER_REASONING,
-    maxConcurrency: 2,
+    // Never increase production concurrency implicitly. The activation path
+    // resolves an omitted flag from the just-read remote environment.
+    maxConcurrency: undefined,
     // Preserve the protected production values unless an operator explicitly
     // requests a change for this release.
     openingDigestModel: undefined,
@@ -89,6 +91,14 @@ export function parseDeployArgs(argv) {
     } else throw new Error(`Unknown argument: ${arg}`);
   }
   return parsed;
+}
+
+export function resolveMaxConcurrency({ requested, current }) {
+  const value = requested ?? current;
+  if (value == null || value === '') {
+    throw new Error('Production preflight did not report MAX_CONCURRENCY; pass --max-concurrency explicitly after resolving the environment');
+  }
+  return value;
 }
 
 export function loadDiscordDeployConfig({ envFile = LOCAL_ENV_FILE } = {}) {
@@ -133,7 +143,7 @@ export function loadDeployTarget({ target = '', targetFile = TARGET_FILE } = {})
   return config.ZEN_DEPLOY_SSH_TARGET;
 }
 
-export function validateDeployInputs({ target, commit, model, reasoning, plannerModel, plannerReasoning, maxConcurrency = 2, openingDigestModel, openingDigestWechatEnabled, openingDigestSegmentId = 0 }) {
+export function validateDeployInputs({ target, commit, model, reasoning, plannerModel, plannerReasoning, maxConcurrency, openingDigestModel, openingDigestWechatEnabled, openingDigestSegmentId = 0 }) {
   if (!/^[a-z_][a-z0-9_-]*@[a-z0-9_.:-]+$/i.test(target)) {
     throw new Error('Invalid SSH target; expected user@host with no shell metacharacters');
   }
@@ -149,7 +159,7 @@ export function validateDeployInputs({ target, commit, model, reasoning, planner
   if (!['low', 'medium', 'high'].includes(plannerReasoning)) {
     throw new Error('Planner reasoning must be low, medium, or high');
   }
-  if (![1, 2].includes(Number(maxConcurrency))) {
+  if (maxConcurrency != null && ![1, 2].includes(Number(maxConcurrency))) {
     throw new Error('Production max concurrency must be 1 or 2');
   }
   if (openingDigestWechatEnabled != null && ![true, false, 'true', 'false'].includes(openingDigestWechatEnabled)) {
@@ -517,7 +527,7 @@ export function assertLocalRelease(commit, run = runCommand) {
   run('git', ['merge-base', '--is-ancestor', commit, '@{upstream}'], { quiet: true });
 }
 
-export function activateRemote({ target, commit, model, reasoning, plannerModel, plannerReasoning, maxConcurrency = 2, openingDigestModel = DEFAULT_OPENING_DIGEST_MODEL, openingDigestWechatEnabled, openingDigestSegmentId = 0, discordConfig = null }, run = runCommand) {
+export function activateRemote({ target, commit, model, reasoning, plannerModel, plannerReasoning, maxConcurrency, openingDigestModel = DEFAULT_OPENING_DIGEST_MODEL, openingDigestWechatEnabled, openingDigestSegmentId = 0, discordConfig = null }, run = runCommand) {
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-content-hub-deploy-'));
   const short = commit.slice(0, 12);
   const archive = path.join(temporaryDir, `zen-content-hub-${short}.tar.gz`);
@@ -560,10 +570,15 @@ export async function main(argv = process.argv.slice(2)) {
     || DEFAULT_OPENING_DIGEST_MODEL;
   const openingDigestWechatEnabled = options.openingDigestWechatEnabled
     ?? (preflight.env_OPENING_DIGEST_WECHAT_ENABLED || false);
+  const maxConcurrency = resolveMaxConcurrency({
+    requested: options.maxConcurrency,
+    current: preflight.env_MAX_CONCURRENCY,
+  });
   validateDeployInputs({
     ...options,
     target,
     commit,
+    maxConcurrency,
     openingDigestModel,
     openingDigestWechatEnabled,
   });
@@ -582,7 +597,7 @@ export async function main(argv = process.argv.slice(2)) {
     reasoning: options.reasoning,
     plannerModel: options.plannerModel,
     plannerReasoning: options.plannerReasoning,
-    maxConcurrency: options.maxConcurrency,
+    maxConcurrency,
     openingDigestModel,
     openingDigestWechatEnabled,
     openingDigestSegmentId: options.openingDigestSegmentId,
