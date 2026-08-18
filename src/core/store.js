@@ -77,6 +77,28 @@ CREATE TABLE IF NOT EXISTS notification_outbox (
 CREATE INDEX IF NOT EXISTS idx_notification_outbox_pending
   ON notification_outbox(sent_at, next_attempt_at, created_at);
 
+CREATE TABLE IF NOT EXISTS delivery_outbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  title TEXT,
+  payload_json TEXT NOT NULL,
+  payload_sha256 TEXT NOT NULL,
+  next_message_index INTEGER NOT NULL DEFAULT 0,
+  message_ids_json TEXT NOT NULL DEFAULT '[]',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  state TEXT NOT NULL DEFAULT 'pending',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  UNIQUE(run_id, destination),
+  FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_delivery_outbox_pending
+  ON delivery_outbox(destination, state, next_attempt_at, created_at);
+
 CREATE TABLE IF NOT EXISTS slack_threads (
   thread_key TEXT PRIMARY KEY,
   channel_id TEXT NOT NULL,
@@ -240,6 +262,85 @@ export function openStore(dbPath) {
         SET attempts = attempts + 1, last_error = ?, next_attempt_at = ?
         WHERE id = ? AND sent_at IS NULL
       `).run(String(error || '').slice(0, 1000), Number(nextAttemptAt) || Date.now(), id).changes;
+    },
+    queueDeliveryOutbox({ runId, destination, title, payloadJson, payloadSha256 }) {
+      const now = Date.now();
+      return db.transaction(() => {
+        db.prepare(`
+          INSERT OR IGNORE INTO delivery_outbox
+            (run_id, destination, title, payload_json, payload_sha256, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(runId, destination, title || null, payloadJson, payloadSha256, now, now);
+        const row = db.prepare('SELECT * FROM delivery_outbox WHERE run_id = ? AND destination = ?')
+          .get(runId, destination);
+        if (!row) throw new Error(`无法持久化 ${destination} delivery outbox`);
+        if (row.payload_sha256 !== payloadSha256) {
+          throw new Error(`${destination} delivery outbox 已存在不同 payload，拒绝混合投递`);
+        }
+        return row;
+      })();
+    },
+    listPendingDeliveryOutbox({ destination, now = Date.now(), limit = 10 } = {}) {
+      return db.prepare(`
+        SELECT * FROM delivery_outbox
+        WHERE destination = ? AND state = 'pending' AND next_attempt_at <= ?
+        ORDER BY created_at, id
+        LIMIT ?
+      `).all(destination, now, Math.max(1, Math.min(100, Number(limit) || 10)));
+    },
+    getDeliveryOutbox(id) {
+      return db.prepare('SELECT * FROM delivery_outbox WHERE id = ?').get(id);
+    },
+    advanceDeliveryOutbox(id, { messageId }) {
+      return db.transaction(() => {
+        const row = db.prepare("SELECT * FROM delivery_outbox WHERE id = ? AND state = 'pending'").get(id);
+        if (!row) throw new Error('delivery outbox 不存在或已终结');
+        let messageIds;
+        try { messageIds = JSON.parse(row.message_ids_json || '[]'); } catch { messageIds = []; }
+        if (!Array.isArray(messageIds)) messageIds = [];
+        messageIds.push(String(messageId));
+        db.prepare(`
+          UPDATE delivery_outbox
+          SET next_message_index = next_message_index + 1,
+              message_ids_json = ?, attempts = 0, next_attempt_at = 0,
+              last_error = NULL, updated_at = ?
+          WHERE id = ? AND state = 'pending'
+        `).run(JSON.stringify(messageIds), Date.now(), id);
+        return db.prepare('SELECT * FROM delivery_outbox WHERE id = ?').get(id);
+      })();
+    },
+    retryDeliveryOutbox(id, { error, nextAttemptAt }) {
+      db.prepare(`
+        UPDATE delivery_outbox
+        SET attempts = attempts + 1, last_error = ?, next_attempt_at = ?, updated_at = ?
+        WHERE id = ? AND state = 'pending'
+      `).run(String(error || '').slice(0, 1000), Number(nextAttemptAt) || Date.now(), Date.now(), id);
+      return db.prepare('SELECT * FROM delivery_outbox WHERE id = ?').get(id);
+    },
+    completeDeliveryOutbox(id) {
+      const now = Date.now();
+      db.prepare(`
+        UPDATE delivery_outbox
+        SET state = 'delivered', last_error = NULL, next_attempt_at = 0,
+            updated_at = ?, finished_at = ?
+        WHERE id = ? AND state = 'pending'
+      `).run(now, now, id);
+      return db.prepare('SELECT * FROM delivery_outbox WHERE id = ?').get(id);
+    },
+    failDeliveryOutbox(id, { error }) {
+      const now = Date.now();
+      db.prepare(`
+        UPDATE delivery_outbox
+        SET state = 'failed', attempts = attempts + 1, last_error = ?,
+            next_attempt_at = 0, updated_at = ?, finished_at = ?
+        WHERE id = ? AND state = 'pending'
+      `).run(String(error || '').slice(0, 1000), now, now, id);
+      return db.prepare('SELECT * FROM delivery_outbox WHERE id = ?').get(id);
+    },
+    deliveryOutboxStats() {
+      const rows = db.prepare('SELECT state, COUNT(*) AS count FROM delivery_outbox GROUP BY state').all();
+      const counts = Object.fromEntries(rows.map((row) => [row.state, Number(row.count)]));
+      return { pending: counts.pending || 0, delivered: counts.delivered || 0, failed: counts.failed || 0 };
     },
     listByStatus(status) { return db.prepare('SELECT * FROM runs WHERE status = ? ORDER BY priority DESC, created_at').all(status); },
     getRemoteOperation(runId, operation) {

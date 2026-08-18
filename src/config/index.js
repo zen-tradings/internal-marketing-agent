@@ -30,6 +30,11 @@ export function loadConfig(env = process.env) {
     exaSearchQps: positiveNumber(env.EXA_SEARCH_QPS, 8, 'EXA_SEARCH_QPS'),
   };
   const slackPostIntervalMs = positiveNumber(env.SLACK_POST_INTERVAL_MS, 1000, 'SLACK_POST_INTERVAL_MS');
+  const discordOpeningDigestEnabled = booleanFlag(env.DISCORD_OPENING_DIGEST_ENABLED);
+  const discordWebhookUrl = validatedDiscordWebhookUrl(env.DISCORD_OPENING_DIGEST_WEBHOOK_URL);
+  if (discordOpeningDigestEnabled && !discordWebhookUrl) {
+    throw new Error('DISCORD_OPENING_DIGEST_ENABLED=true 时必须配置 DISCORD_OPENING_DIGEST_WEBHOOK_URL');
+  }
   const workDir = env.WORK_DIR || '/srv/zen/wechat';
   const dbPath = env.DB_PATH || path.resolve(env.HOME || '.', 'zen-content-hub', 'runs.db');
   if (production) {
@@ -145,6 +150,13 @@ export function loadConfig(env = process.env) {
       editDebounceMs: nonNegativeInteger(env.SLACK_EDIT_DEBOUNCE_MS, 5000, 'SLACK_EDIT_DEBOUNCE_MS'),
       postIntervalMs: slackPostIntervalMs,
     },
+    discord: {
+      openingDigestEnabled: discordOpeningDigestEnabled,
+      webhookUrl: discordWebhookUrl,
+      expectedChannelId: discordSnowflake(env.DISCORD_OPENING_DIGEST_CHANNEL_ID, 'DISCORD_OPENING_DIGEST_CHANNEL_ID'),
+      timeoutMs: positiveNumber(env.DISCORD_WEBHOOK_TIMEOUT_MS, 30000, 'DISCORD_WEBHOOK_TIMEOUT_MS'),
+      maxAttempts: positiveIntegerOrThrow(env.DISCORD_WEBHOOK_MAX_ATTEMPTS, 8, 'DISCORD_WEBHOOK_MAX_ATTEMPTS'),
+    },
     documents: {
       googleDocsAccessToken: env.GOOGLE_DOCS_ACCESS_TOKEN || '',
       googleDocsClientId: env.GOOGLE_DOCS_CLIENT_ID || '',
@@ -229,6 +241,26 @@ export function loadConfig(env = process.env) {
 function positiveInteger(value) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function validatedDiscordWebhookUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  let url;
+  try { url = new URL(text); }
+  catch { throw new Error('DISCORD_OPENING_DIGEST_WEBHOOK_URL 无效'); }
+  const pathOk = /^\/api(?:\/v\d+)?\/webhooks\/\d{16,22}\/[A-Za-z0-9._-]{20,}$/.test(url.pathname);
+  if (url.protocol !== 'https:' || url.hostname !== 'discord.com' || !pathOk || url.username || url.password || url.search || url.hash) {
+    throw new Error('DISCORD_OPENING_DIGEST_WEBHOOK_URL 必须是官方 discord.com HTTPS webhook 地址');
+  }
+  return url.toString();
+}
+
+function discordSnowflake(value, label) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (!/^\d{16,22}$/.test(text)) throw new Error(`${label} 必须是 Discord channel snowflake`);
+  return text;
 }
 
 function positiveIntegerOrThrow(value, fallback, label) {

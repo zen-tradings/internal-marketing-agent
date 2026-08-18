@@ -49,6 +49,13 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal(c.documents.googleDocsRefreshToken, '');
   assert.equal(c.documents.githubToken, '');
   assert.equal(c.slack.editDebounceMs, 5000);
+  assert.deepEqual(c.discord, {
+    openingDigestEnabled: false,
+    webhookUrl: '',
+    expectedChannelId: '',
+    timeoutMs: 30000,
+    maxAttempts: 8,
+  });
   assert.equal(c.translation.browserEnabled, true);
   assert.equal(c.translation.maxPdfPages, 120);
   assert.equal(c.translation.maxSourceBytes, 50 * 1024 * 1024);
@@ -108,6 +115,37 @@ test('Opening Digest 微信同步只有显式开关才启用', () => {
     OPENROUTER_MODEL: 'global/writer',
     OPENING_DIGEST_MODEL: 'openai/gpt-oss-120b',
   }).openingDigest.model, 'openai/gpt-oss-120b');
+});
+
+test('Opening Digest Discord 同步要求官方 webhook，可锁定固定 channel id', () => {
+  const base = {
+    SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
+    WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec', OPENROUTER_API_KEY: 'or-key',
+  };
+  assert.throws(() => loadConfig({ ...base, DISCORD_OPENING_DIGEST_ENABLED: 'true' }), /DISCORD_OPENING_DIGEST_WEBHOOK_URL/);
+  assert.throws(() => loadConfig({
+    ...base,
+    DISCORD_OPENING_DIGEST_ENABLED: 'true',
+    DISCORD_OPENING_DIGEST_WEBHOOK_URL: 'https://example.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz',
+  }), /官方 discord\.com/);
+  assert.throws(() => loadConfig({
+    ...base,
+    DISCORD_OPENING_DIGEST_ENABLED: 'true',
+    DISCORD_OPENING_DIGEST_WEBHOOK_URL: 'https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz_1234567890?wait=true',
+  }), /官方 discord\.com/);
+  const configured = loadConfig({
+    ...base,
+    DISCORD_OPENING_DIGEST_ENABLED: 'true',
+    DISCORD_OPENING_DIGEST_WEBHOOK_URL: 'https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz_1234567890',
+    DISCORD_OPENING_DIGEST_CHANNEL_ID: '987654321098765432',
+    DISCORD_WEBHOOK_TIMEOUT_MS: '12000',
+    DISCORD_WEBHOOK_MAX_ATTEMPTS: '6',
+  }).discord;
+  assert.equal(configured.openingDigestEnabled, true);
+  assert.equal(configured.expectedChannelId, '987654321098765432');
+  assert.equal(configured.timeoutMs, 12000);
+  assert.equal(configured.maxAttempts, 6);
+  assert.doesNotMatch(JSON.stringify(configured), /example\.com/);
 });
 
 test('Opening Digest 财报 worker 默认复用 QDII Python 且允许独立覆盖', () => {

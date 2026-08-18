@@ -13,7 +13,7 @@ Slack direct-message prompt / channel @Bot / PDF or text attachment / cron
   → general tasks use the LatePost method; macro tasks combine Global Macro leadership with LatePost evidence discipline
   → general copy uses Qwen3.8-Max; Opening Digest English copy uses GPT-OSS 120B → GLM 5.2 sentence-level fact audit → deterministic citations
   → central template gate → fixed WeChat layout / fixed Customer.io Newsletter template
-  → ordinary channels create drafts only; `opening-digest` is the controlled send/schedule exception and may create a Chinese WeChat draft after email succeeds
+  → ordinary channels create drafts only; `opening-digest` is the controlled send/schedule exception and may create a Chinese WeChat draft and queue a Discord feed after email succeeds
   → QDII uses Slack replies as the primary result; failed terminal notifications enter the SQLite outbox for idempotent delivery after reconnection
 ```
 
@@ -47,6 +47,7 @@ scripts/
 ├── check-openrouter.mjs     Validate OpenRouter configuration
 ├── check-egress.mjs         Read-only external API connectivity checks
 ├── check-customerio.mjs     Read-only Newsletter audience and remote-state checks
+├── check-discord.mjs        Read-only Discord webhook target check; never posts
 ├── check-translation.mjs    Generate a local structured-translation acceptance draft
 ├── requeue-translation.mjs  Safely recover failed translations with checkpoints
 ├── requeue-analysis-gate.mjs Safely recover V2 analyses blocked by legacy code gates
@@ -132,7 +133,7 @@ curl --fail http://127.0.0.1:8787/health
 curl --fail http://127.0.0.1:8787/ready
 ```
 
-`/health` means the process and local state are readable. `/ready` additionally requires an active Slack Socket Mode connection. Both expose only aggregate queue and resource-gate counts (`active`, `pending`, `waiting`, and limits), never task text, user/channel IDs, or credentials. A transient Slack outage does not block persisted tasks: success, failure, cancellation, clarification, and core QDII replies enter the SQLite outbox and are delivered according to the task's current terminal state after reconnection. Stale notifications are discarded, and notification failures never rewrite a completed draft as failed.
+`/health` means the process and local state are readable. `/ready` additionally requires an active Slack Socket Mode connection. Both expose only aggregate queue, resource-gate, and delivery-outbox counts (`active`, `pending`, `waiting`, and limits), never task text, user/channel IDs, webhook URLs, or credentials. A transient Slack outage does not block persisted tasks: success, failure, cancellation, clarification, and core QDII replies enter the SQLite outbox and are delivered according to the task's current terminal state after reconnection. Stale notifications are discarded, and notification failures never rewrite a completed draft as failed.
 
 Production remains one Node.js process and one SQLite WAL database. The current 1 vCPU/2 GB production host runs at `MAX_CONCURRENCY=1`; it has been validated for up to two task slots, while a third task stays queued. Opening Digest has non-preemptive queue priority. Browser work, WeChat writes, and Customer.io writes remain serialized; OpenRouter is capped at two in-flight calls, Exa Search at 8 QPS, and Slack posts at one per channel per second. The application default remains one task for unvalidated environments, and production startup rejects values above two.
 
@@ -257,9 +258,11 @@ Every real draft created by the Bot must use a centrally registered fixed templa
 
 With `OPENING_DIGEST_WECHAT_ENABLED=true`, `opening-digest` first sends or schedules the English Customer.io email, then uses the same frozen quote, earnings-preview, copy, and OIC payload to produce a complete Simplified Chinese translation and create a `Zen Research日报 · YYYY-MM-DD` WeChat draft. The English editorial section contains 3–5 `Today's catalysts`, each no more than 40 visible English words. `Market read` is one 3–5-sentence paragraph of at most 80 words with an overview-detail-(optional summary) structure.
 
+With `DISCORD_OPENING_DIGEST_ENABLED=true`, only the formal U.S.-equity-session cron run queues the same frozen English payload to the Incoming Webhook configured by `DISCORD_OPENING_DIGEST_WEBHOOK_URL`; manual Slack acceptance runs never post to Discord. The feed uses mention-free rich embeds for the nine-cell market snapshot, complete linked editorial copy, and all 20 OIC rows, splitting content deterministically to stay within Discord limits. `DISCORD_OPENING_DIGEST_CHANNEL_ID` optionally locks the webhook to `#newsletter-feed`. Each successful message ID is committed to SQLite before the next post. Retryable network, 429, and 5xx failures survive restarts and honor `Retry-After`; a terminal failure leaves the Customer.io result `done` and emits a dedicated Slack warning. Run `npm run check:discord` to verify the webhook and optional channel lock without posting a message.
+
 After severe fact review, overlong blocks receive one local compression and semantic review. A changed link, number, ticker, date, or time—or failed review—reverts that block to its source and records only trace diagnostics; it does not block sending. The WeChat draft fixes `zen-wechat/zen-trading@6`, a nine-cell quote grid, and an OIC 20×8 two-row record block. Each entry in the earnings preview is rendered as its own visual row on WeChat; the English email source remains unchanged. The Chinese WeChat renderer removes parenthetical source citations entirely; linked headlines, company names, and tickers that carry sentence meaning remain as unlinked plain text. WeChat translation, creation, or readback failures never undo the email; the main task completes from the email result and sends a precise Slack warning.
 
-Formal Opening Digest Customer.io broadcasts use the internal name `Zen Opening Digest · YYYY-MM-DD` and recipient subject `Zen Opening Digest · Month D, YYYY`. Manual Slack `opening-digest` triggers are isolated test runs and add a `[TEST]` prefix without a run ID in the recipient subject. The Customer.io internal name and cover asset keep a unique ID, and the WeChat title carries `[测试]`, so a test cannot discover, reuse, or overwrite the day's formal draft. Only weekday cron may create or reuse an unmarked formal Opening Digest.
+Formal Opening Digest Customer.io broadcasts use the internal name `Zen Opening Digest · YYYY-MM-DD` and recipient subject `Zen Opening Digest · Month D, YYYY`. Manual Slack `opening-digest` triggers are isolated test runs and add a `[TEST]` prefix without a run ID in the recipient subject. The Customer.io internal name and cover asset keep a unique ID, and the WeChat title carries `[测试]`, so a test cannot discover, reuse, or overwrite the day's formal draft. Manual tests never enter `#newsletter-feed`; only weekday cron may create or reuse an unmarked formal Opening Digest and queue Discord delivery.
 
 Template redesigns must update the centralized implementation, increment registry versions, and synchronize channel tests, rendering goldens, and this README. Never bypass the template in one task. Titles, body, links, edition, and audience fill template slots without modifying the template itself.
 

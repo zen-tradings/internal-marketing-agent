@@ -18,7 +18,9 @@
 
 英文邮件仍是主投递，Opening Digest 专用 Customer.io 模板为 `zen-customerio/zen-research@6`。正式邮件的 Customer.io 后台名称为 `Zen Opening Digest · YYYY-MM-DD`，收件主题为 `Zen Opening Digest · Month D, YYYY`；人工验收邮件保留 `[TEST]` 前缀。英文主稿由 `OPENING_DIGEST_MODEL` 专属配置（生产为 `openai/gpt-oss-120b`）；Kimi 仅负责规划，GLM 负责事实审核与局部压缩，中文微信直译仍使用全局 Qwen 正文模型。`OPENING_DIGEST_WECHAT_ENABLED=true` 时，Customer.io 成功发送或确认排期后才执行微信同步：渠道冻结最终英文 payload，不重新采集行情、财报日历或 OIC；专用结构化翻译按块校验顺序、数字、Ticker、时间、URL 与机构品牌，最多两轮局部修复。英文邮件保留完整来源链接；中文微信在最终渲染时删除括号式来源引用的来源名和 URL，承担句子语义的标题、公司名或 Ticker 链接文字则只去链接并保留为纯文本。正式微信稿标题为 `Zen Research日报 · YYYY-MM-DD`，验收稿为 `[测试] Zen 开市日报 · MM-DD`，正文采用 `zen-wechat/zen-trading@6`、固定头图/问卷/二维码封底、九格行情及 20 个两行 OIC 记录块；财报预告的每个 ticker 在微信草稿中独占一行。创建后以官方 `draft/get` 回读；前两次结构或字段不一致会删除重建，第三次保留并精确告警；回读不可用时保留唯一稿并标记 `unverified`。微信异常不会改变邮件的 `done` 结果。
 
-Slack 中人工触发 `opening-digest` 始终作为隔离测试运行。收件人主题为 `[TEST] Zen Opening Digest · Month D, YYYY`，不显示 run ID；Customer.io 后台名称和封面资源名仍使用 run ID 生成唯一测试身份，微信标题继续使用 `[测试]`。它不会与当天正式稿同名，也不会复用或改写正式稿。只有 cron 触发使用正式身份，防止人工测试意外成为正式发送。
+`DISCORD_OPENING_DIGEST_ENABLED=true` 时，只有正式 cron 在 Customer.io 成功发送或确认排期后，才把同一冻结英文 payload 加入 SQLite delivery outbox，自动发往 `#newsletter-feed`。Discord 以禁用 mentions 的 rich embeds 完整发布九格行情、带来源链接的正文和 OIC 20 行，并在每条成功后持久化 Discord message ID。网络、429 和 5xx 依 `Retry-After`/指数退避补发，进程重启后从下一条续传；最终失败仅发专用 Slack warning，邮件仍保持 `done`。
+
+Slack 中人工触发 `opening-digest` 始终作为隔离测试运行。收件人主题为 `[TEST] Zen Opening Digest · Month D, YYYY`，不显示 run ID；Customer.io 后台名称和封面资源名仍使用 run ID 生成唯一测试身份，微信标题继续使用 `[测试]`。它不会与当天正式稿同名，也不会复用或改写正式稿，且永不进入 Discord `#newsletter-feed`。只有 cron 触发使用正式身份，防止人工测试意外成为正式发送。
 
 生产环境在美东交易日 10:15 生成 Opening Digest；若完成时距 10:30 仍超过 Customer.io 要求的 5 分钟最小提前量，则排期到 10:30，否则立即发送。这里的“opening”是开盘后摘要，不是 9:30 开盘铃时点。
 
@@ -30,7 +32,7 @@ Slack 中人工触发 `opening-digest` 始终作为隔离测试运行。收件�
 
 API 创建的邮件会被 Customer.io workspace layout 包裹。Opening Digest 正文不自行加入退订链接，渲染前会本地删除模型意外输出的 `{% unsubscribe_url %}`。发送链路不再调用 Customer.io `/contents` 读回接口，workspace layout 唯一负责法定退订链接。
 
-所有可继续发送的降级只写入 `research-trace.json`，不发 Slack warning。只有硬门禁或客观执行失败使用现有 Slack failure 通知。
+所有可继续发送的内容降级只写入 `research-trace.json`，不发 Slack warning。只有硬门禁或 Customer.io 客观执行失败使用 Slack failure；邮件成功后的微信异常与 Discord 持久补发最终失败使用精确 Slack warning，不改写邮件 `done` 结果。
 - newsletter ID `1` 的首次尝试因退订链接误用变量语法，在 Customer.io 渲染阶段 3 条全部失败；没有错误邮件离开平台。保留该记录用于审计，不复用或扩容。
 - 内部分组目前只包含 Customer.io 中已经存在的 3 位内部人员。扩充体验名单时，先把人员加入该手工 segment，再回到 Review 页核对人数。
 

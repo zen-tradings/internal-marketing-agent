@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TARGET_FILE = path.join(REPO_ROOT, 'deploy', 'target.env');
+const LOCAL_ENV_FILE = path.join(REPO_ROOT, '.env');
 const DEFAULT_MODEL = 'qwen/qwen3.8-max';
 const DEFAULT_REASONING = 'high';
 const DEFAULT_PLANNER_MODEL = 'moonshotai/kimi-k3';
@@ -42,6 +43,11 @@ export const DEPLOY_MANAGED_ENV_KEYS = Object.freeze([
   'QDII_MAX_TASK_DOWNLOAD_BYTES',
   'QDII_MAX_REPORT_CANDIDATES',
   'CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID',
+  'DISCORD_OPENING_DIGEST_ENABLED',
+  'DISCORD_OPENING_DIGEST_WEBHOOK_URL',
+  'DISCORD_OPENING_DIGEST_CHANNEL_ID',
+  'DISCORD_WEBHOOK_TIMEOUT_MS',
+  'DISCORD_WEBHOOK_MAX_ATTEMPTS',
 ]);
 
 const DEPLOY_MANAGED_ENV_PATTERN = `^(${DEPLOY_MANAGED_ENV_KEYS.join('|')})=`;
@@ -69,10 +75,12 @@ export function parseDeployArgs(argv) {
     openingDigestModel: undefined,
     openingDigestWechatEnabled: undefined,
     openingDigestSegmentId: 0,
+    syncDiscordConfig: false,
   };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === '--activate') parsed.activate = true;
+    else if (arg === '--sync-discord-config') parsed.syncDiscordConfig = true;
     else if (['--commit', '--target', '--model', '--reasoning', '--planner-model', '--planner-reasoning', '--max-concurrency', '--opening-digest-model', '--opening-digest-wechat-enabled', '--opening-digest-segment-id'].includes(arg)) {
       const value = argv[++index];
       if (!value) throw new Error(`${arg} requires a value`);
@@ -81,6 +89,33 @@ export function parseDeployArgs(argv) {
     } else throw new Error(`Unknown argument: ${arg}`);
   }
   return parsed;
+}
+
+export function loadDiscordDeployConfig({ envFile = LOCAL_ENV_FILE } = {}) {
+  if (!fs.existsSync(envFile)) throw new Error('Missing local .env for --sync-discord-config');
+  const env = dotenv.parse(fs.readFileSync(envFile));
+  const enabled = String(env.DISCORD_OPENING_DIGEST_ENABLED || '').trim().toLowerCase();
+  const webhookUrl = String(env.DISCORD_OPENING_DIGEST_WEBHOOK_URL || '').trim();
+  const channelId = String(env.DISCORD_OPENING_DIGEST_CHANNEL_ID || '').trim();
+  const timeoutMs = String(env.DISCORD_WEBHOOK_TIMEOUT_MS || '30000').trim();
+  const maxAttempts = String(env.DISCORD_WEBHOOK_MAX_ATTEMPTS || '8').trim();
+  let url;
+  try { url = new URL(webhookUrl); } catch { throw new Error('Local Discord webhook URL is invalid'); }
+  const pathOk = /^\/api(?:\/v\d+)?\/webhooks\/\d{16,22}\/[A-Za-z0-9._-]{20,}$/.test(url.pathname);
+  if (enabled !== 'true') throw new Error('Local DISCORD_OPENING_DIGEST_ENABLED must be true before syncing');
+  if (url.protocol !== 'https:' || url.hostname !== 'discord.com' || !pathOk || url.username || url.password || url.search || url.hash) {
+    throw new Error('Local Discord webhook URL must be an official discord.com HTTPS webhook');
+  }
+  if (!/^\d{16,22}$/.test(channelId)) throw new Error('Local Discord channel lock must be a snowflake before syncing');
+  if (!/^\d+$/.test(timeoutMs) || Number(timeoutMs) <= 0) throw new Error('Local Discord timeout must be a positive integer');
+  if (!/^\d+$/.test(maxAttempts) || Number(maxAttempts) <= 0) throw new Error('Local Discord max attempts must be a positive integer');
+  return {
+    DISCORD_OPENING_DIGEST_ENABLED: 'true',
+    DISCORD_OPENING_DIGEST_WEBHOOK_URL: url.toString(),
+    DISCORD_OPENING_DIGEST_CHANNEL_ID: channelId,
+    DISCORD_WEBHOOK_TIMEOUT_MS: timeoutMs,
+    DISCORD_WEBHOOK_MAX_ATTEMPTS: maxAttempts,
+  };
 }
 
 export function loadDeployTarget({ target = '', targetFile = TARGET_FILE } = {}) {
@@ -173,7 +208,7 @@ process.stdin.on("end", () => {
   console.log("queue_active=" + Number(value.queue?.active || 0));
   console.log("queue_pending=" + Number(value.queue?.pending || 0));
 });'
-for key in MAX_CONCURRENCY BROWSER_CONCURRENCY WECHAT_WRITE_CONCURRENCY CUSTOMERIO_WRITE_CONCURRENCY OPENROUTER_CONCURRENCY EXA_SEARCH_QPS SLACK_POST_INTERVAL_MS OPENROUTER_MODEL OPENROUTER_ROUTER_MODEL OPENROUTER_PLANNER_MODEL OPENROUTER_REVIEW_MODEL OPENROUTER_REASONING_EFFORT OPENROUTER_PLANNER_REASONING_EFFORT OPENROUTER_REVIEW_REASONING_EFFORT OPENROUTER_ROUTER_REASONING_EFFORT CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID OPENING_DIGEST_MODEL OPENING_DIGEST_WECHAT_ENABLED; do
+for key in MAX_CONCURRENCY BROWSER_CONCURRENCY WECHAT_WRITE_CONCURRENCY CUSTOMERIO_WRITE_CONCURRENCY OPENROUTER_CONCURRENCY EXA_SEARCH_QPS SLACK_POST_INTERVAL_MS OPENROUTER_MODEL OPENROUTER_ROUTER_MODEL OPENROUTER_PLANNER_MODEL OPENROUTER_REVIEW_MODEL OPENROUTER_REASONING_EFFORT OPENROUTER_PLANNER_REASONING_EFFORT OPENROUTER_REVIEW_REASONING_EFFORT OPENROUTER_ROUTER_REASONING_EFFORT CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID OPENING_DIGEST_MODEL OPENING_DIGEST_WECHAT_ENABLED DISCORD_OPENING_DIGEST_ENABLED DISCORD_OPENING_DIGEST_CHANNEL_ID DISCORD_WEBHOOK_TIMEOUT_MS DISCORD_WEBHOOK_MAX_ATTEMPTS; do
   value=$(sudo awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
   printf '%s=%s\n' "env_$key" "$value"
 done
@@ -189,6 +224,8 @@ opening_digest_model=$6
 opening_digest_wechat_enabled=$7
 opening_digest_segment_id=$8
 max_concurrency=$9
+shift 9
+discord_config_path=$1
 short=$(printf '%.12s' "$sha")
 active=/opt/zen-content-hub
 stage="/opt/zen-content-hub.release-$short"
@@ -205,11 +242,13 @@ switch_started=0
 env_changed=0
 backup_helper_changed=0
 backup_helper_had_previous=0
+discord_env_before=$(sudo awk '$0 ~ /^DISCORD_(OPENING_DIGEST|WEBHOOK)_/' "$env_file" | sha256sum | awk '{ print $1 }')
 phase=remote-preconditions
 env_without_managed_before=$(sudo awk '$0 !~ /${DEPLOY_MANAGED_ENV_PATTERN}/' "$env_file" | sha256sum | awk '{ print $1 }')
 
 restore_on_error() {
   status=$?
+  if [ "$discord_config_path" != "-" ]; then rm -f "$discord_config_path" || true; fi
   printf 'deployment_failed_phase=%s\\n' "$phase" >&2
   if [ "$switch_started" -eq 1 ]; then
     sudo systemctl stop zen-content-hub || true
@@ -350,6 +389,28 @@ update_env QDII_MAX_REPORT_CANDIDATES 3
 if [ "$opening_digest_segment_id" -gt 0 ]; then
   update_env CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID "$opening_digest_segment_id"
 fi
+if [ "$discord_config_path" != "-" ]; then
+  test -f "$discord_config_path"
+  chmod 0600 "$discord_config_path"
+  temporary=$(mktemp)
+  sudo node - "$env_file" "$discord_config_path" "$temporary" <<'NODE'
+const fs = require('node:fs');
+const [envFile, configFile, outputFile] = process.argv.slice(2);
+const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+const keys = Object.keys(config);
+const retained = fs.readFileSync(envFile, 'utf8').split(/\r?\n/)
+  .filter((line) => !keys.some((key) => line.startsWith(key + '=')));
+while (retained.at(-1) === '') retained.pop();
+for (const key of keys) retained.push(key + '=' + config[key]);
+fs.writeFileSync(outputFile, retained.join('\n') + '\n', { mode: 0o600 });
+NODE
+  sudo install -o root -g zenbot -m 0640 "$temporary" "$env_file.next-$short"
+  rm -f "$temporary"
+  sudo mv "$env_file.next-$short" "$env_file"
+else
+  discord_env_after=$(sudo awk '$0 ~ /^DISCORD_(OPENING_DIGEST|WEBHOOK)_/' "$env_file" | sha256sum | awk '{ print $1 }')
+  test "$discord_env_after" = "$discord_env_before"
+fi
 env_without_managed_after=$(sudo awk '$0 !~ /${DEPLOY_MANAGED_ENV_PATTERN}/' "$env_file" | sha256sum | awk '{ print $1 }')
 test "$env_without_managed_after" = "$env_without_managed_before"
 
@@ -399,10 +460,26 @@ test "$(sudo awk -F= '$1 == "QDII_WORKER_PATH" { print $2 }' "$env_file" | tail 
 if [ "$opening_digest_segment_id" -gt 0 ]; then
   test "$(sudo awk -F= '$1 == "CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID" { print $2 }' "$env_file" | tail -n 1)" = "$opening_digest_segment_id"
 fi
+if [ "$discord_config_path" != "-" ]; then
+  sudo node - "$env_file" "$discord_config_path" <<'NODE'
+const fs = require('node:fs');
+const [envFile, configFile] = process.argv.slice(2);
+const expected = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+const actual = Object.fromEntries(fs.readFileSync(envFile, 'utf8').split(/\r?\n/).filter(Boolean).map((line) => {
+  const separator = line.indexOf('=');
+  return [line.slice(0, separator), line.slice(separator + 1)];
+}));
+for (const [key, value] of Object.entries(expected)) {
+  if (actual[key] !== value) process.exit(1);
+}
+NODE
+  sudo -u zenbot env DOTENV_CONFIG_PATH="$env_file" node "$active/scripts/check-discord.mjs" >/dev/null
+fi
 test -x /opt/zen-content-hub/.venv/bin/python
 
 trap - ERR
 rm -f "$archive"
+if [ "$discord_config_path" != "-" ]; then rm -f "$discord_config_path"; fi
 printf 'deployed_commit=%s\n' "$sha"
 printf 'previous_commit=%s\n' "$old_sha"
 printf 'rollback=%s\n' "$rollback"
@@ -440,19 +517,25 @@ export function assertLocalRelease(commit, run = runCommand) {
   run('git', ['merge-base', '--is-ancestor', commit, '@{upstream}'], { quiet: true });
 }
 
-export function activateRemote({ target, commit, model, reasoning, plannerModel, plannerReasoning, maxConcurrency = 2, openingDigestModel = DEFAULT_OPENING_DIGEST_MODEL, openingDigestWechatEnabled, openingDigestSegmentId = 0 }, run = runCommand) {
+export function activateRemote({ target, commit, model, reasoning, plannerModel, plannerReasoning, maxConcurrency = 2, openingDigestModel = DEFAULT_OPENING_DIGEST_MODEL, openingDigestWechatEnabled, openingDigestSegmentId = 0, discordConfig = null }, run = runCommand) {
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-content-hub-deploy-'));
   const short = commit.slice(0, 12);
   const archive = path.join(temporaryDir, `zen-content-hub-${short}.tar.gz`);
   const remoteScript = `/tmp/zen-content-hub-activate-${short}.sh`;
+  const discordConfigFile = path.join(temporaryDir, `discord-config-${short}.json`);
+  const remoteDiscordConfig = discordConfig ? `/tmp/zen-content-hub-discord-${short}.json` : '-';
   const encodedScript = Buffer.from(ACTIVATE_SCRIPT, 'utf8').toString('base64');
   try {
     run('git', ['archive', '--format=tar.gz', `--output=${archive}`, commit]);
     run('scp', [...SSH_OPTIONS, archive, `${target}:/tmp/zen-content-hub-${short}.tar.gz`]);
+    if (discordConfig) {
+      fs.writeFileSync(discordConfigFile, JSON.stringify(discordConfig), { mode: 0o600 });
+      run('scp', [...SSH_OPTIONS, discordConfigFile, `${target}:${remoteDiscordConfig}`]);
+    }
     return run('ssh', [
       ...SSH_OPTIONS,
       target,
-      `printf '%s' '${encodedScript}' | base64 -d > ${remoteScript} && bash ${remoteScript} ${commit} ${model} ${reasoning} ${plannerModel} ${plannerReasoning} ${openingDigestModel} ${openingDigestWechatEnabled} ${openingDigestSegmentId} ${maxConcurrency}; status=$?; rm -f ${remoteScript}; exit $status`,
+      `printf '%s' '${encodedScript}' | base64 -d > ${remoteScript} && bash ${remoteScript} ${commit} ${model} ${reasoning} ${plannerModel} ${plannerReasoning} ${openingDigestModel} ${openingDigestWechatEnabled} ${openingDigestSegmentId} ${maxConcurrency} ${remoteDiscordConfig}; status=$?; rm -f ${remoteScript} ${remoteDiscordConfig === '-' ? '' : remoteDiscordConfig}; exit $status`,
     ], { quiet: true });
   } finally {
     fs.rmSync(temporaryDir, { recursive: true, force: true });
@@ -465,6 +548,7 @@ export async function main(argv = process.argv.slice(2)) {
   const commit = resolveCommit(options.commit);
   validateDeployInputs({ ...options, target, commit });
   assertLocalRelease(commit);
+  const discordConfig = options.syncDiscordConfig ? loadDiscordDeployConfig() : null;
   const preflight = preflightRemote(target);
   console.log(JSON.stringify({ mode: options.activate ? 'activate' : 'preflight', target, commit, ...preflight }, null, 2));
   if (!options.activate) {
@@ -502,6 +586,7 @@ export async function main(argv = process.argv.slice(2)) {
     openingDigestModel,
     openingDigestWechatEnabled,
     openingDigestSegmentId: options.openingDigestSegmentId,
+    discordConfig,
   });
   console.log(output.trim());
 }

@@ -6,10 +6,11 @@ export async function deliverOrQueueNotification({
   notify,
   payload,
 }) {
+  const notifierMethod = notifierMethodFor(method);
   try {
-    if (!notifier || typeof notifier[method] !== 'function') throw new Error('Slack notifier is not ready');
-    const result = await notifier[method](notify, payload);
-    if (method === 'respond' && result?.responseTs) store.setSlackResponseTs?.(runId, result.responseTs);
+    if (!notifier || typeof notifier[notifierMethod] !== 'function') throw new Error('Slack notifier is not ready');
+    const result = await notifier[notifierMethod](notify, payload);
+    if (notifierMethod === 'respond' && result?.responseTs) store.setSlackResponseTs?.(runId, result.responseTs);
     store.markNotificationSentByRun?.(runId, method, Date.now());
     return { delivered: true, result };
   } catch (error) {
@@ -37,9 +38,10 @@ export async function flushNotificationOutbox({ store, notifier, now = Date.now(
       if (disposition === 'defer') continue;
       const notify = JSON.parse(row.notify_json || '{}');
       const payload = JSON.parse(row.payload_json || '{}');
-      if (typeof notifier[row.method] !== 'function') throw new Error(`未知 notifier 方法:${row.method}`);
-      const result = await notifier[row.method](notify, payload);
-      if (row.method === 'respond' && result?.responseTs) store.setSlackResponseTs?.(row.run_id, result.responseTs);
+      const notifierMethod = notifierMethodFor(row.method);
+      if (typeof notifier[notifierMethod] !== 'function') throw new Error(`未知 notifier 方法:${row.method}`);
+      const result = await notifier[notifierMethod](notify, payload);
+      if (notifierMethod === 'respond' && result?.responseTs) store.setSlackResponseTs?.(row.run_id, result.responseTs);
       store.markNotificationSent(row.id, Date.now());
       delivered += 1;
     } catch (error) {
@@ -58,20 +60,25 @@ export async function flushNotificationOutbox({ store, notifier, now = Date.now(
 function notificationDisposition(method, run) {
   if (!run) return 'discard';
   const terminalStatuses = new Set(['done', 'failed', 'cancelled', 'needs_input']);
+  const notifierMethod = notifierMethodFor(method);
   const expectedStatus = {
     success: 'done',
     failure: 'failed',
     cancelled: 'cancelled',
     needsInput: 'needs_input',
-  }[method];
+  }[notifierMethod];
   if (expectedStatus) {
     if (run.status === expectedStatus) return 'send';
     return terminalStatuses.has(run.status) ? 'discard' : 'defer';
   }
-  if (method === 'respond') {
+  if (notifierMethod === 'respond') {
     if (run.slack_response_ts) return 'discard';
     if (['done', 'failed'].includes(run.status)) return 'send';
     return terminalStatuses.has(run.status) ? 'discard' : 'defer';
   }
   return 'send';
+}
+
+function notifierMethodFor(method) {
+  return String(method || '').split(':', 1)[0];
 }

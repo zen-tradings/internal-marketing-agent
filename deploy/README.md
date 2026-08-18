@@ -25,7 +25,7 @@ npm run deploy:digitalocean
 After reviewing the preflight output, activate the exact pushed commit:
 
 ```bash
-npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --max-concurrency 1 --opening-digest-model openai/gpt-oss-120b --opening-digest-wechat-enabled true --activate
+npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --max-concurrency 1 --opening-digest-model openai/gpt-oss-120b --opening-digest-wechat-enabled true --sync-discord-config --activate
 ```
 
 需要同时切换 Opening Digest 的受控测试受众时，必须通过同一事务化部署命令传入已在 Customer.io 核验的 segment ID；部署失败会连同受保护环境文件一起回滚：
@@ -102,6 +102,15 @@ OPENROUTER_PLANNER_REASONING_EFFORT=high
 OPENROUTER_REVIEW_REASONING_EFFORT=none
 OPENROUTER_ROUTER_REASONING_EFFORT=none
 OPENING_DIGEST_MODEL=openai/gpt-oss-120b
+# Full English multi-post delivery for formal cron runs only. Keep the webhook
+# secret in this root-owned environment file; never commit it.
+DISCORD_OPENING_DIGEST_ENABLED=false
+DISCORD_OPENING_DIGEST_WEBHOOK_URL=
+# Optional target lock. Set this to the #newsletter-feed channel snowflake
+# after the read-only check below reports it.
+DISCORD_OPENING_DIGEST_CHANNEL_ID=
+DISCORD_WEBHOOK_TIMEOUT_MS=30000
+DISCORD_WEBHOOK_MAX_ATTEMPTS=8
 ANALYSIS_PIPELINE_VERSION=v2
 ANALYSIS_SEARCH_MAX_QUERIES=8
 ANALYSIS_RECENT_WINDOW_DAYS=60
@@ -244,6 +253,25 @@ sudo install -d -o root -g zenbot -m 0750 /etc/zen-content-hub
 sudo install -o root -g zenbot -m 0640 .env.example /etc/zen-content-hub/zen-content-hub.env
 sudo chown -R zenbot:zenbot /opt/zen-content-hub
 ```
+
+Before enabling Discord delivery, put the webhook URL in the protected service
+environment and run this read-only target check from the active release:
+
+```bash
+cd /opt/zen-content-hub
+sudo -u zenbot env DOTENV_CONFIG_PATH=/etc/zen-content-hub/zen-content-hub.env npm run check:discord
+```
+
+The command fetches webhook metadata but does not post a message. Copy the
+reported `channel_id` into `DISCORD_OPENING_DIGEST_CHANNEL_ID`, rerun the check,
+then set `DISCORD_OPENING_DIGEST_ENABLED=true`. On the first release, add
+`--sync-discord-config` to the normal activation command. It reads the five
+Discord values only from the gitignored local `.env`, transfers them in a
+permission-restricted temporary file, validates the live webhook without
+posting, and removes the file. Later deployments preserve those values unless
+the flag is explicitly supplied again; the webhook secret is never accepted as
+a command-line argument or printed. Restart only through the normal deployment
+flow so the single-instance rule remains intact.
 
 Install and start the unit after reviewing all paths and configuration:
 

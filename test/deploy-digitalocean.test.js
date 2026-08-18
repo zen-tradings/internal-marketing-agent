@@ -9,6 +9,7 @@ import {
   DEPLOY_MANAGED_ENV_KEYS,
   PREFLIGHT_SCRIPT,
   loadDeployTarget,
+  loadDiscordDeployConfig,
   parseDeployArgs,
   parsePreflight,
   validateDeployInputs,
@@ -30,12 +31,14 @@ test('DigitalOcean deploy defaults to read-only preflight and preserves Opening 
     openingDigestModel: undefined,
     openingDigestWechatEnabled: undefined,
     openingDigestSegmentId: 0,
+    syncDiscordConfig: false,
   });
   assert.equal(parseDeployArgs(['--activate', '--commit', SHA]).activate, true);
   assert.equal(parseDeployArgs(['--opening-digest-segment-id', '19']).openingDigestSegmentId, '19');
   assert.equal(parseDeployArgs(['--opening-digest-wechat-enabled', 'true']).openingDigestWechatEnabled, 'true');
   assert.equal(parseDeployArgs(['--opening-digest-model', 'openai/gpt-oss-20b']).openingDigestModel, 'openai/gpt-oss-20b');
   assert.equal(parseDeployArgs(['--max-concurrency', '1']).maxConcurrency, '1');
+  assert.equal(parseDeployArgs(['--sync-discord-config']).syncDiscordConfig, true);
   assert.throws(() => parseDeployArgs(['--unknown']), /Unknown argument/);
 });
 
@@ -62,13 +65,36 @@ test('embedded remote preflight and activation scripts are valid Bash', () => {
   assert.match(ACTIVATE_SCRIPT, /QDII_PYTHON_PATH \/opt\/zen-content-hub\/\.venv\/bin\/python/);
   assert.match(ACTIVATE_SCRIPT, /QDII_WORKER_PATH \/opt\/zen-content-hub\/python\/qdii_worker\.py/);
   assert.match(ACTIVATE_SCRIPT, /update_env CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID/);
+  assert.match(ACTIVATE_SCRIPT, /check-discord\.mjs/);
   assert.match(ACTIVATE_SCRIPT, /install -o root -g root -m 0755 "\$stage\/deploy\/zen-content-hub-backup" "\$backup_helper"/);
   assert.match(ACTIVATE_SCRIPT, /backup_helper_changed/);
   assert.match(ACTIVATE_SCRIPT, /deployment_failed_phase=/);
   assert.match(ACTIVATE_SCRIPT, /phase=stage-validation/);
+  assert.match(ACTIVATE_SCRIPT, /discord_env_before=/);
+  assert.match(ACTIVATE_SCRIPT, /discord_env_after=/);
+  assert.match(ACTIVATE_SCRIPT, /test "\$discord_env_after" = "\$discord_env_before"/);
   assert.match(ACTIVATE_SCRIPT, /\[ "\$switch_started" -eq 0 \] && \[ -d "\$stage" \]/);
   assert.match(ACTIVATE_SCRIPT, /find \/var\/lib\/zen-content-hub\/backups[^\n]+backup-\*\.sha256/);
   assert.match(ACTIVATE_SCRIPT, /sha256sum -c "\$latest_backup_manifest"/);
+});
+
+test('Discord deployment config is loaded from a gitignored env file without a CLI secret', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'discord-deploy-config-'));
+  const envFile = path.join(directory, '.env');
+  fs.writeFileSync(envFile, [
+    'DISCORD_OPENING_DIGEST_ENABLED=true',
+    'DISCORD_OPENING_DIGEST_WEBHOOK_URL=https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz_1234567890',
+    'DISCORD_OPENING_DIGEST_CHANNEL_ID=987654321098765432',
+    'DISCORD_WEBHOOK_TIMEOUT_MS=12000',
+    'DISCORD_WEBHOOK_MAX_ATTEMPTS=6',
+  ].join('\n'));
+  const config = loadDiscordDeployConfig({ envFile });
+  assert.equal(config.DISCORD_OPENING_DIGEST_ENABLED, 'true');
+  assert.equal(config.DISCORD_OPENING_DIGEST_CHANNEL_ID, '987654321098765432');
+  assert.equal(config.DISCORD_WEBHOOK_TIMEOUT_MS, '12000');
+  assert.throws(() => loadDiscordDeployConfig({ envFile: path.join(directory, 'missing') }), /Missing local \.env/);
+  fs.writeFileSync(envFile, 'DISCORD_OPENING_DIGEST_ENABLED=false\n');
+  assert.throws(() => loadDiscordDeployConfig({ envFile }), /webhook URL|must be true/);
 });
 
 test('deployment environment guard permits every managed update and rejects unrelated drift', () => {
