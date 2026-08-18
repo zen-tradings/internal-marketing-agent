@@ -68,6 +68,12 @@ test('embedded remote preflight and activation scripts are valid Bash', () => {
   assert.match(ACTIVATE_SCRIPT, /check-discord\.mjs/);
   assert.match(ACTIVATE_SCRIPT, /install -o root -g root -m 0755 "\$stage\/deploy\/zen-content-hub-backup" "\$backup_helper"/);
   assert.match(ACTIVATE_SCRIPT, /backup_helper_changed/);
+  assert.match(ACTIVATE_SCRIPT, /deployment_failed_phase=/);
+  assert.match(ACTIVATE_SCRIPT, /phase=stage-validation/);
+  assert.match(ACTIVATE_SCRIPT, /discord_env_before=/);
+  assert.match(ACTIVATE_SCRIPT, /discord_env_after=/);
+  assert.match(ACTIVATE_SCRIPT, /test "\$discord_env_after" = "\$discord_env_before"/);
+  assert.match(ACTIVATE_SCRIPT, /\[ "\$switch_started" -eq 0 \] && \[ -d "\$stage" \]/);
   assert.match(ACTIVATE_SCRIPT, /find \/var\/lib\/zen-content-hub\/backups[^\n]+backup-\*\.sha256/);
   assert.match(ACTIVATE_SCRIPT, /sha256sum -c "\$latest_backup_manifest"/);
 });

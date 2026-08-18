@@ -929,6 +929,15 @@ test('K/M/B/T、中文数量单位、千分位和百分比只要数值等价即�
   assert.match(renderTranslatedDocument(translated), /5 万.*1\.24 亿.*8,400.*100%/);
 });
 
+test('金融缩写 bn 与中文亿元金额按数值等价校验', () => {
+  const unit = {
+    id: 'b000001', kind: 'list_item',
+    text: 'Nvidia invested $1.5 bn in SB Energy for an Ohio AI data center.',
+  };
+  const assessment = assessTranslationUnit(unit, '英伟达向 SB Energy 投资 15 亿美元建设俄亥俄州 AI 数据中心。', { afterRepair: true });
+  assert.deepEqual(assessment.hardErrors, []);
+});
+
 test('数量级不等价在两轮修复后保留具体复核原因', async () => {
   const source = {
     version: 5,

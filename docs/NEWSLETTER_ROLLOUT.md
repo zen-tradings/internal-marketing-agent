@@ -4,19 +4,19 @@
 
 本节中的发送结果和人数是当时的运维记录，不是 Customer.io 的实时状态。每次创建或扩容前都必须运行 `npm run check:customerio`，并以 Customer.io Review 页显示的人数为最终依据。
 
-- 命名格式：`Zen Research from Zen Trading · Vol. N`
+- Customer.io 草稿命名格式：`Zen Research日报 · YYYY-MM-DD`（以任务创建日为准）。
 - Slack 入口：私聊自然语言或频道 `@Bot`；`邮件：<本期主题>`、`email: <topic>` 继续兼容。
 - 常规 `email:` 工作流只在 Customer.io 创建草稿，不会自动发送或排期；`opening-digest` 是独立的受控发送/排期例外。
 - Customer.io 内部测试分组：`Newsletter · Internal Beta`，segment ID `17`。
 - Customer.io Pilot 分组：`Newsletter · Pilot`，segment ID `18`。这是第二批扩容名单，当前为空，加入人员前不能创建 Pilot 草稿。
 - 全量候选分组：`Valid Email Address`，segment ID `6`。切换前仍要在 Review 页核对订阅偏好与预计人数。
-- 新生成草稿的主题和邮件内品牌统一为 `Zen Research from Zen Trading · Vol. N`；不自动改写历史草稿或已发送邮件。
+- 新生成草稿的后台名称使用上述日期格式；邮件主题和邮件内品牌继续为 `Zen Research from Zen Trading · Vol. N`。不自动改写历史草稿或已发送邮件。
 - 仓库生成的 Customer.io 模板页脚实体地址固定为 `700 Leahy St, Redwood City, CA 94061`；环境变量、Prompt 和单次任务都不能覆盖。历史草稿和已发送邮件不会被回溯改写。
 - `Vol. 1` 已向内部 segment `17` 发送体验版：修正版 newsletter ID `5` 的 3 条消息全部 delivered，failed/suppressed 均为 0。
 
 ### Opening Digest 当前实现
 
-英文邮件仍是主投递，Opening Digest 专用 Customer.io 模板为 `zen-customerio/zen-research@6`。英文主稿由 `OPENING_DIGEST_MODEL` 专属配置（生产为 `openai/gpt-oss-120b`）；Kimi 仅负责规划，GLM 负责事实审核与局部压缩，中文微信直译仍使用全局 Qwen 正文模型。`OPENING_DIGEST_WECHAT_ENABLED=true` 时，Customer.io 成功发送或确认排期后才执行微信同步：渠道冻结最终英文 payload，不重新采集行情、财报日历或 OIC；专用结构化翻译按块校验顺序、数字、Ticker、时间、URL 与机构品牌，最多两轮局部修复。英文邮件保留完整来源链接；中文微信在最终渲染时删除括号式来源引用的来源名和 URL，承担句子语义的标题、公司名或 Ticker 链接文字则只去链接并保留为纯文本。微信稿标题为 `Zen 开市日报 · YYYY-MM-DD`，验收稿为 `[测试] Zen 开市日报 · MM-DD`，正文采用 `zen-wechat/zen-trading@5`、固定头图/问卷/二维码封底、九格行情及 20 个两行 OIC 记录块。创建后以官方 `draft/get` 回读；前两次结构或字段不一致会删除重建，第三次保留并精确告警；回读不可用时保留唯一稿并标记 `unverified`。微信异常不会改变邮件的 `done` 结果。
+英文邮件仍是主投递，Opening Digest 专用 Customer.io 模板为 `zen-customerio/zen-research@6`。正式邮件的 Customer.io 后台名称为 `Zen Opening Digest · YYYY-MM-DD`，收件主题为 `Zen Opening Digest · Month D, YYYY`；人工验收邮件保留 `[TEST]` 前缀。英文主稿由 `OPENING_DIGEST_MODEL` 专属配置（生产为 `openai/gpt-oss-120b`）；Kimi 仅负责规划，GLM 负责事实审核与局部压缩，中文微信直译仍使用全局 Qwen 正文模型。`OPENING_DIGEST_WECHAT_ENABLED=true` 时，Customer.io 成功发送或确认排期后才执行微信同步：渠道冻结最终英文 payload，不重新采集行情、财报日历或 OIC；专用结构化翻译按块校验顺序、数字、Ticker、时间、URL 与机构品牌，最多两轮局部修复。英文邮件保留完整来源链接；中文微信在最终渲染时删除括号式来源引用的来源名和 URL，承担句子语义的标题、公司名或 Ticker 链接文字则只去链接并保留为纯文本。正式微信稿标题为 `Zen Research日报 · YYYY-MM-DD`，验收稿为 `[测试] Zen 开市日报 · MM-DD`，正文采用 `zen-wechat/zen-trading@6`、固定头图/问卷/二维码封底、九格行情及 20 个两行 OIC 记录块；财报预告的每个 ticker 在微信草稿中独占一行。创建后以官方 `draft/get` 回读；前两次结构或字段不一致会删除重建，第三次保留并精确告警；回读不可用时保留唯一稿并标记 `unverified`。微信异常不会改变邮件的 `done` 结果。
 
 `DISCORD_OPENING_DIGEST_ENABLED=true` 时，只有正式 cron 在 Customer.io 成功发送或确认排期后，才把同一冻结英文 payload 加入 SQLite delivery outbox，自动发往 `#newsletter-feed`。Discord 以禁用 mentions 的 rich embeds 完整发布九格行情、带来源链接的正文和 OIC 20 行，并在每条成功后持久化 Discord message ID。网络、429 和 5xx 依 `Retry-After`/指数退避补发，进程重启后从下一条续传；最终失败仅发专用 Slack warning，邮件仍保持 `done`。
 

@@ -243,11 +243,13 @@ env_changed=0
 backup_helper_changed=0
 backup_helper_had_previous=0
 discord_env_before=$(sudo awk '$0 ~ /^DISCORD_(OPENING_DIGEST|WEBHOOK)_/' "$env_file" | sha256sum | awk '{ print $1 }')
+phase=remote-preconditions
 env_without_managed_before=$(sudo awk '$0 !~ /${DEPLOY_MANAGED_ENV_PATTERN}/' "$env_file" | sha256sum | awk '{ print $1 }')
 
 restore_on_error() {
   status=$?
   if [ "$discord_config_path" != "-" ]; then rm -f "$discord_config_path" || true; fi
+  printf 'deployment_failed_phase=%s\\n' "$phase" >&2
   if [ "$switch_started" -eq 1 ]; then
     sudo systemctl stop zen-content-hub || true
     if [ -d "$active" ] && [ ! -e "$failed" ]; then sudo mv "$active" "$failed" || true; fi
@@ -262,18 +264,23 @@ restore_on_error() {
     fi
   fi
   if [ "$switch_started" -eq 1 ]; then sudo systemctl start zen-content-hub || true; fi
+  if [ "$switch_started" -eq 0 ] && [ -d "$stage" ]; then sudo rm -rf "$stage" || true; fi
   exit "$status"
 }
 trap restore_on_error ERR
 
 metadata=http://169.254.169.254/metadata/v1
 test -n "$(curl -fsS --max-time 3 "$metadata/id")"
-test -f "$archive"
-test ! -e "$stage"
-test ! -e "$rollback"
-test ! -e "$failed"
-test ! -e "$env_backup"
-test ! -e "$backup_helper_backup"
+if [ ! -f "$archive" ]; then
+  printf 'deployment_conflict=missing-archive:%s\\n' "$archive" >&2
+  exit 1
+fi
+for candidate in "$stage" "$rollback" "$failed" "$env_backup" "$backup_helper_backup"; do
+  if [ -e "$candidate" ]; then
+    printf 'deployment_conflict=existing-path:%s\\n' "$candidate" >&2
+    exit 1
+  fi
+done
 for key in OPENROUTER_ROUTER_MODEL OPENROUTER_REVIEW_MODEL; do
   value=$(sudo awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
   if [ -z "$value" ]; then
@@ -289,6 +296,7 @@ if [ "$current_planner" != z-ai/glm-5.2 ] && [ "$current_planner" != "$planner_m
   exit 1
 fi
 
+phase=stage-release
 sudo install -d -o zenbot -g zenbot -m 0750 "$stage"
 sudo tar -xzf "$archive" -C "$stage"
 printf '%s\n' "$sha" | sudo tee "$stage/.deploy-commit" >/dev/null
@@ -305,8 +313,10 @@ sudo -u zenbot env \
   OPENING_DIGEST_EARNINGS_PYTHON_PATH="$stage/.venv/bin/python" \
   OPENING_DIGEST_EARNINGS_WORKER_PATH="$stage/python/opening_digest_worker.py" \
   node "$stage/scripts/check-opening-digest-python.mjs" </dev/null
+phase=stage-validation
 sudo -u zenbot npm --prefix "$stage" run check </dev/null
 
+phase=backup
 if [ -f "$backup_helper" ]; then
   sudo cp -a "$backup_helper" "$backup_helper_backup"
   backup_helper_had_previous=1
@@ -321,6 +331,7 @@ latest_backup_manifest=$(sudo find /var/lib/zen-content-hub/backups -maxdepth 1 
 test -n "$latest_backup_manifest"
 (cd /var/lib/zen-content-hub/backups && sudo sha256sum -c "$latest_backup_manifest")
 
+phase=pre-switch-health
 port=$(sudo awk -F= '$1 == "HEALTH_PORT" { print $2 }' "$env_file" | tail -n 1)
 ready=$(curl -fsS --max-time 5 "http://127.0.0.1:$port/ready")
 printf '%s' "$ready" | node -e '
@@ -345,6 +356,7 @@ update_env() {
   rm -f "$temporary"
   sudo mv "$env_file.next-$short" "$env_file"
 }
+phase=update-environment
 sudo cp -a "$env_file" "$env_backup"
 env_changed=1
 update_env OPENING_DIGEST_WECHAT_ENABLED "$opening_digest_wechat_enabled"
@@ -402,12 +414,14 @@ fi
 env_without_managed_after=$(sudo awk '$0 !~ /${DEPLOY_MANAGED_ENV_PATTERN}/' "$env_file" | sha256sum | awk '{ print $1 }')
 test "$env_without_managed_after" = "$env_without_managed_before"
 
+phase=switch-release
 switch_started=1
 sudo systemctl stop zen-content-hub
 sudo mv "$active" "$rollback"
 sudo mv "$stage" "$active"
 sudo systemctl start zen-content-hub
 
+phase=post-switch-health
 ready_ok=0
 for _ in $(seq 1 45); do
   if ready=$(curl -fsS --max-time 2 "http://127.0.0.1:$port/ready" 2>/dev/null); then

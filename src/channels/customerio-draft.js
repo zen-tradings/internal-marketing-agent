@@ -33,6 +33,7 @@ export function makeChannel({
       onCreated,
       resumeFromCheckpoint = false,
       runId,
+      createdAt,
       remoteOperations,
       signal,
     }) {
@@ -64,7 +65,7 @@ export function makeChannel({
       }
 
       const article = parseNewsletterArticle(markdown, workflow?.edition || cio.edition || 'Vol. 1');
-      const name = `Zen Research from Zen Trading · ${article.edition}`;
+      const name = newsletterDraftName(createdAt);
       const body = renderNewsletterEmail(article, cio);
       assertRenderedTemplateMarker(body, NEWSLETTER_TEMPLATE_ID);
       const payload = {
@@ -113,6 +114,12 @@ export function makeChannel({
       }), signal);
     },
   };
+}
+
+export function newsletterDraftName(createdAt = Date.now()) {
+  const date = new Date(Number(createdAt));
+  if (Number.isNaN(date.getTime())) throw publishError('Newsletter 任务创建时间无效');
+  return `Zen Research日报 · ${date.toISOString().slice(0, 10)}`;
 }
 
 async function createNewsletterDraft({

@@ -441,6 +441,8 @@ test('complete digest renders template, address, options and schedules without c
   assert.equal(result.mediaId, 'customerio-newsletter:99');
   assert.deepEqual(uploads, ['opening-digest-cover-2026-08-10.png']);
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
+  assert.equal(create.body.name, 'Zen Opening Digest · 2026-08-10');
+  assert.equal(create.body.subject, 'Zen Opening Digest · August 10, 2026');
   assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@6"/);
   assert.match(create.body.body, /href="https:\/\/example\.com\/a"/, '英文邮件必须继续保留来源链接');
   assert.match(create.body.body, /href="https:\/\/www\.linkedin\.com\/company\/110921483"[^>]*>LinkedIn<\/a>/);
@@ -529,7 +531,7 @@ test('双渠道严格先完成 Customer.io，再用同一冻结 payload 创建�
       wechatChannel: {
         async publish({ payload: input }) {
           events.push('wechat'); wechatPayload = input;
-          return { mediaId: 'wx-media-1', title: 'Zen 开市日报 · 2026-08-10', status: 'verified', errors: [], attempts: [{ status: 'verified' }] };
+          return { mediaId: 'wx-media-1', title: 'Zen Research日报 · 2026-08-10', status: 'verified', errors: [], attempts: [{ status: 'verified' }] };
         },
       },
     },
@@ -785,7 +787,7 @@ test('历史迁移验收仅从同源隔离 payload 创建正式微信稿', async
     wechatChannel: { async publish({ payload, acceptance }) {
       wechatPayload = payload;
       assert.equal(acceptance, false);
-      return { mediaId: 'wx-formal', title: 'Zen 开市日报 · 2026-08-10', status: 'verified', errors: [], attempts: [{ status: 'verified' }] };
+      return { mediaId: 'wx-formal', title: 'Zen Research日报 · 2026-08-10', status: 'verified', errors: [], attempts: [{ status: 'verified' }] };
     } },
   });
   assert.equal(translatedPayload, wechatPayload);

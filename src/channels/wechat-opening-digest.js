@@ -26,7 +26,7 @@ export function makeWechatOpeningDigestChannel({
     templateLocked: true,
     async publish({ payload, translation, config, acceptance = false }) {
       const activeApi = api || createWechatApi({ timeoutMs: config.wechat.timeoutMs });
-      const title = acceptance ? `[测试] Zen 开市日报 · ${payload.dateKey.slice(5)}` : `Zen 开市日报 · ${payload.dateKey}`;
+      const title = acceptance ? `[测试] Zen 开市日报 · ${payload.dateKey.slice(5)}` : `Zen Research日报 · ${payload.dateKey}`;
       const cover = await renderCover({
         dateLabel: chineseDate(payload.dateKey), label: '开市日报',
         executablePath: config.openingDigest.browserExecutablePath,
@@ -134,8 +134,8 @@ export function validateWechatOpeningDigestDraft(saved, { title, payload, transl
   const fullText = normalizeText(document.body.textContent);
   for (const unit of translation.translations.filter((item) => item.id.startsWith('body-'))) {
     const node = document.querySelector(`[data-block-id="${cssEscape(unit.id)}"]`);
-    const visible = normalizeText(stripInlineMarkdown(unit.text));
-    if (node && !normalizeText(node.textContent).includes(visible)) errors.push(`正文块 ${unit.id}:内容被改写`);
+    const visible = normalizedBodyText(unit);
+    if (node && !normalizedBodyText(unit, node.textContent).includes(visible)) errors.push(`正文块 ${unit.id}:内容被改写`);
     else if (!node) {
       const index = fullText.indexOf(visible, contentCursor);
       if (index < 0) errors.push(`正文块 ${unit.id}:缺失或乱序`);
@@ -179,9 +179,19 @@ function renderNarrative(markdown, translated) {
           : unit.source === 'Market read' ? 'read' : `body-${index + 1}`;
       parts.push(`<h2 data-zen-section="${section}" data-block-id="${id}" style="margin:22px 0 9px;font-size:18px;color:#08272b">${inlineMarkup(unit.text)}</h2>`);
     } else if (list) parts.push(`<p data-block-id="${id}" style="margin:6px 0 6px 1em;text-indent:-1em">• ${inlineMarkup(unit.text)}</p>`);
+    else if (section === 'earnings') parts.push(renderEarningsPreviewLines(id, unit.text));
     else parts.push(`<p data-block-id="${id}" style="margin:8px 0">${inlineMarkup(unit.text)}</p>`);
   });
   return parts.join('');
+}
+
+function renderEarningsPreviewLines(id, text) {
+  // The schedule remains one deterministic translation unit, but each linked
+  // ticker starts its own visual row in the WeChat draft. Keep the separator
+  // with the preceding row so readback validation still sees the exact text.
+  const rows = String(text || '').split(/(?<=[;；])(?=\s*\[[A-Z0-9.-]+\]\(https?:\/\/)/);
+  if (rows.length === 1) return `<p data-block-id="${id}" style="margin:8px 0">${inlineMarkup(text)}</p>`;
+  return `<div data-block-id="${id}" data-zen-earnings-rows="${rows.length}">${rows.map((row) => `<p style="margin:6px 0">${inlineMarkup(row)}</p>`).join(' ')}</div>`;
 }
 
 function renderOptions(options, translated) {
@@ -265,6 +275,15 @@ function stripOpeningDigestSourceLinks(value) {
 }
 function stripInlineMarkdown(value) { return stripOpeningDigestSourceLinks(value).replace(/\*\*([^*]+)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1'); }
 function normalizeText(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
+function normalizedBodyText(unit, value = unit.text) {
+  const text = normalizeText(stripInlineMarkdown(value));
+  // WeChat can remove source whitespace between adjacent block paragraphs. For
+  // an earnings row, that is only the separator before the next ticker; keep
+  // the readback comparison strict for every other character.
+  return /(?:before open|after close|timing not supplied)/i.test(String(unit.source || ''))
+    ? text.replace(/([；;])\s+(?=[A-Z][A-Z0-9.-]{0,9}\b)/g, '$1')
+    : text;
+}
 function formatCapturedAt(value) { try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)); } catch { return String(value || ''); } }
 function chineseDate(dateKey) { const [year, month, day] = dateKey.split('-'); return `${year}年${Number(month)}月${Number(day)}日`; }
 function cssEscape(value) { return String(value).replace(/["\\]/g, '\\$&'); }
