@@ -179,9 +179,19 @@ function renderNarrative(markdown, translated) {
           : unit.source === 'Market read' ? 'read' : `body-${index + 1}`;
       parts.push(`<h2 data-zen-section="${section}" data-block-id="${id}" style="margin:22px 0 9px;font-size:18px;color:#08272b">${inlineMarkup(unit.text)}</h2>`);
     } else if (list) parts.push(`<p data-block-id="${id}" style="margin:6px 0 6px 1em;text-indent:-1em">• ${inlineMarkup(unit.text)}</p>`);
+    else if (section === 'earnings') parts.push(renderEarningsPreviewLines(id, unit.text));
     else parts.push(`<p data-block-id="${id}" style="margin:8px 0">${inlineMarkup(unit.text)}</p>`);
   });
   return parts.join('');
+}
+
+function renderEarningsPreviewLines(id, text) {
+  // The schedule remains one deterministic translation unit, but each linked
+  // ticker starts its own visual row in the WeChat draft. Keep the separator
+  // with the preceding row so readback validation still sees the exact text.
+  const rows = String(text || '').split(/(?<=[;；])(?=\s*\[[A-Z0-9.-]+\]\(https?:\/\/)/);
+  if (rows.length === 1) return `<p data-block-id="${id}" style="margin:8px 0">${inlineMarkup(text)}</p>`;
+  return `<div data-block-id="${id}" data-zen-earnings-rows="${rows.length}">${rows.map((row) => `<p style="margin:6px 0">${inlineMarkup(row)}</p>`).join(' ')}</div>`;
 }
 
 function renderOptions(options, translated) {

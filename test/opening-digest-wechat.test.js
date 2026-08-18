@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { JSDOM } from 'jsdom';
 import { chromium } from 'playwright-core';
 import {
   makeWechatOpeningDigestChannel,
@@ -295,7 +296,7 @@ test('OIC 时点与归属用确定性中文前缀保留原始数字、时区和�
   assert.equal(result.translations.find((unit) => unit.id === 'oic-attribution').text, '数据由 IVolatility 提供');
 });
 
-test('中文微信 HTML 锁定 @5、9 格行情、OIC 20×8 且低于官方大小限制', () => {
+test('中文微信 HTML 锁定 @6、9 格行情、OIC 20×8 且低于官方大小限制', () => {
   const source = payload(); const translation = translated(source);
   const html = renderWechatOpeningDigestHtml({ source, payload: source, translation, images: { header: 'https://img/h', survey: 'https://img/s', footer: 'https://img/f' } });
   assert.match(html, new RegExp(`data-zen-draft-template="${WECHAT_OPENING_DIGEST_TEMPLATE_ID.replace('/', '\\/')}"`));
@@ -311,6 +312,24 @@ test('中文微信 HTML 锁定 @5、9 格行情、OIC 20×8 且低于官方大�
     title: 'Zen Research日报 · 2026-08-10', payload: source, translation,
   });
   assert.deepEqual(validation.errors, []);
+});
+
+test('微信财报预告将同一天的每个 ticker 拆为独立视觉行，邮件源文本不变', () => {
+  const source = payload();
+  source.article.body = source.article.body.replace(
+    '[NVDA](https://finance.yahoo.com/calendar/earnings) after close (expected)',
+    '[NVDA](https://finance.yahoo.com/calendar/earnings) after close (expected); [AMD](https://finance.yahoo.com/calendar/earnings) before open (expected)',
+  );
+  const translation = translated(source);
+  const entry = translation.translations.find((unit) => unit.id === 'body-2');
+  entry.text = '**8月10日 周一：** [NVDA](https://finance.yahoo.com/calendar/earnings) 盘后（预计）； [AMD](https://finance.yahoo.com/calendar/earnings) 盘前（预计）';
+  const html = renderWechatOpeningDigestHtml({ payload: source, translation });
+  const document = new JSDOM(`<body>${html}</body>`).window.document;
+  const rows = document.querySelectorAll('[data-block-id="body-2"] > p');
+  assert.equal(rows.length, 2);
+  assert.match(rows[0].textContent, /NVDA/);
+  assert.match(rows[1].textContent, /AMD/);
+  assert.equal(document.querySelector('[data-block-id="body-2"]').textContent, stripMarkdownForTest(entry.text));
 });
 
 test('微信回读前两次坏稿删除重建，第三次合格稿保留', async () => {
@@ -424,4 +443,8 @@ function config() {
       footerImage: path.resolve('assets/zen-footer-qr.png'),
     },
   };
+}
+
+function stripMarkdownForTest(value) {
+  return String(value).replace(/\*\*/g, '').replace(/\[([^\]]+)]\(https?:\/\/[^)]+\)/g, '$1');
 }
