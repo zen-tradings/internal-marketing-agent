@@ -271,7 +271,7 @@ export function protectTranslationUnit(unit) {
     ...(source.match(/\b\d{1,2}:\d{2}(?:\s*(?:a\.m\.|p\.m\.|AM|PM))?(?:\s+(?:ET|EST|EDT|PT|PST|PDT|UTC|GMT))?/gi) || []),
     ...(source.match(/\b(?:ET|EST|EDT|PT|PST|PDT|UTC|GMT)\b/g) || []),
     ...(source.match(/\b(?:Q[1-4]|H[12]|FY\d{2,4}|[1-4]Q\d{2,4})\b/g) || []),
-    ...(source.match(/(?:[$€£¥]\s*)?[-+]?\d+(?:[,.]\d+)*\s+(?:thousand|million|billion|trillion)(?:\s+(?:U\.S\.\s+)?dollars?)?/gi) || []),
+    ...(source.match(/(?:[$€£¥]\s*)?[-+]?\d+(?:[,.]\d+)*\s+(?:thousand|million|billion|trillion|bn)(?:\s+(?:U\.S\.\s+)?dollars?)?/gi) || []),
     ...(source.match(/(?<![A-Za-z0-9])[-+]?\d+(?:[,.]\d+)*(?:%|‰)?/g) || []),
     ...brandTokens(source, unit.kind),
     ...(source.match(/\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+\b/g) || []),

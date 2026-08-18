@@ -2417,10 +2417,11 @@ function invariantNumericSignature(
       k: 1_000n,
       m: 1_000_000n,
       b: 1_000_000_000n,
+      bn: 1_000_000_000n,
       t: 1_000_000_000_000n,
     };
     masked = masked.replace(
-      /(?<![A-Za-z0-9])(?:[$€£¥]\s*)?([-+]?\d+(?:[,.]\d+)*)([KMBT])\b/gi,
+      /(?<![A-Za-z0-9])(?:[$€£¥]\s*)?([-+]?\d+(?:[,.]\d+)*)\s*(bn|[KMBT])\b/gi,
       (match, amount, unit) => {
         const normalized = normalizeMagnitudeAmount(
           amount,
