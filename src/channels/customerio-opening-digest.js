@@ -17,7 +17,7 @@ import { acquireRuntimeResource, runtimeFetch } from '../config/runtime.js';
 const SENDER = 'support@zentradings.com';
 const CUSTOMERIO_MIN_SCHEDULE_LEAD_MS = 5 * 60 * 1000;
 export const CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['customerio-opening-digest'];
-export const OPENING_DIGEST_NEWSLETTER_TITLE = 'Zen Research日报';
+export const OPENING_DIGEST_NEWSLETTER_TITLE = 'Zen Opening Digest';
 
 export function makeChannel({
   readArticle = (file) => fs.readFile(file, 'utf8'),
@@ -362,7 +362,7 @@ function openingDigestNewsletterName(dateKey, { acceptance = false, acceptanceId
 }
 
 function openingDigestNewsletterSubject(dateKey, { acceptance = false } = {}) {
-  const base = `${OPENING_DIGEST_NEWSLETTER_TITLE} · ${dateKey}`;
+  const base = `${OPENING_DIGEST_NEWSLETTER_TITLE} · ${displayDate(dateKey)}`;
   return acceptance ? `[TEST] ${base}` : base;
 }
 

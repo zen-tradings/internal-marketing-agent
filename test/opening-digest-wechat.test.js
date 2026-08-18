@@ -307,8 +307,8 @@ test('中文微信 HTML 锁定 @5、9 格行情、OIC 20×8 且低于官方大�
   assert.doesNotMatch(html, /CNBC|example\.com|finance\.yahoo\.com/i, '微信正文不得保留原文来源引用或 URL');
   assert.match(html, /NVIDIA 公司动态/, '承担正文语义的链接文字应保留为纯文本');
   assert.match(html, /NVDA/, '财报预告中的 Ticker 应保留为纯文本');
-  const validation = validateWechatOpeningDigestDraft({ content: { news_item: [{ title: 'Zen 开市日报 · 2026-08-10', digest: '早盘市场信号。', content: html }] } }, {
-    title: 'Zen 开市日报 · 2026-08-10', payload: source, translation,
+  const validation = validateWechatOpeningDigestDraft({ content: { news_item: [{ title: 'Zen Research日报 · 2026-08-10', digest: '早盘市场信号。', content: html }] } }, {
+    title: 'Zen Research日报 · 2026-08-10', payload: source, translation,
   });
   assert.deepEqual(validation.errors, []);
 });
@@ -348,6 +348,7 @@ test('draft/get 暂不可用时保留唯一稿并标记 unverified', async () =>
   });
   const result = await channel.publish({ payload: payload(), translation: translated(), config: config() });
   assert.equal(result.status, 'unverified');
+  assert.equal(result.title, 'Zen Research日报 · 2026-08-10');
   assert.equal(created, 1);
   assert.equal(deleted, 0);
 });

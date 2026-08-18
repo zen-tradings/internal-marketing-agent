@@ -16,9 +16,9 @@
 
 ### Opening Digest 当前实现
 
-英文邮件仍是主投递，Opening Digest 专用 Customer.io 模板为 `zen-customerio/zen-research@6`。正式邮件的 Customer.io 名称和收件主题均为 `Zen Research日报 · YYYY-MM-DD`；人工验收邮件保留 `[TEST]` 前缀。英文主稿由 `OPENING_DIGEST_MODEL` 专属配置（生产为 `openai/gpt-oss-120b`）；Kimi 仅负责规划，GLM 负责事实审核与局部压缩，中文微信直译仍使用全局 Qwen 正文模型。`OPENING_DIGEST_WECHAT_ENABLED=true` 时，Customer.io 成功发送或确认排期后才执行微信同步：渠道冻结最终英文 payload，不重新采集行情、财报日历或 OIC；专用结构化翻译按块校验顺序、数字、Ticker、时间、URL 与机构品牌，最多两轮局部修复。英文邮件保留完整来源链接；中文微信在最终渲染时删除括号式来源引用的来源名和 URL，承担句子语义的标题、公司名或 Ticker 链接文字则只去链接并保留为纯文本。微信稿标题为 `Zen 开市日报 · YYYY-MM-DD`，验收稿为 `[测试] Zen 开市日报 · MM-DD`，正文采用 `zen-wechat/zen-trading@5`、固定头图/问卷/二维码封底、九格行情及 20 个两行 OIC 记录块。创建后以官方 `draft/get` 回读；前两次结构或字段不一致会删除重建，第三次保留并精确告警；回读不可用时保留唯一稿并标记 `unverified`。微信异常不会改变邮件的 `done` 结果。
+英文邮件仍是主投递，Opening Digest 专用 Customer.io 模板为 `zen-customerio/zen-research@6`。正式邮件的 Customer.io 后台名称为 `Zen Opening Digest · YYYY-MM-DD`，收件主题为 `Zen Opening Digest · Month D, YYYY`；人工验收邮件保留 `[TEST]` 前缀。英文主稿由 `OPENING_DIGEST_MODEL` 专属配置（生产为 `openai/gpt-oss-120b`）；Kimi 仅负责规划，GLM 负责事实审核与局部压缩，中文微信直译仍使用全局 Qwen 正文模型。`OPENING_DIGEST_WECHAT_ENABLED=true` 时，Customer.io 成功发送或确认排期后才执行微信同步：渠道冻结最终英文 payload，不重新采集行情、财报日历或 OIC；专用结构化翻译按块校验顺序、数字、Ticker、时间、URL 与机构品牌，最多两轮局部修复。英文邮件保留完整来源链接；中文微信在最终渲染时删除括号式来源引用的来源名和 URL，承担句子语义的标题、公司名或 Ticker 链接文字则只去链接并保留为纯文本。正式微信稿标题为 `Zen Research日报 · YYYY-MM-DD`，验收稿为 `[测试] Zen 开市日报 · MM-DD`，正文采用 `zen-wechat/zen-trading@5`、固定头图/问卷/二维码封底、九格行情及 20 个两行 OIC 记录块。创建后以官方 `draft/get` 回读；前两次结构或字段不一致会删除重建，第三次保留并精确告警；回读不可用时保留唯一稿并标记 `unverified`。微信异常不会改变邮件的 `done` 结果。
 
-Slack 中人工触发 `opening-digest` 始终作为隔离测试运行。收件人主题为 `[TEST] Zen Research日报 · YYYY-MM-DD`，不显示 run ID；Customer.io 后台名称和封面资源名仍使用 run ID 生成唯一测试身份，微信标题继续使用 `[测试]`。它不会与当天正式稿同名，也不会复用或改写正式稿。只有 cron 触发使用正式身份，防止人工测试意外成为正式发送。
+Slack 中人工触发 `opening-digest` 始终作为隔离测试运行。收件人主题为 `[TEST] Zen Opening Digest · Month D, YYYY`，不显示 run ID；Customer.io 后台名称和封面资源名仍使用 run ID 生成唯一测试身份，微信标题继续使用 `[测试]`。它不会与当天正式稿同名，也不会复用或改写正式稿。只有 cron 触发使用正式身份，防止人工测试意外成为正式发送。
 
 生产环境在美东交易日 10:15 生成 Opening Digest；若完成时距 10:30 仍超过 Customer.io 要求的 5 分钟最小提前量，则排期到 10:30，否则立即发送。这里的“opening”是开盘后摘要，不是 9:30 开盘铃时点。
 

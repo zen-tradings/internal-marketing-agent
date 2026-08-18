@@ -26,7 +26,7 @@ export function makeWechatOpeningDigestChannel({
     templateLocked: true,
     async publish({ payload, translation, config, acceptance = false }) {
       const activeApi = api || createWechatApi({ timeoutMs: config.wechat.timeoutMs });
-      const title = acceptance ? `[测试] Zen 开市日报 · ${payload.dateKey.slice(5)}` : `Zen 开市日报 · ${payload.dateKey}`;
+      const title = acceptance ? `[测试] Zen 开市日报 · ${payload.dateKey.slice(5)}` : `Zen Research日报 · ${payload.dateKey}`;
       const cover = await renderCover({
         dateLabel: chineseDate(payload.dateKey), label: '开市日报',
         executablePath: config.openingDigest.browserExecutablePath,

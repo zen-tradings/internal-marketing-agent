@@ -27,7 +27,7 @@ Do not use evergreen background, previously disclosed items, unconfirmed rumors,
 Return Markdown only with this frontmatter:
 ---
 title: Zen Opening Digest
-subject: Zen Research日报 · ${date}
+subject: Zen Opening Digest · ${date}
 preheader: Market signals, earnings ahead, today’s catalysts, and options volume.
 edition: ${date}
 ---

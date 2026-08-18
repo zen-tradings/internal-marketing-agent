@@ -54,7 +54,7 @@ A restrained opening read depends on participation holding through the first hou
 
 const DATA_ONLY_ARTICLE = `---
 title: Zen Opening Digest
-subject: Zen Research日报 · 2026-08-10
+subject: Zen Opening Digest · 2026-08-10
 preheader: Market signals and available opening data.
 edition: 2026-08-10
 ---
@@ -117,7 +117,7 @@ function makeCioFetch({ requests, audienceName = 'test 1', audienceCount = 4, ne
     if (parsed.pathname === '/v1/newsletters' && (options.method || 'GET') === 'GET') return response({ newsletters: list });
     if (parsed.pathname === '/v1/newsletters' && options.method === 'POST') return response({ newsletter: { id: newsletterId } });
     if (parsed.pathname === `/v1/newsletters/${newsletterId}`) return response({ newsletter: list.find((item) => Number(item.id) === newsletterId) || {
-      id: newsletterId, name: 'Zen Research日报 · 2026-08-10', sent_at: null,
+      id: newsletterId, name: 'Zen Opening Digest · 2026-08-10', sent_at: null,
       recipient_segment_ids: [42], subscription_topic_id: 19,
     } });
     if (parsed.pathname.endsWith('/send')) return send ? send(url, options) : response({});
@@ -441,8 +441,8 @@ test('complete digest renders template, address, options and schedules without c
   assert.equal(result.mediaId, 'customerio-newsletter:99');
   assert.deepEqual(uploads, ['opening-digest-cover-2026-08-10.png']);
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
-  assert.equal(create.body.name, 'Zen Research日报 · 2026-08-10');
-  assert.equal(create.body.subject, 'Zen Research日报 · 2026-08-10');
+  assert.equal(create.body.name, 'Zen Opening Digest · 2026-08-10');
+  assert.equal(create.body.subject, 'Zen Opening Digest · August 10, 2026');
   assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@6"/);
   assert.match(create.body.body, /href="https:\/\/example\.com\/a"/, '英文邮件必须继续保留来源链接');
   assert.match(create.body.body, /href="https:\/\/www\.linkedin\.com\/company\/110921483"[^>]*>LinkedIn<\/a>/);
@@ -531,7 +531,7 @@ test('双渠道严格先完成 Customer.io，再用同一冻结 payload 创建�
       wechatChannel: {
         async publish({ payload: input }) {
           events.push('wechat'); wechatPayload = input;
-          return { mediaId: 'wx-media-1', title: 'Zen 开市日报 · 2026-08-10', status: 'verified', errors: [], attempts: [{ status: 'verified' }] };
+          return { mediaId: 'wx-media-1', title: 'Zen Research日报 · 2026-08-10', status: 'verified', errors: [], attempts: [{ status: 'verified' }] };
         },
       },
     },
@@ -606,7 +606,7 @@ test('body unsubscribe tags are removed locally and Customer.io contents is neve
 
 test('remote discovery reuses one matching sent newsletter and rejects duplicate candidates', async () => {
   const sent = {
-    id: 77, name: 'Zen Research日报 · 2026-08-10', sent_at: 1786372201,
+    id: 77, name: 'Zen Opening Digest · 2026-08-10', sent_at: 1786372201,
     recipient_segment_ids: [42], subscription_topic_id: 19,
   };
   const requests = [];
@@ -624,7 +624,7 @@ test('ambiguous create response recovers the exact remote newsletter without a s
   let listCalls = 0;
   let createCalls = 0;
   const recovered = {
-    id: 105, name: 'Zen Research日报 · 2026-08-10', sent_at: null,
+    id: 105, name: 'Zen Opening Digest · 2026-08-10', sent_at: null,
     recipient_segment_ids: [42], subscription_topic_id: 19,
   };
   const fallback = makeCioFetch({ requests, newsletterId: 105, list: [recovered] });
@@ -664,7 +664,7 @@ test('ambiguous send response is recovered from remote sent_at', async () => {
           throw new Error('response lost');
         }
         if (parsed.pathname === '/v1/newsletters/109') return response({ newsletter: {
-          id: 109, name: 'Zen Research日报 · 2026-08-10', sent_at: sent ? 1786372201 : null,
+          id: 109, name: 'Zen Opening Digest · 2026-08-10', sent_at: sent ? 1786372201 : null,
           recipient_segment_ids: [42], subscription_topic_id: 19,
         } });
         return fallback(url, options);
@@ -709,8 +709,8 @@ test('production acceptance uses an explicit TEST identity and sends immediately
     acceptanceId: 'cc3fc06bb76a-1045et',
   });
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
-  assert.equal(create.body.name, '[TEST] Zen Research日报 · 2026-08-10 · cc3fc06bb76a-1045et');
-  assert.equal(create.body.subject, '[TEST] Zen Research日报 · 2026-08-10');
+  assert.equal(create.body.name, '[TEST] Zen Opening Digest · 2026-08-10 · cc3fc06bb76a-1045et');
+  assert.equal(create.body.subject, '[TEST] Zen Opening Digest · August 10, 2026');
   assert.doesNotMatch(create.body.subject, /cc3fc06bb76a-1045et/);
   assert.deepEqual(uploads, [{
     filename: 'opening-digest-cover-2026-08-10-cc3fc06bb76a-1045et.png',
@@ -747,7 +747,7 @@ test('历史迁移验收仅从同源隔离 payload 创建正式微信稿', async
     fetchFn: async (url) => {
       const pathname = new URL(url).pathname;
       if (pathname === '/v1/newsletters/88') return response({ newsletter: {
-        id: 88, name: 'Zen Research日报 · 2026-08-10', created: 1786371000, sent_at: 1786372201,
+        id: 88, name: 'Zen Opening Digest · 2026-08-10', created: 1786371000, sent_at: 1786372201,
         recipient_segment_ids: [21], subscription_topic_id: 19,
       } });
       if (pathname === '/v1/segments/21') return response({ segment: { id: 21, name: 'test2' } });
@@ -760,7 +760,7 @@ test('历史迁移验收仅从同源隔离 payload 创建正式微信稿', async
     wechatChannel: { async publish({ payload, acceptance }) {
       wechatPayload = payload;
       assert.equal(acceptance, false);
-      return { mediaId: 'wx-formal', title: 'Zen 开市日报 · 2026-08-10', status: 'verified', errors: [], attempts: [{ status: 'verified' }] };
+      return { mediaId: 'wx-formal', title: 'Zen Research日报 · 2026-08-10', status: 'verified', errors: [], attempts: [{ status: 'verified' }] };
     } },
   });
   assert.equal(translatedPayload, wechatPayload);
@@ -784,7 +784,7 @@ test('历史迁移验收拒绝未发送邮件', async (t) => {
     sourceDir: directory, newsletterId: 88, historicalSegmentId: 21, historicalSegmentName: 'test2',
     config: migratedConfig, now: () => new Date('2026-08-10T14:45:00.000Z'),
     fetchFn: async () => response({ newsletter: {
-      id: 88, name: 'Zen Research日报 · 2026-08-10', created: 1786371000, sent_at: null,
+      id: 88, name: 'Zen Opening Digest · 2026-08-10', created: 1786371000, sent_at: null,
       recipient_segment_ids: [21], subscription_topic_id: 19,
     } }),
   }), /已发送历史 Opening Digest/);
