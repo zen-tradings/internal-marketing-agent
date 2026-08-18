@@ -134,8 +134,8 @@ export function validateWechatOpeningDigestDraft(saved, { title, payload, transl
   const fullText = normalizeText(document.body.textContent);
   for (const unit of translation.translations.filter((item) => item.id.startsWith('body-'))) {
     const node = document.querySelector(`[data-block-id="${cssEscape(unit.id)}"]`);
-    const visible = normalizeText(stripInlineMarkdown(unit.text));
-    if (node && !normalizeText(node.textContent).includes(visible)) errors.push(`正文块 ${unit.id}:内容被改写`);
+    const visible = normalizedBodyText(unit);
+    if (node && !normalizedBodyText(unit, node.textContent).includes(visible)) errors.push(`正文块 ${unit.id}:内容被改写`);
     else if (!node) {
       const index = fullText.indexOf(visible, contentCursor);
       if (index < 0) errors.push(`正文块 ${unit.id}:缺失或乱序`);
@@ -275,6 +275,15 @@ function stripOpeningDigestSourceLinks(value) {
 }
 function stripInlineMarkdown(value) { return stripOpeningDigestSourceLinks(value).replace(/\*\*([^*]+)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1'); }
 function normalizeText(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
+function normalizedBodyText(unit, value = unit.text) {
+  const text = normalizeText(stripInlineMarkdown(value));
+  // WeChat can remove source whitespace between adjacent block paragraphs. For
+  // an earnings row, that is only the separator before the next ticker; keep
+  // the readback comparison strict for every other character.
+  return /(?:before open|after close|timing not supplied)/i.test(String(unit.source || ''))
+    ? text.replace(/([；;])\s+(?=[A-Z][A-Z0-9.-]{0,9}\b)/g, '$1')
+    : text;
+}
 function formatCapturedAt(value) { try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)); } catch { return String(value || ''); } }
 function chineseDate(dateKey) { const [year, month, day] = dateKey.split('-'); return `${year}年${Number(month)}月${Number(day)}日`; }
 function cssEscape(value) { return String(value).replace(/["\\]/g, '\\$&'); }

@@ -332,13 +332,21 @@ test('微信财报预告将同一天的每个 ticker 拆为独立视觉行，邮
   const translation = translated(source);
   const entry = translation.translations.find((unit) => unit.id === 'body-2');
   entry.text = '**8月10日 周一：** [NVDA](https://finance.yahoo.com/calendar/earnings) 盘后（预计）； [AMD](https://finance.yahoo.com/calendar/earnings) 盘前（预计）';
-  const html = renderWechatOpeningDigestHtml({ payload: source, translation });
+  const html = renderWechatOpeningDigestHtml({
+    payload: source, translation,
+    images: { header: 'https://img/h', survey: 'https://img/s', footer: 'https://img/f' },
+  });
   const document = new JSDOM(`<body>${html}</body>`).window.document;
   const rows = document.querySelectorAll('[data-block-id="body-2"] > p');
   assert.equal(rows.length, 2);
   assert.match(rows[0].textContent, /NVDA/);
   assert.match(rows[1].textContent, /AMD/);
   assert.equal(document.querySelector('[data-block-id="body-2"]').textContent, stripMarkdownForTest(entry.text));
+  const readback = validateWechatOpeningDigestDraft({ content: { news_item: [{
+    title: 'Zen Research日报 · 2026-08-10', digest: '早盘市场信号。',
+    content: html.replace(/<\/p> <p/g, '</p><p'),
+  }] } }, { title: 'Zen Research日报 · 2026-08-10', payload: source, translation });
+  assert.deepEqual(readback.errors, []);
 });
 
 test('微信回读前两次坏稿删除重建，第三次合格稿保留', async () => {
