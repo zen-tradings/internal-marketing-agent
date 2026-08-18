@@ -279,6 +279,15 @@ test('模型翻译前用占位符保护 URL、Ticker、时间和数字并无损�
   assert.match(translatedBody, /SPCX.*68\.54%.*8:30 a\.m\. ET.*https:\/\/example\.com\/cpi-2026/);
 });
 
+test('Opening Digest 将金融缩写 bn 作为一个不可变金额 token 保护', () => {
+  const protectedUnit = protectTranslationUnit({
+    id: 'body-1', kind: 'list_item',
+    text: 'Nvidia invested $1.5 bn in SB Energy for an Ohio AI data center.',
+  });
+  assert.doesNotMatch(protectedUnit.unit.text, /\$1\.5 bn/);
+  assert.ok(protectedUnit.tokens.some((token) => token.value === '$1.5 bn'));
+});
+
 test('OIC 时点与归属用确定性中文前缀保留原始数字、时区和机构', async () => {
   const source = payload();
   const seen = [];
