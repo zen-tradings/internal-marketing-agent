@@ -1,6 +1,6 @@
 # Zen Content Hub
 
-单实例运行的 Slack 内容编排服务：常规任务生成微信公众号或 Customer.io Newsletter 草稿；`opening-digest` 是受控例外，会按独立受众发送或排期。开发环境支持 macOS，生产环境支持由 systemd 管理的 Linux 主机。
+单实例运行的 Slack 内容编排服务：常规任务生成微信公众号或 Customer.io Newsletter 草稿；`opening-digest` 是受控例外，会按独立受众发送或排期，并仅在正式 cron 的邮件成功后派生 Discord 投递。开发环境支持 macOS，生产环境支持由 systemd 管理的 Linux 主机。
 
 ## 开发与验证
 
@@ -26,12 +26,12 @@
 - 发布成功以渠道返回的 `media_id` 为准；进度和 warning 是 best-effort，终态通知与 QDII 核心回复在 Slack 不可用时必须写入 SQLite outbox 并在连接恢复后按当前任务状态补发；通知失败不得把已创建的草稿改记为失败。
 - 所有真实草稿渠道必须在 `src/lib/draft-template.js` 登记固定模板，并暴露完全匹配的 `templateId` 与 `templateLocked: true`；任务输入和工作流不得临时覆盖模板。改版时必须升级模板版本并同步渲染测试与文档。
 - 保持微信公众号与常规 Newsletter 的“只创建草稿”边界；`opening-digest` 仅可使用受保护的独立受众并通过现有门禁发送/排期；继续遵守 Slack 允许名单和渲染 golden 测试约束。不得新增公网 IP 白名单、出口 IP 校验或因代理环境变量阻止启动/发布的门禁。
-- `opening-digest` 的内容格式/新鲜度、部分行情、OIC、封面、受众人数和预检异常属于可发送降级，只写 `research-trace.json`，不得发 Slack warning。受控例外是邮件已成功后启用的微信同步：微信草稿创建失败、第三次回读仍不一致或无法回读时，邮件任务仍保持 `done`，并发送精确的 best-effort Slack warning；只有明确的硬门禁、严重事实问题修复耗尽或 Customer.io 邮件的客观发送失败才发送 Slack failure。正文退订标签必须本地移除，Customer.io layout 唯一负责法定退订链接，不得恢复 `/contents` 读回门禁。
+- `opening-digest` 的内容格式/新鲜度、部分行情、OIC、封面、受众人数和预检异常属于可发送降级，只写 `research-trace.json`，不得发 Slack warning。受控例外是邮件成功后的派生渠道：显式启用的微信同步和仅正式 cron 的 Discord 持久 outbox 都复用冻结 payload；人工 TEST 永不进入 Discord。微信草稿创建失败、第三次回读仍不一致或无法回读，以及 Discord 终态投递失败时，邮件任务仍保持 `done`，并发送精确的 best-effort Slack warning；只有明确的硬门禁、严重事实问题修复耗尽或 Customer.io 邮件的客观发送失败才发送 Slack failure。正文退订标签必须本地移除，Customer.io layout 唯一负责法定退订链接，不得恢复 `/contents` 读回门禁。
 - 不提交 `.env`、凭据、任务数据库或生成内容。修改环境变量时同步 `.env.example`；改变用户流程、渠道或运维方式时同步 README 或 `docs/`。
 
 ## 运维边界
 
-- 生产必须设置 `MAX_QUEUE_SIZE` 并只运行一个进程；当前已验证的 1 vCPU/2GB 主机最多使用 `MAX_CONCURRENCY=2`，资源门禁保持浏览器/微信写入/Customer.io 写入各 1、OpenRouter 2、Exa Search 8 QPS，不得通过第二实例扩大并发。
+- 生产必须设置 `MAX_QUEUE_SIZE` 并只运行一个进程；当前 1 vCPU/2GB 主机使用 `MAX_CONCURRENCY=1`，已验证最高为 2；资源门禁保持浏览器/微信写入/Customer.io 写入各 1、OpenRouter 2、Exa Search 8 QPS，不得通过第二实例扩大并发。
 - Slack 生产环境应配置 `SLACK_ALLOWED_USER_IDS` 和 `SLACK_ALLOWED_CHANNEL_IDS`。
 - 代码或 `.env` 不会自动热加载；必须先完成检查，再由维护者明确重启对应的 launchd 或 systemd 服务。
 - 失败直译只能用 `npm run requeue:translation -- <数据库 run-id>` 受限恢复；不得手改 SQLite 状态。命令必须拒绝无 checkpoint、非直译任务和已有 `media_id` 的任务。旧代码块门禁或代码安全渲染兼容误拦截的 V2 分析只能用 `npm run requeue:analysis-gate -- <数据库 run-id>` 恢复，并拒绝非四类分析、非精确白名单错误、无有效 Slack 通知或已有 `media_id` 的任务。两个命令都只重新入队，再重启唯一实例。
