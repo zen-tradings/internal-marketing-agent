@@ -19,6 +19,7 @@ const SENDER = 'support@zentradings.com';
 const CUSTOMERIO_MIN_SCHEDULE_LEAD_MS = 5 * 60 * 1000;
 export const CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['customerio-opening-digest'];
 export const OPENING_DIGEST_NEWSLETTER_TITLE = 'Zen Opening Digest';
+export const OPENING_DIGEST_DISCORD_INVITE_URL = 'https://discord.gg/EtNErjaN8';
 
 export function makeChannel({
   readArticle = (file) => fs.readFile(file, 'utf8'),
@@ -143,6 +144,7 @@ export function makeChannel({
           renderMetricsHtml(metricResult.metrics),
           renderMarkdown(article.body),
           options ? renderOptionsHtml(options) : '',
+          renderDiscordInviteHtml(),
         ].filter(Boolean).join('\n');
         const body = renderNewsletterEmail({ ...article, edition: dateKey }, {
           ...cio, headerImageUrl, contentHtml, includeUnsubscribe: false,
@@ -264,6 +266,10 @@ export function makeChannel({
       }
     },
   };
+}
+
+function renderDiscordInviteHtml() {
+  return `<p style="margin:24px 0 0;padding-top:18px;border-top:1px solid #dcd8d5;font-size:14px"><a href="${OPENING_DIGEST_DISCORD_INVITE_URL}" style="color:#0b6d75;font-weight:500">Join us on Discord</a></p>`;
 }
 
 export async function publishHistoricalOpeningDigestWechat({

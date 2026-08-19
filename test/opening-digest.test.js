@@ -16,6 +16,7 @@ import {
 } from '../src/lib/opening-digest-cover.js';
 import {
   makeChannel,
+  OPENING_DIGEST_DISCORD_INVITE_URL,
   publishHistoricalOpeningDigestWechat,
   renderOptionsHtml,
 } from '../src/channels/customerio-opening-digest.js';
@@ -443,8 +444,12 @@ test('complete digest renders template, address, options and schedules without c
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
   assert.equal(create.body.name, 'Zen Opening Digest · 2026-08-10');
   assert.equal(create.body.subject, 'Zen Opening Digest · August 10, 2026');
-  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@6"/);
+  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@7"/);
   assert.match(create.body.body, /href="https:\/\/example\.com\/a"/, '英文邮件必须继续保留来源链接');
+  assert.match(create.body.body, new RegExp(`href="${OPENING_DIGEST_DISCORD_INVITE_URL}"[^>]*>Join us on Discord</a>`));
+  assert.equal(create.body.body.split(OPENING_DIGEST_DISCORD_INVITE_URL).length - 1, 1);
+  assert.ok(create.body.body.indexOf(OPENING_DIGEST_DISCORD_INVITE_URL) > create.body.body.indexOf('OIC Trending Options Volume top twenty'));
+  assert.ok(create.body.body.indexOf(OPENING_DIGEST_DISCORD_INVITE_URL) < create.body.body.indexOf('Was this edition useful?'));
   assert.match(create.body.body, /href="https:\/\/www\.linkedin\.com\/company\/110921483"[^>]*>LinkedIn<\/a>/);
   assert.match(create.body.body, /\.zen-email-content \{ padding:20px 8px !important; \}/);
   assert.match(create.body.body, /Zen Trading · 700 Leahy St, Redwood City, CA 94061/);
