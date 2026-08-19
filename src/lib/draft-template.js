@@ -2,7 +2,7 @@ export const FIXED_DRAFT_TEMPLATE_IDS = Object.freeze({
   'wechat-draft': 'zen-wechat/zen-trading@4',
   'wechat-opening-digest': 'zen-wechat/zen-trading@6',
   'customerio-draft': 'zen-customerio/zen-research@5',
-  'customerio-opening-digest': 'zen-customerio/zen-research@6',
+  'customerio-opening-digest': 'zen-customerio/zen-research@7',
 });
 
 export function assertFixedDraftTemplate(channelId, channel) {
