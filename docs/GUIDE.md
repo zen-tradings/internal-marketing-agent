@@ -1,149 +1,201 @@
-# Zen Content Hub 导读：一个任务的一生 + 想改什么去哪
+# Zen Content Hub Guide: Life of a Task + Where to Change What
 
-> 面向维护者的项目地图。架构与部署看 README.md，本文只回答两个问题：**东西是怎么流动的**、**想改某个行为该动哪个文件**。
+> A maintainer's map of the project. For architecture and deployment see README.md; this document answers only two questions: **how things flow**, and **which file to touch to change a given behavior**.
 
-## 一、一个任务的一生(主链路)
+## 1. Life of a Task (Main Pipeline)
 
-你在 Slack 里发 `@bot 财报：美光 FY26Q3 https://example.com/xxx`,之后依次发生:
+You send `@bot earnings: Micron FY26Q3 https://example.com/xxx` in Slack. Then, in order:
 
 ```
-① 触发     src/triggers/slack.js
-   Socket Mode 收到消息 → parseSlackTask 提取任务文本(清理 Slack 链接格式)
-   → resolveWorkflowTask 认出「财报：」前缀 → workflowId = earnings
-   → 用户/频道允许名单与每分钟限流 → 新消息/编辑防抖
-   → channel + message_ts + 修订号持久化去重
-   → enqueue 落库(SQLite runs 表,状态 queued)
+① Trigger    src/triggers/slack.js
+   Socket Mode receives the message → parseSlackTask extracts the task text
+   (cleans Slack link formatting) → resolveWorkflowTask recognizes the
+   "earnings:" prefix → workflowId = earnings → user/channel allowlists and
+   per-minute rate limiting → debounce of new messages/edits → persistent
+   dedup on channel + message_ts + revision → enqueue to the database
+   (SQLite runs table, status queued)
 
-② 排队     src/core/queue.js + src/core/store.js
-   有界优先级队列限流、最多双并发出队，状态 queued → running。Opening Digest 只优先待执行任务、不抢占；每个活动任务拥有独立 AbortController
-   和 generate/publish 阶段标记；Slack 中英文停止指令可在 generate 阶段取消任务并清理
-   run 目录，进入外部 publish 阶段后拒绝强杀。崩溃重启时 running 会被标 interrupted；
-   管理员显式重新排队后，持久化 queued 任务会在下次启动恢复，避免历史中断任务被自动误发。
+② Queue      src/core/queue.js + src/core/store.js
+   Bounded priority queue with at most two concurrent dequeues; status
+   queued → running. Opening Digest only prioritizes pending tasks, never
+   preempts. Each active task owns an AbortController and a
+   generate/publish phase marker; Slack stop commands (Chinese or English)
+   can cancel a task during the generate phase and clean up its run
+   directory; force-kill is refused once the task enters an external
+   publish phase. On crash/restart, running tasks are marked interrupted;
+   persisted queued tasks resume on next start only after an explicit
+   admin requeue, so historical interrupted tasks are never auto-published
+   by mistake.
 
-③ 调研+写作  src/core/analysis-v2.js + src/core/runner.js
-   微信原创/行业/公司/财报/macro 先把未经截断的 Slack 原始 Prompt 固化为 TaskContract，
-   抽取英文/法定别名后再生成最多 8 个 SearchPlan 定向查询。Slack PDF/文本附件、
-   PDF/Notion/Google Docs/GitHub URL 与 Exa 搜索并行读取，并作为一级用户来源。直读失败时
-   依次尝试精确缓存和 URL 语义恢复；FCC PDF 只有在机构、`DA` 文号和文件主题全部匹配时，
-   才使用 `docs.fcc.gov` 的官方 TXT 附件恢复为同一用户文档；
-   每个任务至少包含一条中文查询和一条英文查询，默认继续以最新官方/一手、
-   既定优先源和开放来源交叉验证。同层级优先英文或任何语言的独立第三方机构，
-   搜索结果确定性排除政府资助、国家所有和公共广播媒体；监管、交易所、统计部门
-   的原始文件仍可作一手证据，用户主动提供的受限媒体只作上下文、不作佐证或引用。
-   公司任务同时补跑
-   季度财务、监管披露和价值链三路深搜。检索结果按用户每项要求形成
-   EvidenceMatrix；静态域名只用于发现，必须匹配发布主体、页面类型和目标实体才能
-   判为一手来源。证据矩阵完成后，通用任务由 latepost-ai-writer 选择受控稿型、证据可支持的
-   角度、核心矛盾和结尾约束；Slack Prompt、来源安全、用户指定结构和工作流方法始终
-   优先。正文模型只接收相关证据写作，生产通用正文由 Qwen3.8-Max 承担，Opening Digest 英文主稿独立使用 GPT-OSS 120B；GLM 5.2 的事实审计按影响、风险、来源和置信度返回精确原句与
-   局部动作，低风险/中低置信度/用户前提保留待复核，只有高置信度问题可自动修改，
-   不能重写全文。缺资料和无支持句不再提问；只有用户材料与一手来源对核心前提
-   形成双边、不可调和冲突时转 needs_input，同一线程回答后不重复询问。
-   引用链接由系统从证据矩阵精选并确定性追加，不再由模型维护。macro 会优先保留
-   与概率、价格、收益率和市场反应等关键要求直接对应的证据；审计再返回最多四组
-   关键主张与证据 ID，与至少一个核心一手来源合并成最多五条最终精选来源。macro 同时加载
-   global-macro-strategy-writer，由它主导已定价预期、增量信息、跨资产传导、双向情景、
-   观察信号和失效条件；LatePost 方法只补证据、归因、因果推进和避免虚构。其 trace
-   额外记录双 skill、选定稿型、Slack 路由原因、证据边界、最终精选来源与宏观审计结果。
-   中低置信度的高风险推断允许保留并创建草稿，但必须在原 Slack 线程提醒人工复核。
-   生产默认运行 V2；V1 路径只通过 ANALYSIS_PIPELINE_VERSION 保留为单实例紧急回退，
-   并使用确定性稿型回退，不作为日常运行模式。写作 skill 仅作用于微信原创、行业、
-   公司、财报和 macro；翻译、晨报和 Newsletter 不加载它。macro 只有 Slack 触发器，
-   没有 cron，且渠道固定沿用微信草稿，绝不自动发布。
-   调 OpenRouter chat completions(通用正文模型 = `.env` 的 `OPENROUTER_MODEL`；Opening Digest 英文主稿 = `OPENING_DIGEST_MODEL`，未设置时回退到通用模型),
-   每个任务使用 `runWorkDir()` 计算的独立
-   `workDir/runs/<readable-run-id>-<hash>/`，产出其中的 article.md
-   (必须有 title frontmatter，这是硬契约，checkpoint 和生成素材也不得跨任务复用)。
+③ Research + writing   src/core/analysis-v2.js + src/core/runner.js
+   WeChat original/sector/company/earnings/macro first freeze the
+   untruncated raw Slack Prompt into a TaskContract, extract
+   English/legal aliases, then generate up to 8 targeted SearchPlan
+   queries. Slack PDF/text attachments and PDF/Notion/Google Docs/GitHub
+   URLs are read in parallel with Exa search and kept as first-class user
+   sources. On direct-read failure, recovery tries the exact cache and
+   then URL-semantic recovery; an FCC PDF is restored via the official
+   docs.fcc.gov TXT attachment only when agency, `DA` document number,
+   and file subject all match, proving it is the same user document.
+   Every task includes at least one Chinese and one English query, and
+   by default cross-verifies with the latest official/primary sources,
+   established priority sources, and open sources. Within the same
+   evidence tier, prefer English sources or independent third-party
+   institutions in any language; search results deterministically exclude
+   government-funded, state-owned, and public-broadcast media. Raw
+   filings from regulators, exchanges, and statistics bureaus still count
+   as primary evidence; restricted media proactively supplied by the user
+   is context only, never corroboration or citation. Company tasks also
+   run three extra deep-search tracks: quarterly financials, regulatory
+   disclosures, and value chain. Retrieval results are organized into an
+   EvidenceMatrix keyed by each user requirement; static domains are for
+   discovery only — a source is primary only when publisher, page type,
+   and target entity all match. Once the matrix is complete, generic
+   tasks are routed to latepost-ai-writer, which selects a controlled
+   article type, an evidence-supported angle, the core tension, and
+   ending constraints; the Slack Prompt, source safety, user-specified
+   structure, and workflow methodology always take precedence. The body
+   model receives only relevant evidence; production generic body text is
+   written by Qwen3.8-Max, while the Opening Digest English main draft
+   independently uses GPT-OSS 120B. GLM 5.2's fact audit returns exact
+   offending sentences with local actions classified by impact, risk,
+   source, and confidence; low-risk / medium-low-confidence / user-stated
+   premises are kept for review, and only high-confidence issues may be
+   auto-fixed — never a full rewrite. Missing material and unsupported
+   sentences no longer trigger questions; only a bilateral, irreconcilable
+   conflict between user material and primary sources over a core premise
+   routes to needs_input, and answering in the same thread is never
+   re-asked. Citation links are deterministically selected from the
+   evidence matrix and appended by the system, never maintained by the
+   model. Macro prefers evidence directly tied to key requirements such
+   as probability, price, yield, and market reaction; the audit then
+   returns at most four key claim/evidence-ID groups, merged with at
+   least one core primary source into at most five final curated sources.
+   Macro also loads global-macro-strategy-writer, which leads on priced-in
+   expectations, incremental information, cross-asset transmission,
+   two-sided scenarios, watch signals, and invalidation conditions; the
+   LatePost method only supplements evidence, attribution, causal
+   progression, and fabrication avoidance. Its trace additionally records
+   the dual skills, chosen article type, Slack routing reason, evidence
+   boundaries, final curated sources, and macro audit results.
+   Medium/low-confidence high-risk inferences may be kept and the draft
+   created, but a human-review reminder must be posted to the original
+   Slack thread. Production runs V2 by default; the V1 path is kept only
+   as a single-instance emergency fallback via ANALYSIS_PIPELINE_VERSION,
+   uses a deterministic article-type fallback, and is not a daily mode.
+   The writing skill applies only to WeChat original, sector, company,
+   earnings, and macro; translation, morning digest, and Newsletter do
+   not load it. Macro has only a Slack trigger, no cron, and its channel
+   is fixed to WeChat draft — it never auto-publishes.
+   Calls OpenRouter chat completions (generic body model = `OPENROUTER_MODEL`
+   in `.env`; Opening Digest English main draft = `OPENING_DIGEST_MODEL`,
+   falling back to the generic model when unset). Each task uses its own
+   `workDir/runs/<readable-run-id>-<hash>/` computed by `runWorkDir()`,
+   producing article.md inside it (title frontmatter is a hard contract;
+   checkpoints and generated assets must never be reused across tasks).
 
-④ 发布     src/index.js → src/channels/wechat-draft.js  (publish)
-   draft-template.js 先核对真实渠道已登记并锁定固定模板，未登记或不匹配时拒绝调用发布接口
-   → 四空格代码规范为 text 围栏；gate.js(errors 拦截:缺 title/密钥/本地路径，未授权代码仅 warning)
-   → Markdown 阶段由 assets.js 注入固定头图 assets/zen-header-banner.gif
-   → 生成封面 cover.js(便宜模型提取封面数据 → 仓库内置 cover-generator 用无头 Chromium 渲染；
-     字段提取失败回退安全默认值，生成器失败或超时则阻止发布)
-   → @wenyan-md/core 渲染，wechat-render.js 在最终 HTML 末尾依次追加
-     assets/zen-survey-qr.jpg、assets/zen-footer-qr.png，再上传微信草稿箱(RENDER_OPTS 是与 wenyan-mcp
-     逐字符 parity 的硬约束,永远不要改)→ 拿 media_id 落库(幂等锚点)
+④ Publish    src/index.js → src/channels/wechat-draft.js  (publish)
+   draft-template.js first verifies the real channel has a registered and
+   locked fixed template; unregistered or mismatched channels are refused
+   → four-space code is normalized to text fences; gate.js (errors block:
+   missing title / secrets / local paths; unauthorized code is only a
+   warning) → at the Markdown stage assets.js injects the fixed header
+   image assets/zen-header-banner.gif → cover generation cover.js (a cheap
+   model extracts cover data → the in-repo cover-generator renders with
+   headless Chromium; field-extraction failure falls back to safe
+   defaults, generator failure or timeout blocks publishing)
+   → @wenyan-md/core rendering; wechat-render.js appends
+   assets/zen-survey-qr.jpg then assets/zen-footer-qr.png at the end of
+   the final HTML, then uploads to the WeChat draft box (RENDER_OPTS is a
+   hard character-level parity constraint with wenyan-mcp — never change
+   it) → persist the returned media_id (idempotency anchor)
 
-⑤ 回报     src/core/notifier.js
-   入队回执显示完整 Prompt、精确型号、链接数量和修订号。成功/失败/警告/澄清都
-   回 Slack 原消息串。终态通知和 QDII 核心回复失败时进入 SQLite outbox，Slack 恢复后
-   按任务当前状态补发；进度和警告仍为 best-effort。通知失败不能把已创建草稿改记为失败。
+⑤ Report     src/core/notifier.js
+   The enqueue receipt shows the full Prompt, exact models, link count,
+   and revision number. Success/failure/warning/clarification all reply
+   in the original Slack thread. Terminal-state notifications and QDII
+   core replies go into the SQLite outbox on failure and are re-sent
+   against the task's current state once Slack recovers; progress and
+   warnings remain best-effort. A notification failure must never flip an
+   already-created draft to failed.
 ```
 
-## 二、配置的三层
+## 2. The Three Layers of Configuration
 
-1. **`.env`（运行时开关，改完要重启进程）**：密钥、模型、任务目录、队列上限、抓取/外部 API 超时、Slack 允许名单、数据保留期、`HUB_DRY_RUN=1`、固定头图、两张固定尾图和定时表达式。完整列表和默认值以 `.env.example` 为准。服务不配置或校验公网出口 IP。
-2. **`src/workflows/*.js`(声明式工作流)**:每个文件声明 id、触发器、渠道、优先信源和备用方法论。V2 中 Slack Prompt 决定内容，行业/公司/财报方法论只补充用户未规定的结构。公共信源在 `workflows/shared.js`；结构化直译继续使用自己的固定链路。
-3. **`src/config/index.js`(env → config 对象的翻译层)**:新加 env 键时在这里给默认值。
+1. **`.env` (runtime switches; restart the process after changes)**: secrets, models, task directories, queue limits, fetch/external-API timeouts, Slack allowlists, data retention, `HUB_DRY_RUN=1`, fixed header image, the two fixed footer images, and cron expressions. See `.env.example` for the full list and defaults. The service does not configure or validate a public egress IP.
+2. **`src/workflows/*.js` (declarative workflows)**: each file declares an id, triggers, channels, priority sources, and a fallback methodology. In V2 the Slack Prompt drives content; sector/company/earnings methodologies only fill in structure the user did not specify. Shared sources live in `workflows/shared.js`; structured translation keeps its own fixed pipeline.
+3. **`src/config/index.js` (translation layer from env → config object)**: give new env keys their defaults here.
 
-## 三、想改什么,去哪改
+## 3. To Change Something, Go Here
 
-| 想改的行为 | 文件 | 备注 |
+| Behavior to change | File | Notes |
 |---|---|---|
-| 分析 Prompt 合同、证据矩阵、局部审计 | `src/core/analysis-v2.js` | 原始 Prompt 最高优先；纯函数便于回归 |
-| 微信分析编排与外部调用 | `src/core/runner.js` 的 Analysis V2 分支 | 规划、Exa、写作、审计、确定性引用 |
-| 中文原创写作方法、稿型与质量检查 | `skills/latepost-ai-writer/` + `src/lib/editorial-skill.js` | EvidenceMatrix 后路由；trace 记录摘要、稿型与角度；不得覆盖用户结构 |
-| 全资产宏观方法、三类稿型与样本索引 | `skills/global-macro-strategy-writer/` + `src/workflows/macro.js` | 宏观主导、LatePost 约束证据；只创建微信草稿，无 cron |
-| 用户附件与直接文档 | `src/core/user-sources.js` | Slack 私有文件、PDF、Notion、Google Docs、GitHub；并行读取并保留一级来源身份；受阻文档的官方镜像必须验证机构、文号和主题 |
-| QDII 股票持仓数据 | `src/core/qdii.js` + `python/qdii_worker.py` | AKShare 合格即用；过期/空数据依次回退证监会、交易所和可验证基金公司，PDF 下载仍走安全网络门禁 |
-| 备用文章结构 | `src/workflows/<id>.js` 的 `defaultMethodology` | 只在用户未规定结构时补空白 |
-| 新增一种文章类型 | 新建 `src/workflows/<name>.js` + `src/index.js` WORKFLOWS 注册 | 照抄 earnings.js 的结构 |
-| 公司深度备用框架 | `src/workflows/company.js` | 只有 Prompt 确实要求公司财务/竞争/价值链时使用 |
-| Slack 中英文触发、编辑、补充、停止与路由 | `src/triggers/slack.js` | macro 要求宏观主题 + 分析意图；公司/财报/行业优先，混合请求只选一个流程 |
-| 直译范围识别 | `src/workflows/translation-scope.js` | 页码和章节范围；用户页码为 1-based，Datalab 请求转换为 0-based |
-| 直译内容提取/结构 | `src/workflows/translation-source-text.js` | arXiv HTML 优先，alphaXiv 按论文 ID 映射到官方 arXiv；反爬页按结构和短提示识别；普通 HTML/Notion 保留标题、段落、图表、公式、代码和引用 |
-| PDF 结构化解析 | `src/workflows/datalab-parser.js` | 直译/扫描件走托管 Datalab；完成态需稳定返回有效质量分、完整连续分页及双向匹配的图片引用；有文字层的分析型 PDF 可在 `user-sources.js` 用 Poppler 降级读取 |
-| 直译翻译/完整性/checkpoint | `src/workflows/translation-source-text.js` | Datalab 多页根容器原序解析，Poppler/Datalab/结构化正文三方覆盖校验；逐文本节点翻译，不可变 token 在未翻译检测前遮蔽，纯公式/引用占位符块只做 token 等价校验；最多两轮定向修复、宽松复核例外、逐单元 checkpoint 及结构/资产硬门禁 |
-| 直译执行与研究轨迹 | `src/workflows/translate-engine.js` | 把 manifest、严格等价状态、待复核块、全部候选与最终选择写入 trace |
-| 失败直译受限续跑 | `scripts/requeue-translation.mjs` + `src/core/store.js` | 只接受数据库 run-id；要求 checkpoint，拒绝其它工作流、已有 `media_id` 和非白名单失败 |
-| 旧代码输出分析受限重排 | `scripts/requeue-analysis-gate.mjs` + `src/core/store.js` | 仅四个 V2 分析流的旧代码 gate/安全渲染兼容错误，拒绝已发布、无 Slack 通知和其它错误 |
-| 文档抓取配置 | `.env` 的 `TRANSLATION_*` / `NOTION_API_TOKEN` / `GOOGLE_DOCS_CLIENT_ID` / `GOOGLE_DOCS_CLIENT_SECRET` / `GOOGLE_DOCS_REFRESH_TOKEN` / `GITHUB_TOKEN` / `DATALAB_*` | 控制来源、私有文档、PDF 页数、浏览器、解析质量、超时和重定向；access token 仅为兼容回退 |
-| 单任务取消、发布阶段保护与垃圾目录清理 | `src/core/queue.js`、`src/index.js`、`src/lib/task-cancellation.js` | generate 可取消；publish 后拒绝强杀；取消后状态为 cancelled |
-| 优先信源加减域名 | `workflows/shared.js` 的清单,或 .env EXA_PRIORITY_DOMAINS | 写主域即可,子域自动匹配 |
-| 门禁规则(拦截/提醒) | `src/lib/gate.js` + `src/lib/code-blocks.js` | 未授权代码只提醒；密钥/本地路径仍硬拦截；投资建议敏感词已移除，勿加回 |
-| 微信宽表可读性与自动拆分 | `src/lib/mobile-tables.js` | 紧凑五列可放行；不可读表先拆分，转换失败才由 gate 拦截 |
-| 固定头图/尾图换图 | 替换 `assets/` 下文件，或用 `WECHAT_HEADER_IMAGE` / `WECHAT_SURVEY_IMAGE` / `WECHAT_FOOTER_IMAGE` 覆盖 | Markdown 只注入头图；最终 HTML 强制按“调研图、社群封底”顺序保留最后两张 |
-| 封面版式/字段 | `tools/cover-generator/template.html` | 自定义生成器时覆盖 `COVER_GENERATOR_DIR`；数据提取 prompt 在 `src/lib/cover.js` |
-| 分析模型与预算 | `.env` 的 `OPENROUTER_MODEL` / `OPENROUTER_ROUTER_MODEL` / `OPENROUTER_PLANNER_MODEL` / `OPENROUTER_REVIEW_MODEL` / `ANALYSIS_*` | 正文、路由、规划、审计分离；生产默认 V2 |
-| 草稿固定模板总门禁 | `src/lib/draft-template.js` | 所有真实渠道必须登记模板 ID 并锁定；任务不得覆盖，改版必须升版本和更新测试 |
-| 微信渲染主题 | `zen-wechat/zen-trading@4`、`assets/zen-trading.css` 与 `RENDER_OPTS` | 主题文件随仓库部署；引用块归一为正文字号，最终 HTML 在发布前执行字体、重复来源与固定尾图顺序检查 |
-| Customer.io 邮件草稿 | `src/workflows/email.js` + `src/channels/customerio-draft.js` | 固定 `zen-customerio/zen-research@5`，移动端外壳左右留白 4px、正文左右留白 8px；页脚地址固定为 `700 Leahy St, Redwood City, CA 94061`，LinkedIn 固定为 `https://www.linkedin.com/company/110921483`，只创建草稿；受众由 internal/pilot/full 三阶段配置控制 |
-| Opening Digest 开市日报 | `src/workflows/opening-digest.js` + Customer.io/WeChat/Discord channels | 美东 10:15 生成、目标 10:30；英文主稿使用 `OPENING_DIGEST_MODEL` （生产为 GPT-OSS 120B），Kimi 规划、GLM 审核/压缩与 Qwen 中文直译仍按全局角色配置。固定 72 个 ticker 用于价格/OIC/公司新闻，yfinance/Yahoo 从主要美股及重要 ADR 中提取当前时刻至周五的财报候选，排除 OTC，最多显示广泛市场与 AI/科技均衡的 6 家；精确电话会时间只来自发行人官方公告。Customer.io/WeChat 专用模板为 `zen-customerio/zen-research@7` / `zen-wechat/zen-trading@6`，邮件正文下方固定显示 Discord 社区链接，微信财报预告逐 ticker 单独成行。邮件先发送/排期；微信和 Discord 都复用同一冻结 payload。Discord 仅正式 cron 入持久 outbox，完整发布英文正文、九格行情和可用 OIC，人工 TEST 永不进 `#newsletter-feed`。两个派生渠道失败都不改写邮件结果；行情、财报日历、OIC、封面或搜索失败仍按既定软降级记入 trace |
-| 新发布渠道 | 新建 `src/channels/<name>.js` 实现 publish() + 注册模板和渠道 | 见 README「扩展」一节；未登记模板时 fail closed |
+| Analysis Prompt contract, evidence matrix, local audit | `src/core/analysis-v2.js` | Raw Prompt has top priority; pure functions for easy regression |
+| WeChat analysis orchestration and external calls | Analysis V2 branch of `src/core/runner.js` | Planning, Exa, writing, audit, deterministic citations |
+| Chinese original-writing method, article types, quality checks | `skills/latepost-ai-writer/` + `src/lib/editorial-skill.js` | Routed after the EvidenceMatrix; trace records summary, type, and angle; must not override user structure |
+| All-asset macro method, three article types, sample index | `skills/global-macro-strategy-writer/` + `src/workflows/macro.js` | Macro leads, LatePost constrains evidence; WeChat draft only, no cron |
+| User attachments and direct documents | `src/core/user-sources.js` | Slack private files, PDF, Notion, Google Docs, GitHub; read in parallel and keep first-class source identity; official mirrors of blocked documents must verify agency, document number, and subject |
+| QDII fund holdings data | `src/core/qdii.js` + `python/qdii_worker.py` | AKShare used when fresh; stale/empty data falls back in order to CSRC, exchanges, and verifiable fund companies; PDF downloads still go through the safe-network gate |
+| Fallback article structure | `defaultMethodology` in `src/workflows/<id>.js` | Only fills gaps the user did not specify |
+| Adding a new article type | New `src/workflows/<name>.js` + WORKFLOWS registration in `src/index.js` | Copy the structure of earnings.js |
+| Company deep-dive fallback framework | `src/workflows/company.js` | Only when the Prompt genuinely asks for company financials/competition/value chain |
+| Slack Chinese/English triggers, edits, supplements, stop, routing | `src/triggers/slack.js` | Macro requires a macro theme + analysis intent; company/earnings/sector take priority; a mixed request picks exactly one workflow |
+| Translation scope detection | `src/workflows/translation-scope.js` | Page and section ranges; user page numbers are 1-based, converted to 0-based for Datalab requests |
+| Translation content extraction/structure | `src/workflows/translation-source-text.js` | arXiv HTML preferred, alphaXiv maps paper IDs to official arXiv; anti-bot pages recognized by structure and short probes; plain HTML/Notion keeps headings, paragraphs, figures, formulas, code, and citations |
+| Structured PDF parsing | `src/workflows/datalab-parser.js` | Translation/scans go through managed Datalab; a completed parse must stably return a valid quality score, complete contiguous pagination, and bidirectionally matched image references; analytical PDFs with a text layer may fall back to Poppler in `user-sources.js` |
+| Translation fidelity/completeness/checkpoint | `src/workflows/translation-source-text.js` | Datalab multi-page root containers parsed in original order; three-way coverage validation across Poppler/Datalab/structured body; per-text-node translation; immutable tokens masked before untranslated-text detection; pure formula/citation placeholder blocks get token-equivalence checks only; at most two targeted repair rounds, lenient-review exception, per-unit checkpoints, and hard structure/asset gates |
+| Translation execution and research trace | `src/workflows/translate-engine.js` | Writes the manifest, strict-equivalence status, blocks pending review, all candidates, and the final selection to the trace |
+| Restricted resume of failed translations | `scripts/requeue-translation.mjs` + `src/core/store.js` | Accepts only a database run-id; requires a checkpoint; rejects other workflows, tasks with a `media_id`, and non-allowlisted failures |
+| Restricted requeue of analyses blocked by legacy code gates | `scripts/requeue-analysis-gate.mjs` + `src/core/store.js` | Only legacy gate/safe-render compatibility errors in the four V2 analysis flows; rejects published tasks, tasks without Slack notification, and other errors |
+| Document-fetch configuration | `TRANSLATION_*` / `NOTION_API_TOKEN` / `GOOGLE_DOCS_CLIENT_ID` / `GOOGLE_DOCS_CLIENT_SECRET` / `GOOGLE_DOCS_REFRESH_TOKEN` / `GITHUB_TOKEN` / `DATALAB_*` in `.env` | Controls sources, private documents, PDF page counts, browser, parse quality, timeouts, and redirects; access tokens are a compatibility fallback only |
+| Per-task cancellation, publish-phase protection, garbage-directory cleanup | `src/core/queue.js`, `src/index.js`, `src/lib/task-cancellation.js` | generate is cancellable; force-kill refused after publish; cancelled tasks end in status cancelled |
+| Adding/removing priority-source domains | List in `workflows/shared.js`, or `.env` EXA_PRIORITY_DOMAINS | Write the apex domain; subdomains match automatically |
+| Gate rules (block/warn) | `src/lib/gate.js` + `src/lib/code-blocks.js` | Unauthorized code only warns; secrets/local paths still hard-block; investment-advice sensitive words were removed — do not add them back |
+| WeChat wide-table readability and auto-splitting | `src/lib/mobile-tables.js` | Compact five-column tables may pass; unreadable tables are split first, and the gate blocks only when conversion fails |
+| Replacing fixed header/footer images | Replace files under `assets/`, or override with `WECHAT_HEADER_IMAGE` / `WECHAT_SURVEY_IMAGE` / `WECHAT_FOOTER_IMAGE` | Markdown injects only the header; the final HTML forces the last two images to remain, in order, the survey image and the community back cover |
+| Cover layout/fields | `tools/cover-generator/template.html` | Override `COVER_GENERATOR_DIR` for a custom generator; the data-extraction prompt lives in `src/lib/cover.js` |
+| Analysis models and budgets | `OPENROUTER_MODEL` / `OPENROUTER_ROUTER_MODEL` / `OPENROUTER_PLANNER_MODEL` / `OPENROUTER_REVIEW_MODEL` / `ANALYSIS_*` in `.env` | Body, routing, planning, and audit are separated; production defaults to V2 |
+| Fixed-template master gate for drafts | `src/lib/draft-template.js` | Every real channel must register and lock a template ID; tasks must not override it; a redesign must bump the version and update tests |
+| WeChat render theme | `zen-wechat/zen-trading@4`, `assets/zen-trading.css`, and `RENDER_OPTS` | Theme files deploy with the repo; blockquotes normalize to body size; the final HTML runs font, duplicate-source, and fixed-footer-order checks before publishing |
+| Customer.io email drafts | `src/workflows/email.js` + `src/channels/customerio-draft.js` | Fixed `zen-customerio/zen-research@5`; mobile shell 4px side padding, body 8px; footer address fixed at `700 Leahy St, Redwood City, CA 94061`, LinkedIn fixed at `https://www.linkedin.com/company/110921483`; creates drafts only; audience controlled by the internal/pilot/full three-stage configuration |
+| Opening Digest daily brief | `src/workflows/opening-digest.js` + Customer.io/WeChat/Discord channels | Generated 10:15 ET, target 10:30; English main draft uses `OPENING_DIGEST_MODEL` (GPT-OSS 120B in production); Kimi planning, GLM review/compression, and Qwen Chinese translation follow the global role configuration. Fixed 72 tickers for prices/OIC/company news; yfinance/Yahoo extract earnings candidates from now through Friday across major US stocks and important ADRs, excluding OTC, showing at most 6 names balanced across broad market and AI/tech; exact call times come only from official issuer announcements. Dedicated Customer.io/WeChat templates are `zen-customerio/zen-research@7` / `zen-wechat/zen-trading@6`; the email body ends with a fixed Discord community link; WeChat earnings previews list one ticker per line. The email sends/schedules first; WeChat and Discord both reuse the same frozen payload. Discord enqueues to the persistent outbox only on the official cron, publishing the full English body, nine-grid quotes, and available OIC; manual TEST runs never reach `#newsletter-feed`. Failures in either derived channel never rewrite the email result; quotes, earnings calendar, OIC, cover, or search failures follow the established soft degradation and are recorded in the trace |
+| New publishing channel | New `src/channels/<name>.js` implementing publish() + template and channel registration | See the README "Extending" section; unregistered templates fail closed |
+| Offline eval harness (Metrics A/B) | `src/eval/` (`harness.js`, `cases.js`, `checks/`, `meta.js`, `mutations.js`) + `scripts/eval-run.mjs` / `eval-harvest.mjs` | Checkers replay production gate code (routing, source policy, citations, contract gates, Opening Digest limits, options math, QDII reconcile) over labeled fixtures in `test/fixtures/eval-cases.jsonl`; `--mutate` injects known defect classes to measure checker recall; `--verdicts`/`--meta` accumulate FN/FP rates with Cohen's kappa; fixture labels and independent harvested labels are kept separate |
+| Value metrics (Metric C) | `src/eval/value.js` + `scripts/eval-value.mjs` | Strategy expectancy vs. baseline, reader satisfied-rate, editor edit distance; data collection happens outside the repo, this module only computes the statistics |
 
-## 四、日常运维
+## 4. Daily Operations
 
-### macOS 本机 launchd
+### macOS local launchd
 
 ```bash
-# 看状态 / 日志
+# Status / logs
 launchctl print gui/$(id -u)/com.zentrading.content-hub | head
 tail -f ~/Library/Logs/zen-content-hub/out.log
 
-# 改完代码让它生效(launchd 不会自动 reload)
+# Make code changes take effect (launchd does not auto-reload)
 launchctl kickstart -k gui/$(id -u)/com.zentrading.content-hub
 
-# 开发调试:先停常驻再手动跑,避免双实例重复消费 Slack 消息
+# Development: stop the daemon first, then run manually, to avoid two
+# instances consuming the same Slack messages
 scripts/uninstall-launchd.sh && HUB_DRY_RUN=1 node src/index.js
-# 调完装回去
+# Reinstall when done
 scripts/install-launchd.sh
 ```
 
 ### Linux / DigitalOcean systemd
 
-目录布局、首次安装、不可变发布包、SQLite 与运行资产恢复单元备份、安全更新和健康检查见 [`../deploy/README.md`](../deploy/README.md)。QDII 开发环境先运行 `npm run setup:qdii` 建立 Python 3.11+ 虚拟环境。更新只能通过 `npm run deploy:digitalocean`：在独立 release 目录安装 Node/Python 锁定依赖并执行检查，再验证 SQLite 与运行资产恢复单元备份、切换并重启唯一的 systemd 实例；现役目录用 `.deploy-commit` 标记，不依赖在线 `git pull`。
+For directory layout, first-time install, immutable release packages, SQLite and runtime-asset recovery-unit backups, security updates, and health checks, see [`../deploy/README.md`](../deploy/README.md). For QDII development, first run `npm run setup:qdii` to build the Python 3.11+ virtual environment. Updates happen only through `npm run deploy:digitalocean`: install locked Node/Python dependencies and run checks in a separate release directory, then verify the SQLite and runtime-asset recovery-unit backups, switch over, and restart the single systemd instance. The live directory is marked with `.deploy-commit` and does not depend on an online `git pull`.
 
-改任何 `src/` 代码后的验收顺序：`npm run check`（测试不使用真实业务凭据；依赖审计会访问 npm registry）→ 按需执行真实连接检查 → 验证 SQLite 与运行资产恢复单元备份 → 明确重启对应服务。不要从 Git 拉取后未经检查直接重启。
+Acceptance order after changing any `src/` code: `npm run check` (tests use no real business credentials; the dependency audit reaches the npm registry) → run real connectivity checks as needed → verify the SQLite and runtime-asset recovery-unit backups → explicitly restart the corresponding service. Never pull from Git and restart without checks.
 
-结构化校验失败的直译不要手工改数据库。确认目标版本已部署后，按 [`../deploy/README.md`](../deploy/README.md) 的受限续跑步骤使用数据库 run-id 恢复；命令验证 checkpoint 和 `media_id` 后，重启唯一实例让持久化队列接管。旧版代码围栏/四空格门禁误拦截的四类 V2 分析，只能用 `npm run requeue:analysis-gate -- <run-id>` 恢复；该命令同样只入队、不直接运行。
+For translations that failed structured validation, do not hand-edit the database. After confirming the target version is deployed, recover with the database run-id following the restricted-resume steps in [`../deploy/README.md`](../deploy/README.md); once the command validates the checkpoint and `media_id`, restart the single instance and let the persisted queue take over. For the four V2 analysis flows blocked by legacy code-fence/four-space gates, recovery is only via `npm run requeue:analysis-gate -- <run-id>`; that command also only enqueues and never runs directly.
 
-## 五、阅读顺序建议(第一次读代码)
+## 5. Suggested Reading Order (First Time Through the Code)
 
-1. `src/index.js`——装配入口；从 `makeHandler` 和 `main` 看①-⑤、连接恢复、健康检查与优雅退出如何串起来。
-2. `src/workflows/wechat.js` + `shared.js`——声明式配置长什么样。
-3. `src/core/runner.js`——调研+写作,占业务逻辑大头。
-4. `src/channels/wechat-draft.js`——发布链路的确定性环节顺序。
-5. 其余(store/queue/notifier/triggers)都很薄,遇到再读。
+1. `src/index.js` — the assembly entry point; see how ①–⑤, connection recovery, health checks, and graceful shutdown wire together in `makeHandler` and `main`.
+2. `src/workflows/wechat.js` + `shared.js` — what declarative configuration looks like.
+3. `src/core/runner.js` — research + writing; the bulk of the business logic.
+4. `src/channels/wechat-draft.js` — the deterministic step order of the publish path.
+5. Everything else (store/queue/notifier/triggers) is thin — read it when you run into it.
 
-每个模块都是依赖注入风格(makeXxx({ 依赖 })),对应 test/ 下同名测试文件,想确认某行为,先看测试用例往往比看实现快。
+Every module uses dependency injection (`makeXxx({ deps })`) with a same-named test file under `test/`; to confirm a behavior, reading the test cases is often faster than reading the implementation.

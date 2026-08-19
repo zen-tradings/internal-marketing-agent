@@ -58,6 +58,10 @@ scripts/
 ├── run-macro-acceptance.mjs Run local macro acceptance
 ├── deploy-digitalocean.mjs  Run DigitalOcean preflight and immutable deployment
 ├── preview-newsletter.mjs   Generate a local Newsletter HTML preview
+├── eval-newsletter.mjs      Offline newsletter quality rubric (optional --judge LLM pass)
+├── eval-run.mjs             Offline eval harness: labeled cases, meta-eval (FN/FP), --mutate defect-injection recall
+├── eval-harvest.mjs         Convert a real run directory into a labeled eval case (JSONL line)
+├── eval-value.mjs           Offline value metrics: strategy expectancy, reader feedback, edit distance
 └── update-render-golden.mjs Update rendering golden files
 
 deploy/
@@ -289,6 +293,14 @@ npm run check
 ```bash
 npm run test:update-golden
 ```
+
+### Evaluation
+
+The offline eval harness answers three questions with three metrics:
+
+- **Metric A — correctness**: labeled fixture cases (`test/fixtures/eval-cases.jsonl`) replay the production routing, source-policy, citation-grounding, contract-gate, Opening Digest, options-strategy, and QDII-reconcile checks. Run with `npm run eval:run -- test/fixtures/eval-cases.jsonl`.
+- **Metric B — meta-eval**: is the auditor itself trustworthy? `--mutate` injects known defect classes (fabricated citation, secret leak, shifted breakeven, perturbed holding weight, …) into clean cases and measures checker recall; `--verdicts <file>` accumulates ground-truth-vs-verdict outcomes and `--meta <file>` reports false-negative / false-positive rates with Cohen's kappa. Fixture labels are a regression baseline; `npm run eval:harvest -- <run-dir>` converts real runs into independently labeled cases for honest calibration.
+- **Metric C — value**: `npm run eval:value` computes strategy expectancy vs. baseline, reader satisfied-rate, and editor edit distance over externally collected data (backtest outcomes, Customer.io click exports, draft-vs-sent pairs).
 
 ## Extending the service
 
