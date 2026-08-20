@@ -3,7 +3,7 @@ import path from 'node:path';
 import {
   NEWSLETTER_COMPANY_ADDRESS, parseNewsletterArticle, renderMarkdown, renderNewsletterEmail,
 } from '../lib/newsletter-email.js';
-import { assertRenderedTemplateMarker, FIXED_DRAFT_TEMPLATE_IDS } from '../lib/draft-template.js';
+import { assertRenderedTemplateMarker, FIXED_DRAFT_TEMPLATE_IDS, OPENING_DIGEST_DISCORD_INVITE_URL } from '../lib/draft-template.js';
 import { uploadCustomerIoAsset } from '../lib/customerio-assets.js';
 import { renderOpeningDigestCover } from '../lib/opening-digest-cover.js';
 import { captureTrendingOptionsTable, validateTrendingOptionsData } from '../lib/options-volume.js';
@@ -19,7 +19,7 @@ const SENDER = 'support@zentradings.com';
 const CUSTOMERIO_MIN_SCHEDULE_LEAD_MS = 5 * 60 * 1000;
 export const CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['customerio-opening-digest'];
 export const OPENING_DIGEST_NEWSLETTER_TITLE = 'Zen Opening Digest';
-export const OPENING_DIGEST_DISCORD_INVITE_URL = 'https://discord.gg/EtNErjaN8';
+export { OPENING_DIGEST_DISCORD_INVITE_URL };
 
 export function makeChannel({
   readArticle = (file) => fs.readFile(file, 'utf8'),

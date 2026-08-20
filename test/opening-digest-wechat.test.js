@@ -18,6 +18,7 @@ import {
   translateOpeningDigestPayload,
   translationUnits,
 } from '../src/lib/opening-digest-translation.js';
+import { OPENING_DIGEST_DISCORD_INVITE_URL } from '../src/lib/draft-template.js';
 
 const BODY = `## Earnings ahead
 **Mon, Aug 10:** [NVDA](https://finance.yahoo.com/calendar/earnings) after close (expected)
@@ -305,7 +306,7 @@ test('OIC 时点与归属用确定性中文前缀保留原始数字、时区和�
   assert.equal(result.translations.find((unit) => unit.id === 'oic-attribution').text, '数据由 IVolatility 提供');
 });
 
-test('中文微信 HTML 锁定 @6、9 格行情、OIC 20×8 且低于官方大小限制', () => {
+test('中文微信 HTML 锁定 @7、9 格行情、OIC 20×8 且低于官方大小限制', () => {
   const source = payload(); const translation = translated(source);
   const html = renderWechatOpeningDigestHtml({ source, payload: source, translation, images: { header: 'https://img/h', survey: 'https://img/s', footer: 'https://img/f' } });
   assert.match(html, new RegExp(`data-zen-draft-template="${WECHAT_OPENING_DIGEST_TEMPLATE_ID.replace('/', '\\/')}"`));
@@ -317,6 +318,14 @@ test('中文微信 HTML 锁定 @6、9 格行情、OIC 20×8 且低于官方大�
   assert.doesNotMatch(html, /CNBC|example\.com|finance\.yahoo\.com/i, '微信正文不得保留原文来源引用或 URL');
   assert.match(html, /NVIDIA 公司动态/, '承担正文语义的链接文字应保留为纯文本');
   assert.match(html, /NVDA/, '财报预告中的 Ticker 应保留为纯文本');
+  const document = new JSDOM(`<body>${html}</body>`).window.document;
+  const discord = document.querySelector('[data-zen-section="discord"]');
+  assert.ok(discord, '正文底部必须包含 Discord 社群链接');
+  assert.ok(discord.textContent.includes(`加入 Zen Discord 社区：${OPENING_DIGEST_DISCORD_INVITE_URL}`));
+  assert.equal(discord.querySelector('a'), null, '微信 Discord 链接必须为纯文本');
+  const survey = document.querySelector('[data-zen-role="survey"]');
+  assert.ok(discord.compareDocumentPosition(survey) & 4, 'Discord 链接必须位于问卷图与二维码封底之前');
+  assert.ok(discord.compareDocumentPosition(document.querySelector('[data-zen-oic]')) & 2, 'Discord 链接必须位于 OIC 区块之后');
   const validation = validateWechatOpeningDigestDraft({ content: { news_item: [{ title: 'Zen Research日报 · 2026-08-10', digest: '早盘市场信号。', content: html }] } }, {
     title: 'Zen Research日报 · 2026-08-10', payload: source, translation,
   });

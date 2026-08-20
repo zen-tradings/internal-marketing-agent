@@ -4,7 +4,7 @@ import path from 'node:path';
 import { JSDOM } from 'jsdom';
 import { createWechatClient } from '@wenyan-md/core/wechat';
 import { defaultHttpAdapter } from '@wenyan-md/core/http';
-import { FIXED_DRAFT_TEMPLATE_IDS } from '../lib/draft-template.js';
+import { FIXED_DRAFT_TEMPLATE_IDS, OPENING_DIGEST_DISCORD_INVITE_URL } from '../lib/draft-template.js';
 import { fetchWithTimeout } from '../lib/http-timeout.js';
 import { renderOpeningDigestCover } from '../lib/opening-digest-cover.js';
 import { translationMap } from '../lib/opening-digest-translation.js';
@@ -85,8 +85,12 @@ export function renderWechatOpeningDigestHtml({ payload, translation, images = {
   const bodyBlocks = renderNarrative(payload.article.body, translated);
   const metrics = renderMetrics(payload.metrics || [], translated);
   const options = payload.options ? renderOptions(payload.options, translated) : '';
+  // WeChat forbids off-site hrefs, so the fixed Discord invite is plain text.
+  // It sits below the body (after the OIC block when present) and above the
+  // survey/QR tail images so the fixed tail images still close the article.
+  const discord = `<p data-zen-section="discord" style="margin:20px 0 0;padding-top:16px;border-top:1px solid #e4e0dc;font-size:13px;color:#66787a">加入 Zen Discord 社区：${escapeHtml(OPENING_DIGEST_DISCORD_INVITE_URL)}</p>`;
   const image = (src, role) => src ? `<p data-zen-role="${role}" style="margin:0"><img src="${escapeAttr(src)}" style="display:block;width:100%;height:auto" alt=""></p>` : '';
-  return `<section data-zen-draft-template="${WECHAT_OPENING_DIGEST_TEMPLATE_ID}" style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;color:#173f43;font-size:15px;line-height:1.75;word-break:break-word">${image(images.header, 'header')}<h2 data-zen-section="market" style="margin:22px 0 9px;font-size:18px;color:#08272b">市场快照</h2>${metrics}${bodyBlocks}${options}${image(images.survey, 'survey')}${image(images.footer, 'footer')}</section>`;
+  return `<section data-zen-draft-template="${WECHAT_OPENING_DIGEST_TEMPLATE_ID}" style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;color:#173f43;font-size:15px;line-height:1.75;word-break:break-word">${image(images.header, 'header')}<h2 data-zen-section="market" style="margin:22px 0 9px;font-size:18px;color:#08272b">市场快照</h2>${metrics}${bodyBlocks}${options}${discord}${image(images.survey, 'survey')}${image(images.footer, 'footer')}</section>`;
 }
 
 export function validateWechatOpeningDigestDraft(saved, { title, payload, translation }) {
@@ -148,6 +152,14 @@ export function validateWechatOpeningDigestDraft(saved, { title, payload, transl
     if (node ? !normalizeText(node.textContent).includes(visible) : !fullText.includes(visible)) {
       errors.push(`行情说明块 ${unit.id}:缺失或被改写`);
     }
+  }
+  const discordNode = document.querySelector('[data-zen-section="discord"]');
+  if (!discordNode || !discordNode.textContent.includes(OPENING_DIGEST_DISCORD_INVITE_URL)) {
+    errors.push('Discord 社群链接缺失或被改写');
+  } else {
+    const surveyImage = document.querySelector('[data-zen-role="survey"]');
+    if (surveyImage && !(discordNode.compareDocumentPosition(surveyImage) & 4)) errors.push('Discord 链接必须位于问卷图之前');
+    if (discordNode.querySelector('a')) errors.push('Discord 链接必须为纯文本，不得带 href');
   }
   const images = [...document.querySelectorAll('img')];
   if (images.length < 3) errors.push(`固定图片:期望至少 3，实际 ${images.length}`);
