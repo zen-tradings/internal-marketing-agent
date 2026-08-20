@@ -1,9 +1,15 @@
 export const FIXED_DRAFT_TEMPLATE_IDS = Object.freeze({
   'wechat-draft': 'zen-wechat/zen-trading@4',
-  'wechat-opening-digest': 'zen-wechat/zen-trading@6',
+  'wechat-opening-digest': 'zen-wechat/zen-trading@7',
   'customerio-draft': 'zen-customerio/zen-research@5',
   'customerio-opening-digest': 'zen-customerio/zen-research@7',
 });
+
+// Fixed community invite shown at the bottom of every Opening Digest draft.
+// The email renders it as a hyperlink; WeChat forbids off-site hrefs, so the
+// Chinese draft shows the same URL as plain text. Both renderers must use this
+// single constant.
+export const OPENING_DIGEST_DISCORD_INVITE_URL = 'https://discord.gg/EtNErjaN8';
 
 export function assertFixedDraftTemplate(channelId, channel) {
   if (channelId === 'mock') return 'mock';
