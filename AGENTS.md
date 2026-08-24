@@ -14,8 +14,8 @@
 - `src/index.js` 装配 Slack、队列、工作流和渠道；`src/core/` 存放队列、SQLite、写作和通知。
 - `src/workflows/` 定义任务；常规 `src/channels/` 只创建草稿，`customerio-opening-digest.js` 是受控发送/排期例外；`src/lib/` 放门禁、渲染和网络保护；环境变量由 `src/config/index.js` 统一解析并在启动时校验。
 - 每个任务只能写入自己的工作流隔离目录 `WORK_DIR/<workflow>/runs/<readable-run-id>-<hash>/`（`wechat` 直接以 `WORK_DIR` 为工作流基目录），不得复用全局 `article.md` 或 checkpoint；路径必须由 `runWorkDir()` 计算，不能手拼。
-- 外部文章、PDF、图片等不可信 URL 必须通过 `safeFetchResource()`：禁止私网地址，逐跳校验重定向，并限制单文件与任务总下载量。
-- 分析型用户文档直读失败时只能依次使用精确缓存、URL 语义检索和已登记的官方镜像恢复；镜像仍必须通过 `safeFetchResource()`，并同时校验发布机构、文号和文件主题。无法证明是同一文件时不得把补充报道冒充用户原文或据此生成原文摘要。
+- 外部文章、PDF、图片等不可信 URL 必须通过 `safeFetchResource()`：禁止私网地址，逐跳校验重定向，并限制单文件与任务总下载量。认证后的 Notion/Linear 只解析允许名单 URL 再打固定官方 API，不得先抓浏览器页；仅 `uploads.linear.app` 可跳过本机 Fake-IP DNS pinning，跨域重定向仍必须剥掉 Authorization。
+- 分析型公开网页/PDF 直读失败时只能依次使用精确缓存、URL 语义检索和已登记的官方镜像恢复；镜像仍必须通过 `safeFetchResource()`，并同时校验发布机构、文号和文件主题。无法证明是同一文件时不得把补充报道冒充用户原文或据此生成原文摘要。用户提供的私有 Notion、Google Docs 或 Linear Issue 读失败必须整单硬失败，禁止 Exa 缓存、语义检索或浏览器回退。
 - Slack 私有附件要求 App 的 Bot Token Scopes 包含 `files:read` 并在改 scope 后重新安装；PDF 必须在进入 Poppler 或 Datalab 前验证真实 `%PDF-` 文件签名，Slack 登录 HTML 不得按扩展名误判为 PDF。
 - PDF 直译不得把 Datalab 的并列 `.page[data-page-id]` 交给网页 Readability 选择器；请求页数、连续页 ID、有效质量分、Datalab 图片引用和 Poppler 文本覆盖必须在翻译前通过硬门禁，不能依据 Datalab 的 `page_count` 单字段宣称完整。
 - 微信分析 V2 的搜索计划必须同时包含中文和英文查询；同一证据层级优先英文来源或任何语言的独立第三方机构。政府资助、国家所有和公共广播媒体不得作为搜索证据或最终引用，但监管机构、交易所和统计部门的原始文件仍可作为一手证据；用户主动提供的受限媒体只作上下文。
