@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { JSDOM } from 'jsdom';
 import { chromium } from 'playwright-core';
 import { withRuntimeResource } from '../config/runtime.js';
@@ -17,8 +17,15 @@ const RESERVED_HEADINGS = new Set([
 ]);
 
 const ORDINAL_RE = /^(?:(?:0?\d{1,2}|[一二三四五六七八九十百]+)[、.．]|[（(](?:0?\d{1,2}|[一二三四五六七八九十百]+)[)）])\s*/;
-const HEADING_CARD_WIDTH = 1080;
-const HEADING_CARD_SCALE = 2;
+export const HEADING_CARD_WIDTH = 1062;
+export const HEADING_CARD_HEIGHT = 412;
+export const HEADING_CARD_BACKGROUND = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'assets',
+  'zen-section-heading-card.png',
+);
 
 export function isReservedHeading(text) {
   return RESERVED_HEADINGS.has(String(text || '').trim());
@@ -43,7 +50,13 @@ export function parseSectionHeading(text) {
   return { en: left, zh: right };
 }
 
-export function headingCardHtml({ index, en = '', zh = '', fontUrl = '' } = {}) {
+export function headingCardHtml({
+  index,
+  en = '',
+  zh = '',
+  fontUrl = '',
+  backgroundUrl = '',
+} = {}) {
   const number = String(Math.max(1, Number(index) || 1)).padStart(2, '0');
   const english = String(en || '').trim();
   const chinese = String(zh || '').trim() || english;
@@ -57,15 +70,13 @@ export function headingCardHtml({ index, en = '', zh = '', fontUrl = '' } = {}) 
   return `<!doctype html><html><head><meta charset="utf-8"><style>
 ${fontFace}
 html,body{margin:0;background:#FFFFFF}
-.canvas{width:${HEADING_CARD_WIDTH}px;padding:28px 28px 36px;box-sizing:border-box}
-.card{position:relative;display:inline-block;max-width:720px;background:#FFFFFF;border:1px solid #C9C4BB;border-radius:34px;box-shadow:0 14px 28px rgba(40,36,30,.13);padding:26px 40px 52px 28px;box-sizing:border-box}
-.bar{position:absolute;top:-6px;left:48px;width:62px;height:16px;background:#C9C4BB;border-radius:3px}
-.row{display:flex;align-items:flex-start;gap:18px}
-.index{flex:0 0 auto;font-family:Georgia,"Times New Roman",serif;font-size:68px;line-height:.86;font-weight:400;color:#C9C4BB;padding-top:2px;letter-spacing:.02em}
-.copy{max-width:28em;padding-top:10px;text-align:right}
-.en{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:24px;line-height:1.25;font-weight:300;color:#C9C4BB;letter-spacing:.01em}
-.zh{margin-top:6px;font-family:"Zen Heading CJK","PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Microsoft YaHei",sans-serif;font-size:30px;line-height:1.35;font-weight:500;color:#2A2A2A;letter-spacing:.04em}
-</style></head><body><div class="canvas"><div class="card" data-zen-heading-card="true"><div class="bar" data-zen-heading-bar="true"></div><div class="row"><div class="index" data-zen-heading-index="true">${number}</div><div class="copy">${englishRow}<div data-zen-heading-zh="true" class="zh">${escapeHtml(chinese)}</div></div></div></div></div></body></html>`;
+.canvas{position:relative;width:${HEADING_CARD_WIDTH}px;height:${HEADING_CARD_HEIGHT}px;overflow:hidden;background:#FFFFFF}
+.plate{position:absolute;inset:0;width:100%;height:100%;display:block}
+.index{position:absolute;left:98px;top:42px;margin:0;font-family:Georgia,"Times New Roman",serif;font-size:88px;line-height:.86;font-weight:400;color:#C9C8C4;letter-spacing:.01em}
+.copy{position:absolute;left:236px;right:52px;top:86px;text-align:right}
+.en{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:29px;line-height:1.12;font-weight:300;color:#A3A3A3;letter-spacing:.02em}
+.zh{margin-top:14px;font-family:"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Noto Sans SC","Microsoft YaHei","Zen Heading CJK",sans-serif;font-size:50px;line-height:1.46;font-weight:400;color:#3E3E3E;letter-spacing:.11em}
+</style></head><body><div class="canvas" data-zen-heading-card="true"><img class="plate" alt="" src="${escapeAttr(backgroundUrl)}"><div data-zen-heading-index="true" class="index">${number}</div><div class="copy">${englishRow}<div data-zen-heading-zh="true" class="zh">${escapeHtml(chinese)}</div></div></div></body></html>`;
 }
 
 export async function restyleSectionHeadings(html, {
@@ -81,13 +92,12 @@ export async function restyleSectionHeadings(html, {
     const raw = normalizeHeadingText(heading.textContent);
     if (!raw || isReservedHeading(raw)) continue;
     const parsed = parseSectionHeading(raw);
-    const card = {
+    cards.push({
       index: cards.length + 1,
       en: stripOrdinals ? stripHeadingOrdinal(parsed.en) : parsed.en,
       zh: stripOrdinals ? stripHeadingOrdinal(parsed.zh) : parsed.zh,
       node: heading,
-    };
-    cards.push(card);
+    });
   }
   if (!cards.length) return document.body.innerHTML;
 
@@ -121,6 +131,11 @@ export async function renderHeadingCardImages(cards, {
   signal,
 } = {}) {
   if (!absoluteDirPath) throw new Error('分区标题卡缺少工作目录');
+  const background = await fs.readFile(HEADING_CARD_BACKGROUND);
+  if (background.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') {
+    throw new Error('分区标题卡底板不是 PNG');
+  }
+  const backgroundUrl = `data:image/png;base64,${background.toString('base64')}`;
   await fs.mkdir(absoluteDirPath, { recursive: true });
   const browserPath = executablePath || resolveBrowserExecutable();
   return withRuntimeResource('browser', async () => {
@@ -132,8 +147,8 @@ export async function renderHeadingCardImages(cards, {
         args: ['--disable-background-networking', '--disable-component-update', '--disable-dev-shm-usage'],
       });
       const page = await browser.newPage({
-        viewport: { width: HEADING_CARD_WIDTH, height: 420 },
-        deviceScaleFactor: HEADING_CARD_SCALE,
+        viewport: { width: HEADING_CARD_WIDTH, height: HEADING_CARD_HEIGHT },
+        deviceScaleFactor: 1,
       });
       const images = [];
       for (const card of cards) {
@@ -143,36 +158,27 @@ export async function renderHeadingCardImages(cards, {
         await page.setContent(headingCardHtml({
           ...card,
           fontUrl: pathToFileURL(DEFAULT_COVER_FONT).href,
+          backgroundUrl,
         }), { waitUntil: 'load' });
+        await page.locator('.plate').evaluate((image) => new Promise((resolve, reject) => {
+          const done = () => {
+            if (image.naturalWidth === 1062 && image.naturalHeight === 412) resolve();
+            else reject(new Error(`分区标题卡底板尺寸无效:${image.naturalWidth}x${image.naturalHeight}`));
+          };
+          if (image.complete) done();
+          else {
+            image.addEventListener('load', done, { once: true });
+            image.addEventListener('error', () => reject(new Error('分区标题卡底板加载失败')), { once: true });
+          }
+        }));
         await page.evaluate(async () => {
           await document.fonts.ready;
-          try { await document.fonts.load('500 32px "Zen Heading CJK"', '标题');
-          } catch {}
-        });
-        const box = await page.locator('.canvas').evaluate((node) => {
-          const card = node.querySelector('[data-zen-heading-card="true"]');
-          const cardBox = card.getBoundingClientRect();
-          const frameBox = node.getBoundingClientRect();
-          return {
-            x: frameBox.x,
-            y: frameBox.y,
-            width: Math.min(frameBox.width, Math.ceil(cardBox.right - frameBox.left + 28)),
-            height: Math.ceil(cardBox.bottom - frameBox.top + 24),
-          };
-        });
-        await page.setViewportSize({
-          width: Math.ceil(box.width),
-          height: Math.max(220, Math.ceil(box.height)),
+          try { await document.fonts.load('500 36px "Zen Heading CJK"', '标题'); } catch {}
         });
         await page.screenshot({
           path: outPath,
           type: 'png',
-          clip: {
-            x: Math.max(0, box.x),
-            y: Math.max(0, box.y),
-            width: box.width,
-            height: box.height,
-          },
+          clip: { x: 0, y: 0, width: HEADING_CARD_WIDTH, height: HEADING_CARD_HEIGHT },
           omitBackground: false,
           animations: 'disabled',
         });

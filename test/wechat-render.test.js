@@ -212,23 +212,26 @@ test('微信分区标题:双语 h2 改写成序号卡片图并跳过引用链接
   assert.doesNotThrow(() => validatePreparedWechatHtml(output, { absoluteDirPath: dir }));
 });
 
-test('微信分区标题卡 HTML 锁定原图结构:短条、右对齐双语、无内部分隔线', () => {
+test('微信分区标题卡 HTML 锁定原图底板和原文字颜色', () => {
   const html = headingCardHtml({
     index: 1,
     en: 'What Niu Lai Is About, at the Very Least',
     zh: '《牛来》在最低限度上关于什么',
+    backgroundUrl: 'asset:zen-section-heading-card.png',
   });
   const document = new JSDOM(html).window.document;
   assert.equal(document.querySelectorAll('table').length, 0);
+  assert.equal(document.querySelector('.plate').getAttribute('src'), 'asset:zen-section-heading-card.png');
   assert.equal(document.querySelector('[data-zen-heading-index]').textContent, '01');
   assert.equal(document.querySelector('[data-zen-heading-en]').textContent, 'What Niu Lai Is About, at the Very Least');
   assert.equal(document.querySelector('[data-zen-heading-zh]').textContent, '《牛来》在最低限度上关于什么');
-  assert.match(html, /position:absolute;top:-6px;left:48px/);
+  assert.match(html, /left:98px;top:42px/);
   assert.match(html, /text-align:right/);
   assert.match(html, /Helvetica Neue/);
-  assert.match(html, /#C9C4BB/);
-  assert.match(html, /background:#FFFFFF/);
-  assert.doesNotMatch(html, /#E9E5DC/);
+  assert.match(html, /PingFang SC/);
+  assert.match(html, /#C9C8C4/);
+  assert.match(html, /#A3A3A3/);
+  assert.match(html, /#3E3E3E/);
 });
 
 test('微信分区标题:直译不去序号且不发明英文', async () => {
