@@ -176,6 +176,7 @@ test('结构化直译抓取、浏览器、PDF、图片、Notion 与 Datalab 配�
     TRANSLATION_MAX_PDF_PAGES: '60',
     TRANSLATION_MAX_ASSET_COUNT: '30',
     NOTION_API_TOKEN: 'notion-secret',
+    LINEAR_API_KEY: 'lin_api_secret',
     GOOGLE_DOCS_ACCESS_TOKEN: 'google-read-token',
     GOOGLE_DOCS_CLIENT_ID: 'google-client-id',
     GOOGLE_DOCS_CLIENT_SECRET: 'google-client-secret',
@@ -189,6 +190,7 @@ test('结构化直译抓取、浏览器、PDF、图片、Notion 与 Datalab 配�
   assert.equal(c.translation.maxPdfPages, 60);
   assert.equal(c.translation.maxAssetCount, 30);
   assert.equal(c.translation.notionApiToken, 'notion-secret');
+  assert.equal(c.translation.linearApiKey, 'lin_api_secret');
   assert.equal(c.documents.googleDocsAccessToken, 'google-read-token');
   assert.equal(c.documents.googleDocsClientId, 'google-client-id');
   assert.equal(c.documents.googleDocsClientSecret, 'google-client-secret');

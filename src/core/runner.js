@@ -882,7 +882,7 @@ async function searchExaV2({
   if (directResult.errors.length) {
     trace.directUserSourceErrors = directResult.errors;
     const privateDocumentErrors = directResult.errors
-      .filter((entry) => ['notion', 'google-doc'].includes(entry.kind));
+      .filter((entry) => ['notion', 'google-doc', 'linear'].includes(entry.kind));
     if (privateDocumentErrors.length) {
       throw new Error(`用户文档读取失败:${privateDocumentErrors
         .map((entry) => `${entry.name || entry.url}: ${entry.error}`)

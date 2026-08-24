@@ -12,7 +12,7 @@ const envPath = process.env.ZEN_CONTENT_HUB_ENV_FILE
 dotenv.config({ path: envPath });
 const urls = process.argv.slice(2).map((value) => String(value || '').trim()).filter(Boolean);
 if (!urls.length) {
-  console.error('用法：npm run check:documents -- "<Notion 或 Google Docs 私有链接>" [...]');
+  console.error('用法：npm run check:documents -- "<Notion、Google Docs 或 Linear Issue 私有链接>" [...]');
   process.exit(1);
 }
 
@@ -21,6 +21,7 @@ const config = {
     browserEnabled: process.env.TRANSLATION_BROWSER_ENABLED !== 'false',
     browserExecutablePath: process.env.TRANSLATION_BROWSER_EXECUTABLE || '',
     notionApiToken: process.env.NOTION_API_TOKEN || '',
+    linearApiKey: process.env.LINEAR_API_KEY || '',
     datalabApiKey: process.env.DATALAB_API_KEY || '',
     datalabBaseUrl: process.env.DATALAB_API_BASE_URL || 'https://www.datalab.to/api/v1',
   },

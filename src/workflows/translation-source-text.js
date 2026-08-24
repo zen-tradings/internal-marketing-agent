@@ -18,6 +18,13 @@ import {
   throwIfTaskCancelled,
 } from '../lib/task-cancellation.js';
 import { isGoogleDocUrl, resolveGoogleDocsSource } from '../lib/google-docs.js';
+import {
+  isLinearAppUrl,
+  isLinearIssueUrl,
+  isLinearUploadUrl,
+  linearUploadAuthHeaders,
+  resolveLinearIssueSource,
+} from '../lib/linear.js';
 import { convertPdfWithDatalab } from './datalab-parser.js';
 import {
   applyTranslationScope,
@@ -186,11 +193,15 @@ export async function acquireSourceDocument({
   throwIfTaskCancelled(signal);
   const limits = limitsFor(config);
   const notionApiSource = isNotionUrl(sourceUrl) && Boolean(config.notionApiToken);
-  // Authenticated Notion reads only parse the page UUID from an allowlisted
-  // Notion URL, then call the fixed api.notion.com endpoint. Do not resolve or
-  // fetch the browser URL first: managed DNS/proxy clients may map it to a
-  // synthetic reserved address even though the official API remains reachable.
-  if (!notionApiSource) await assertSafeHttpUrl(sourceUrl, { dnsLookup });
+  const linearApiSource = isLinearIssueUrl(sourceUrl);
+  // Authenticated Notion/Linear reads only parse an allowlisted URL, then call
+  // the fixed official API. Do not resolve or fetch the browser URL first:
+  // managed DNS/proxy clients may map it to a synthetic reserved address even
+  // though the official API remains reachable.
+  if (!notionApiSource && !linearApiSource) await assertSafeHttpUrl(sourceUrl, { dnsLookup });
+  if (isLinearAppUrl(sourceUrl) && !linearApiSource) {
+    throw new Error('Linear 链接不是 Issue；第一期只支持 https://linear.app/zen-trading/issue/TEAM-数字/...');
+  }
   fs.mkdirSync(workDir, { recursive: true });
   const acquisition = { attempts: [], fallbacks: [] };
   const googleDocs = isGoogleDocUrl(sourceUrl)
@@ -215,6 +226,44 @@ export async function acquireSourceDocument({
   const acquisitionHeaders = googleDocs
     ? { ...requestHeaders, ...googleDocs.requestHeaders }
     : requestHeaders;
+
+  if (linearApiSource) {
+    if (scope.kind === 'pages') {
+      throw new Error('Linear Issue 没有可验证的 PDF 分页；请改用章节范围');
+    }
+    acquisition.attempts.push('linear-graphql-api');
+    let linear;
+    try {
+      linear = await resolveLinearIssueSource({
+        sourceUrl,
+        config,
+        fetchFn,
+        fetchWithRetry,
+        timeoutMs: limits.fetchTimeoutMs,
+      });
+    } catch (error) {
+      throwIfTaskCancelled(signal);
+      throw error;
+    }
+    const document = await sourceDocumentFromMarkdown({
+      markdown: linear.markdown,
+      sourceUrl,
+      title: linear.title,
+      author: linear.author,
+      publishedDate: linear.publishedDate,
+      extractor: 'linear-graphql-api',
+      sourceType: 'linear',
+      workDir,
+      fetchFn,
+      fetchWithRetry,
+      config,
+      dnsLookup,
+      scope,
+      signal,
+    });
+    document.acquisition = acquisition;
+    return document;
+  }
 
   if (notionApiSource) {
     if (scope.kind === 'pages') {
@@ -553,6 +602,7 @@ export async function sourceDocumentFromMarkdown({
   author,
   publishedDate,
   extractor = 'notion-markdown-api',
+  sourceType = 'notion',
   workDir,
   fetchFn = globalThis.fetch,
   fetchWithRetry,
@@ -698,7 +748,7 @@ export async function sourceDocumentFromMarkdown({
 
   const firstHeading = scoped.blocks.find((block) => block.type === 'heading');
   const document = createSourceDocument({
-    sourceType: 'notion',
+    sourceType,
     extractor,
     sourceUrl,
     title: cleanText(title || firstHeading?.text || new URL(sourceUrl).hostname),
@@ -1428,8 +1478,13 @@ export async function safeFetchResource({
   let current = url;
   let currentHeaders = { ...headers };
   for (let redirects = 0; redirects <= limits.maxRedirects; redirects += 1) {
-    const resolved = await resolveSafeHttpUrl(current, { dnsLookup });
-    const requestFetch = fetchUsesGlobalTransport(fetchFn)
+    // Official Linear uploads stay on a fixed public host. Skip local DNS pinning
+    // so a managed Fake-IP resolver cannot map uploads.linear.app to 198.18/8
+    // and abort an otherwise authenticated asset download.
+    const resolved = isLinearUploadUrl(current)
+      ? { url: new URL(current), addresses: [] }
+      : await resolveSafeHttpUrl(current, { dnsLookup });
+    const requestFetch = !isLinearUploadUrl(current) && fetchUsesGlobalTransport(fetchFn)
       ? rebindFetchTransport(fetchFn, pinnedFetchFactory(resolved.addresses))
       : fetchFn;
     const response = await callFetch(fetchWithRetry, requestFetch, current, {
@@ -2966,6 +3021,7 @@ async function localizeFigureAssets(blocks, {
         fetchWithRetry,
         limits,
         dnsLookup,
+        headers: linearUploadAuthHeaders(image.src, config.linearApiKey),
         accept: 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml;q=0.9,*/*;q=0.1',
         maxBytes: limits.maxSingleAssetBytes,
       });

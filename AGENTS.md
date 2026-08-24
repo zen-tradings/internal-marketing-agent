@@ -6,7 +6,7 @@
 
 - 需要 Node.js 22+；首次运行 `npm ci`，复制 `.env.example` 为 `.env` 并填写凭据。
 - 提交前运行 `npm run check`；它包含语法检查、完整离线测试和高危依赖审计。
-- 真实连接检查会访问外部服务，按需运行 `npm run check:openrouter`、`npm run check:egress`、`npm run check:documents` 或 `npm run check:customerio`。
+- 真实连接检查会访问外部服务，按需运行 `npm run check:openrouter`、`npm run check:egress`、`npm run check:documents` 或 `npm run check:customerio`。`check:documents` 可验收私有 Notion、Google Docs 和 Linear Issue。
 - 开发演练使用 `HUB_DRY_RUN=1 npm start`。不要同时运行 launchd、systemd 或手动实例，避免重复消费 Slack 消息。
 
 ## 结构与硬约束

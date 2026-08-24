@@ -1732,6 +1732,24 @@ test('URL 安全拦截 localhost、私网和保留地址', async () => {
   await assert.doesNotReject(() => assertSafeHttpUrl('https://public.example/a', { dnsLookup: PUBLIC_DNS }));
 });
 
+test('Linear 官方图床在 Fake-IP DNS 下仍可下载，其它域名继续拦截', async () => {
+  const fakeIpDns = async () => [{ address: '198.18.0.86', family: 4 }];
+  await assert.rejects(() => safeFetchResource({
+    url: 'https://cdn.example.com/chart.png',
+    dnsLookup: fakeIpDns,
+    fetchFn: async () => new Response(LINEAR_PNG, { status: 200, headers: { 'content-type': 'image/png' } }),
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+  }), /私网或保留地址/);
+
+  const fetched = await safeFetchResource({
+    url: 'https://uploads.linear.app/workspace/chart.png',
+    dnsLookup: fakeIpDns,
+    fetchFn: async () => new Response(LINEAR_PNG, { status: 200, headers: { 'content-type': 'image/png' } }),
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+  });
+  assert.equal(fetched.buffer.equals(LINEAR_PNG), true);
+});
+
 test('验证码页面拒绝产稿', async () => {
   await assert.rejects(() => acquireSourceDocument({
     sourceUrl: 'https://example.com/captcha',
@@ -1863,4 +1881,212 @@ test('直译入口使用 Google OAuth refresh token 导出私有 Google Docs', a
   assert.match(calls[1].url, /googleapis\.com\/drive\/v3\/files\/private-translation-doc\/export/);
   assert.equal(calls[1].options.headers.Authorization, 'Bearer translation-access-token');
   assert.ok(document.acquisition.attempts.includes('google-drive-oauth-export'));
+});
+
+const LINEAR_ISSUE_URL = 'https://linear.app/zen-trading/issue/ZEN-33/semianalysis-are-open-models-catching-up';
+const LINEAR_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=', 'base64');
+
+function linearGraphqlResponse(issue, { status = 200 } = {}) {
+  return new Response(JSON.stringify({ data: { issue } }), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+test('Linear Issue 只打官方 GraphQL，并保留描述中的图片和表格', async () => {
+  const calls = [];
+  const document = await acquireSourceDocument({
+    sourceUrl: LINEAR_ISSUE_URL,
+    workDir: tempDir(),
+    fetchFn: async (url, options = {}) => {
+      calls.push({ url: String(url), options });
+      if (String(url) === 'https://api.linear.app/graphql') {
+        return linearGraphqlResponse({
+          identifier: 'ZEN-33',
+          title: 'Are open models catching up',
+          description: `# Open models\n\nComplete Linear issue body.\n\n![chart](https://uploads.linear.app/workspace/chart.png)\n\n| Metric | Value |\n| --- | --- |\n| Tokens | 100 |\n`,
+          url: LINEAR_ISSUE_URL,
+          createdAt: '2026-03-20T00:00:00.000Z',
+          creator: { name: 'Clara' },
+        });
+      }
+      if (String(url) === 'https://uploads.linear.app/workspace/chart.png') {
+        return new Response(LINEAR_PNG, {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        });
+      }
+      throw new Error(`unexpected fetch:${url}`);
+    },
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+    config: {
+      linearApiKey: 'lin_api_test',
+      browserEnabled: false,
+      tableRasterizer: async ({ target }) => fs.writeFileSync(target, LINEAR_PNG),
+    },
+    dnsLookup: PUBLIC_DNS,
+  });
+
+  assert.equal(document.extractor, 'linear-graphql-api');
+  assert.equal(document.sourceType, 'linear');
+  assert.equal(document.title, 'Are open models catching up');
+  assert.equal(document.author, 'Clara');
+  assert.deepEqual(document.acquisition.attempts, ['linear-graphql-api']);
+  assert.equal(calls[0].url, 'https://api.linear.app/graphql');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.headers.Authorization, 'lin_api_test');
+  assert.match(String(calls[0].options.body), /"id":"ZEN-33"/);
+  assert.equal(calls.some((call) => call.url.includes('linear.app/zen-trading')), false);
+  const figure = document.blocks.find((block) => block.type === 'figure');
+  assert.equal(figure.caption, 'chart');
+  assert.ok(fs.existsSync(figure.images[0].localPath));
+  assert.equal(calls[1].url, 'https://uploads.linear.app/workspace/chart.png');
+  assert.equal(calls[1].options.headers.Authorization, 'lin_api_test');
+  const table = document.blocks.find((block) => block.type === 'table');
+  assert.ok(table.localPath);
+  assert.ok(fs.existsSync(table.localPath));
+});
+
+test('Linear 图床跨域重定向时不会把 Authorization 带到外域', async () => {
+  const calls = [];
+  const document = await acquireSourceDocument({
+    sourceUrl: LINEAR_ISSUE_URL,
+    workDir: tempDir(),
+    fetchFn: async (url, options = {}) => {
+      calls.push({ url: String(url), headers: options.headers });
+      if (String(url) === 'https://api.linear.app/graphql') {
+        return linearGraphqlResponse({
+          identifier: 'ZEN-33',
+          title: 'Redirected figure',
+          description: 'Body\n\n![chart](https://uploads.linear.app/workspace/chart.png)',
+        });
+      }
+      if (String(url) === 'https://uploads.linear.app/workspace/chart.png') {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://cdn.example.com/chart.png' },
+        });
+      }
+      return new Response(LINEAR_PNG, {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      });
+    },
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+    config: { linearApiKey: 'lin_api_test', browserEnabled: false },
+    dnsLookup: PUBLIC_DNS,
+  });
+  assert.ok(document.blocks.find((block) => block.type === 'figure').images[0].localPath);
+  assert.equal(calls[1].headers.Authorization, 'lin_api_test');
+  assert.equal(calls[2].url, 'https://cdn.example.com/chart.png');
+  assert.equal(calls[2].headers.Authorization, undefined);
+});
+
+test('Linear Issue 未配置 key、其它 workspace 或页码范围时给出明确错误', async () => {
+  await assert.rejects(() => acquireSourceDocument({
+    sourceUrl: LINEAR_ISSUE_URL,
+    workDir: tempDir(),
+    fetchFn: async () => { throw new Error('不应发起网络请求'); },
+    config: { browserEnabled: false },
+    dnsLookup: PUBLIC_DNS,
+  }), /未配置 LINEAR_API_KEY/);
+
+  await assert.rejects(() => acquireSourceDocument({
+    sourceUrl: 'https://linear.app/other-team/issue/ABC-1/title',
+    workDir: tempDir(),
+    fetchFn: async () => { throw new Error('不应发起网络请求'); },
+    config: { linearApiKey: 'lin_api_test', browserEnabled: false },
+    dnsLookup: PUBLIC_DNS,
+  }), /不在允许的 workspace/);
+
+  await assert.rejects(() => acquireSourceDocument({
+    sourceUrl: 'https://linear.app/zen-trading/document/notes-abc123',
+    workDir: tempDir(),
+    fetchFn: async () => { throw new Error('不应发起网络请求'); },
+    config: { linearApiKey: 'lin_api_test', browserEnabled: false },
+    dnsLookup: PUBLIC_DNS,
+  }), /不是 Issue/);
+
+  await assert.rejects(() => acquireSourceDocument({
+    sourceUrl: LINEAR_ISSUE_URL,
+    workDir: tempDir(),
+    fetchFn: async () => { throw new Error('不应发起网络请求'); },
+    config: { linearApiKey: 'lin_api_test', browserEnabled: false },
+    scope: { kind: 'pages', startPage: 1, endPage: 2 },
+    dnsLookup: PUBLIC_DNS,
+  }), /没有可验证的 PDF 分页/);
+});
+
+test('Linear identifier 查询失败时回退 team+number', async () => {
+  const calls = [];
+  const document = await acquireSourceDocument({
+    sourceUrl: LINEAR_ISSUE_URL,
+    workDir: tempDir(),
+    fetchFn: async (url, options = {}) => {
+      calls.push(String(options.body || ''));
+      if (calls.length === 1) {
+        return new Response(JSON.stringify({ data: { issue: null } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({
+        data: {
+          issues: {
+            nodes: [{
+              identifier: 'ZEN-33',
+              title: 'Fallback issue',
+              description: 'Recovered from team and number.',
+            }],
+          },
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+    config: { linearApiKey: 'lin_api_test', browserEnabled: false },
+    dnsLookup: PUBLIC_DNS,
+  });
+  assert.equal(document.title, 'Fallback issue');
+  assert.match(calls[0], /"id":"ZEN-33"/);
+  assert.match(calls[1], /"teamKey":"ZEN"/);
+  assert.match(calls[1], /"number":33/);
+});
+
+test('Linear Issue 鉴权失败或正文为空时给出明确授权提示', async () => {
+  await assert.rejects(() => acquireSourceDocument({
+    sourceUrl: LINEAR_ISSUE_URL,
+    workDir: tempDir(),
+    fetchFn: async () => new Response(JSON.stringify({ errors: [{ message: 'Authentication required, invalid api key' }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+    config: { linearApiKey: 'lin_api_bad', browserEnabled: false },
+    dnsLookup: PUBLIC_DNS,
+  }), /LINEAR_API_KEY 无效或已失效/);
+
+  await assert.rejects(() => acquireSourceDocument({
+    sourceUrl: LINEAR_ISSUE_URL,
+    workDir: tempDir(),
+    fetchFn: async () => new Response(JSON.stringify({ data: { issue: null, issues: { nodes: [] } } }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+    config: { linearApiKey: 'lin_api_test', browserEnabled: false },
+    dnsLookup: PUBLIC_DNS,
+  }), /Issue 不存在/);
+
+  await assert.rejects(() => acquireSourceDocument({
+    sourceUrl: LINEAR_ISSUE_URL,
+    workDir: tempDir(),
+    fetchFn: async () => linearGraphqlResponse({
+      identifier: 'ZEN-33',
+      title: 'Empty',
+      description: '   ',
+    }),
+    fetchWithRetry: async (fetch, url, options) => fetch(url, options),
+    config: { linearApiKey: 'lin_api_test', browserEnabled: false },
+    dnsLookup: PUBLIC_DNS,
+  }), /描述为空/);
 });

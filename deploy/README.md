@@ -118,6 +118,7 @@ ANALYSIS_RECENT_WINDOW_DAYS=60
 EXA_EXCLUDED_MEDIA_DOMAINS=
 EXA_INDEPENDENT_MEDIA_DOMAINS=
 NOTION_API_TOKEN=replace-if-private-notion-pages-are-used
+LINEAR_API_KEY=replace-if-private-linear-issues-are-used
 GOOGLE_DOCS_CLIENT_ID=replace-if-private-google-docs-are-used
 GOOGLE_DOCS_CLIENT_SECRET=replace-if-private-google-docs-are-used
 GOOGLE_DOCS_REFRESH_TOKEN=replace-if-private-google-docs-are-used

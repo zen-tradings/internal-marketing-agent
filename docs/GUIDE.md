@@ -31,7 +31,7 @@ You send `@bot earnings: Micron FY26Q3 https://example.com/xxx` in Slack. Then, 
    WeChat original/sector/company/earnings/macro first freeze the
    untruncated raw Slack Prompt into a TaskContract, extract
    English/legal aliases, then generate up to 8 targeted SearchPlan
-   queries. Slack PDF/text attachments and PDF/Notion/Google Docs/GitHub
+   queries. Slack PDF/text attachments and PDF/Notion/Google Docs/Linear/GitHub
    URLs are read in parallel with Exa search and kept as first-class user
    sources. On direct-read failure, recovery tries the exact cache and
    then URL-semantic recovery; an FCC PDF is restored via the official
@@ -134,20 +134,20 @@ You send `@bot earnings: Micron FY26Q3 https://example.com/xxx` in Slack. Then, 
 | WeChat analysis orchestration and external calls | Analysis V2 branch of `src/core/runner.js` | Planning, Exa, writing, audit, deterministic citations |
 | Chinese original-writing method, article types, quality checks | `skills/latepost-ai-writer/` + `src/lib/editorial-skill.js` | Routed after the EvidenceMatrix; trace records summary, type, and angle; must not override user structure |
 | All-asset macro method, three article types, sample index | `skills/global-macro-strategy-writer/` + `src/workflows/macro.js` | Macro leads, LatePost constrains evidence; WeChat draft only, no cron |
-| User attachments and direct documents | `src/core/user-sources.js` | Slack private files, PDF, Notion, Google Docs, GitHub; read in parallel and keep first-class source identity; official mirrors of blocked documents must verify agency, document number, and subject |
+| User attachments and direct documents | `src/core/user-sources.js` | Slack private files, PDF, Notion, Google Docs, Linear issues, GitHub; read in parallel and keep first-class source identity; official mirrors of blocked documents must verify agency, document number, and subject |
 | QDII fund holdings data | `src/core/qdii.js` + `python/qdii_worker.py` | AKShare used when fresh; stale/empty data falls back in order to CSRC, exchanges, and verifiable fund companies; PDF downloads still go through the safe-network gate |
 | Fallback article structure | `defaultMethodology` in `src/workflows/<id>.js` | Only fills gaps the user did not specify |
 | Adding a new article type | New `src/workflows/<name>.js` + WORKFLOWS registration in `src/index.js` | Copy the structure of earnings.js |
 | Company deep-dive fallback framework | `src/workflows/company.js` | Only when the Prompt genuinely asks for company financials/competition/value chain |
 | Slack Chinese/English triggers, edits, supplements, stop, routing | `src/triggers/slack.js` | Macro requires a macro theme + analysis intent; company/earnings/sector take priority; a mixed request picks exactly one workflow |
 | Translation scope detection | `src/workflows/translation-scope.js` | Page and section ranges; user page numbers are 1-based, converted to 0-based for Datalab requests |
-| Translation content extraction/structure | `src/workflows/translation-source-text.js` | arXiv HTML preferred, alphaXiv maps paper IDs to official arXiv; anti-bot pages recognized by structure and short probes; plain HTML/Notion keeps headings, paragraphs, figures, formulas, code, and citations |
+| Translation content extraction/structure | `src/workflows/translation-source-text.js` | arXiv HTML preferred, alphaXiv maps paper IDs to official arXiv; anti-bot pages recognized by structure and short probes; plain HTML/Notion/Linear keeps headings, paragraphs, figures, formulas, code, and citations |
 | Structured PDF parsing | `src/workflows/datalab-parser.js` | Translation/scans go through managed Datalab; a completed parse must stably return a valid quality score, complete contiguous pagination, and bidirectionally matched image references; analytical PDFs with a text layer may fall back to Poppler in `user-sources.js` |
 | Translation fidelity/completeness/checkpoint | `src/workflows/translation-source-text.js` | Datalab multi-page root containers parsed in original order; three-way coverage validation across Poppler/Datalab/structured body; per-text-node translation; immutable tokens masked before untranslated-text detection; pure formula/citation placeholder blocks get token-equivalence checks only; at most two targeted repair rounds, lenient-review exception, per-unit checkpoints, and hard structure/asset gates |
 | Translation execution and research trace | `src/workflows/translate-engine.js` | Writes the manifest, strict-equivalence status, blocks pending review, all candidates, and the final selection to the trace |
 | Restricted resume of failed translations | `scripts/requeue-translation.mjs` + `src/core/store.js` | Accepts only a database run-id; requires a checkpoint; rejects other workflows, tasks with a `media_id`, and non-allowlisted failures |
 | Restricted requeue of analyses blocked by legacy code gates | `scripts/requeue-analysis-gate.mjs` + `src/core/store.js` | Only legacy gate/safe-render compatibility errors in the four V2 analysis flows; rejects published tasks, tasks without Slack notification, and other errors |
-| Document-fetch configuration | `TRANSLATION_*` / `NOTION_API_TOKEN` / `GOOGLE_DOCS_CLIENT_ID` / `GOOGLE_DOCS_CLIENT_SECRET` / `GOOGLE_DOCS_REFRESH_TOKEN` / `GITHUB_TOKEN` / `DATALAB_*` in `.env` | Controls sources, private documents, PDF page counts, browser, parse quality, timeouts, and redirects; access tokens are a compatibility fallback only |
+| Document-fetch configuration | `TRANSLATION_*` / `NOTION_API_TOKEN` / `LINEAR_API_KEY` / `GOOGLE_DOCS_CLIENT_ID` / `GOOGLE_DOCS_CLIENT_SECRET` / `GOOGLE_DOCS_REFRESH_TOKEN` / `GITHUB_TOKEN` / `DATALAB_*` in `.env` | Controls sources, private documents, PDF page counts, browser, parse quality, timeouts, and redirects; access tokens are a compatibility fallback only |
 | Per-task cancellation, publish-phase protection, garbage-directory cleanup | `src/core/queue.js`, `src/index.js`, `src/lib/task-cancellation.js` | generate is cancellable; force-kill refused after publish; cancelled tasks end in status cancelled |
 | Adding/removing priority-source domains | List in `workflows/shared.js`, or `.env` EXA_PRIORITY_DOMAINS | Write the apex domain; subdomains match automatically |
 | Gate rules (block/warn) | `src/lib/gate.js` + `src/lib/code-blocks.js` | Unauthorized code only warns; secrets/local paths still hard-block; investment-advice sensitive words were removed — do not add them back |
