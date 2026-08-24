@@ -17,8 +17,8 @@ const RESERVED_HEADINGS = new Set([
 ]);
 
 const ORDINAL_RE = /^(?:(?:0?\d{1,2}|[一二三四五六七八九十百]+)[、.．]|[（(](?:0?\d{1,2}|[一二三四五六七八九十百]+)[)）])\s*/;
-export const HEADING_CARD_WIDTH = 1062;
-export const HEADING_CARD_HEIGHT = 412;
+export const HEADING_CARD_WIDTH = 1068;
+export const HEADING_CARD_HEIGHT = 310;
 export const HEADING_CARD_BACKGROUND = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -72,10 +72,10 @@ ${fontFace}
 html,body{margin:0;background:#FFFFFF}
 .canvas{position:relative;width:${HEADING_CARD_WIDTH}px;height:${HEADING_CARD_HEIGHT}px;overflow:hidden;background:#FFFFFF}
 .plate{position:absolute;inset:0;width:100%;height:100%;display:block}
-.index{position:absolute;left:98px;top:42px;margin:0;font-family:Georgia,"Times New Roman",serif;font-size:88px;line-height:.86;font-weight:400;color:#C9C8C4;letter-spacing:.01em}
-.copy{position:absolute;left:236px;right:52px;top:86px;text-align:right}
-.en{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:29px;line-height:1.12;font-weight:300;color:#A3A3A3;letter-spacing:.02em}
-.zh{margin-top:14px;font-family:"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Noto Sans SC","Microsoft YaHei","Zen Heading CJK",sans-serif;font-size:50px;line-height:1.46;font-weight:400;color:#3E3E3E;letter-spacing:.11em}
+.index{position:absolute;left:108px;top:58px;margin:0;font-family:Georgia,"Times New Roman",serif;font-size:72px;line-height:.86;font-weight:400;color:#C9C8C4;letter-spacing:.02em}
+.copy{position:absolute;left:430px;right:56px;top:88px;text-align:right}
+.en{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:28px;line-height:1.15;font-weight:300;color:#A0A0A0;letter-spacing:.02em}
+.zh{margin-top:10px;font-family:"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Noto Sans SC","Microsoft YaHei","Zen Heading CJK",sans-serif;font-size:40px;line-height:1.2;font-weight:400;color:#3E3E3E;letter-spacing:.08em}
 </style></head><body><div class="canvas" data-zen-heading-card="true"><img class="plate" alt="" src="${escapeAttr(backgroundUrl)}"><div data-zen-heading-index="true" class="index">${number}</div><div class="copy">${englishRow}<div data-zen-heading-zh="true" class="zh">${escapeHtml(chinese)}</div></div></div></body></html>`;
 }
 
@@ -162,7 +162,7 @@ export async function renderHeadingCardImages(cards, {
         }), { waitUntil: 'load' });
         await page.locator('.plate').evaluate((image) => new Promise((resolve, reject) => {
           const done = () => {
-            if (image.naturalWidth === 1062 && image.naturalHeight === 412) resolve();
+            if (image.naturalWidth === 1068 && image.naturalHeight === 310) resolve();
             else reject(new Error(`分区标题卡底板尺寸无效:${image.naturalWidth}x${image.naturalHeight}`));
           };
           if (image.complete) done();
