@@ -41,19 +41,16 @@ export function renderSectionHeadingCard({ index, en = '', zh = '' }) {
   const chinese = String(zh || '').trim() || english;
   const showEnglish = Boolean(english && chinese && english !== chinese);
   const englishRow = showEnglish
-    ? `<section data-zen-heading-en="true" style="font-family:'PingFang SC','PingFang TC',-apple-system,BlinkMacSystemFont,'Hiragino Sans GB','Microsoft YaHei',sans-serif;font-size:.78em;line-height:1.35;font-weight:400;color:#A3A3A3;letter-spacing:.01em;">${escapeHtml(english)}</section>`
+    ? `<section data-zen-heading-en="true" style="font-family:Helvetica,'Helvetica Neue',Arial,'PingFang SC',sans-serif;font-size:.72em;line-height:1.3;font-weight:300;color:#C4BFB6;letter-spacing:.02em;text-align:right;">${escapeHtml(english)}</section>`
     : '';
-  const titleStyle = "font-family:'PingFang SC','PingFang TC',-apple-system,BlinkMacSystemFont,'Hiragino Sans GB','Microsoft YaHei',sans-serif;font-size:1.12em;line-height:1.45;font-weight:500;color:#222222;letter-spacing:.04em;";
-  const titleMargin = showEnglish ? 'margin-top:.18em;' : '';
+  const titleMargin = showEnglish ? 'margin-top:.12em;' : '';
   return [
-    '<section data-zen-section-heading="true" style="margin:1.8em 0 .85em;background:#FFFFFF;border:1px solid #E7E3DB;border-radius:1.05em;box-shadow:0 10px 22px rgba(28,28,28,.08);overflow:hidden;">',
-    '<section data-zen-heading-bar="true" style="height:.38em;width:2.15em;margin:.58em 0 0 1.15em;background:#D4D0C8;border-radius:.1em;"></section>',
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;border:0;">',
-    '<tr>',
-    `<td width="18%" valign="top" style="width:18%;padding:.1em .15em .95em 1em;vertical-align:top;"><section data-zen-heading-index="true" style="font-family:Georgia,'Times New Roman',serif;font-size:1.85em;line-height:1;font-weight:400;color:#C4C0B8;letter-spacing:.02em;">${number}</section></td>`,
-    `<td valign="top" style="padding:.12em 1.15em .95em .15em;vertical-align:top;">${englishRow}<section data-zen-heading-zh="true" style="${titleStyle}${titleMargin}">${escapeHtml(chinese)}</section></td>`,
-    '</tr>',
-    '</table>',
+    '<section data-zen-section-heading="true" style="margin:1.8em 0 .85em;background:#FFFFFF;border:1px solid #C4BFB6;border-radius:1.15em;box-shadow:0 10px 22px rgba(28,28,28,.08);overflow:hidden;">',
+    '<section data-zen-heading-bar="true" style="width:1.45em;height:.34em;margin:-1px 0 0 1.45em;background:#C4BFB6;border-radius:.08em;"></section>',
+    '<section data-zen-heading-body="true" style="padding:.08em 1.15em 1.05em 1em;font-size:0;">',
+    `<section data-zen-heading-index="true" style="display:inline-block;width:18%;vertical-align:top;font-family:Georgia,'Times New Roman',serif;font-size:1.85em;line-height:1;font-weight:400;color:#C4BFB6;letter-spacing:.02em;">${number}</section>`,
+    `<section data-zen-heading-copy="true" style="display:inline-block;width:79%;vertical-align:top;text-align:right;">${englishRow}<section data-zen-heading-zh="true" style="font-family:'PingFang SC','PingFang TC',-apple-system,BlinkMacSystemFont,'Hiragino Sans GB','Microsoft YaHei',sans-serif;font-size:.92em;line-height:1.4;font-weight:400;color:#2A2A2A;letter-spacing:.02em;text-align:right;${titleMargin}">${escapeHtml(chinese)}</section></section>`,
+    '</section>',
     '</section>',
   ].join('');
 }

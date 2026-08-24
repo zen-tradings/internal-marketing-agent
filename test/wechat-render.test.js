@@ -193,9 +193,13 @@ test('微信分区标题:双语 h2 改写成序号卡片并跳过引用链接', 
   assert.equal(cards.length, 2);
   assert.equal(document.querySelectorAll('h2').length, 1);
   assert.equal(document.querySelector('h2').textContent.trim(), '引用链接');
+  assert.equal(cards[0].querySelectorAll('table').length, 0);
   assert.equal(cards[0].querySelector('[data-zen-heading-index]').textContent, '01');
   assert.equal(cards[0].querySelector('[data-zen-heading-en]').textContent, 'What Niu Lai Is About, at the Very Least');
+  assert.equal(cards[0].querySelector('[data-zen-heading-en]').style.textAlign, 'right');
   assert.equal(cards[0].querySelector('[data-zen-heading-zh]').textContent, '《牛来》在最低限度上关于什么');
+  assert.equal(cards[0].querySelector('[data-zen-heading-zh]').style.textAlign, 'right');
+  assert.equal(cards[0].querySelector('[data-zen-heading-en]').style.color, 'rgb(196, 191, 182)');
   assert.equal(cards[1].querySelector('[data-zen-heading-index]').textContent, '02');
   assert.equal(cards[1].querySelector('[data-zen-heading-en]'), null);
   assert.equal(cards[1].querySelector('[data-zen-heading-zh]').textContent, '先看数字：一张超级周期的加速图');
