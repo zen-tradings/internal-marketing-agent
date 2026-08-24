@@ -1,6 +1,6 @@
-# Slack 私有 Notion / Google Docs 配置
+# Slack 私有 Notion / Google Docs / Linear 配置
 
-Slack 消息只需要包含标准 `https://...` 页面链接。Bot 不通过 Slack 获取 Notion 或 Google 身份，而是用部署环境中的只读凭据访问原文；分析和完整直译使用同一套权限。程序只读取，不修改 Notion、Google Docs，也不会直接发送或排期文章。
+Slack 消息只需要包含标准 `https://...` 页面链接。Bot 不通过 Slack 获取 Notion、Google 或 Linear 身份，而是用部署环境中的只读凭据访问原文；分析和完整直译使用同一套权限。程序只读取，不修改 Notion、Google Docs、Linear，也不会直接发送或排期文章。
 
 ## Notion
 
@@ -19,6 +19,25 @@ Slack 消息只需要包含标准 `https://...` 页面链接。Bot 不通过 Sla
    ```
 
 `401` 表示 token 无效，`403` 表示缺少 `Read content` capability，`404` 通常表示页面尚未通过 `Add connections` 共享。
+
+## Linear
+
+第一期只读取 `zen-trading` workspace 的 Issue 标题和描述，不读评论、附件、子 Issue，也不跟随描述里的外链。
+
+1. 用能打开目标 Issue 的 Linear 账号打开 Settings → API → Personal API keys，创建一把 Personal API Key。
+2. 复制到本机 `.env`：
+
+   ```dotenv
+   LINEAR_API_KEY=...
+   ```
+
+3. 本机只读验收：
+
+   ```bash
+   npm run check:documents -- "https://linear.app/zen-trading/issue/ZEN-33/..."
+   ```
+
+`401` 表示 key 无效，`403` 或 “无权查看” 表示该账号打不开这条 Issue，其它 workspace 或 Document/Project 链接会被拒绝。权限等于创建 key 的账号：同一 workspace 里其它成员的 Issue，只要该账号自己能打开，Bot 就能读。
 
 ## Google Docs
 
@@ -56,7 +75,7 @@ Slack 消息只需要包含标准 `https://...` 页面链接。Bot 不通过 Sla
 
 ```bash
 npm run check
-npm run check:documents -- "<私有 Notion 链接>" "<私有 Google Docs 链接>"
+npm run check:documents -- "<私有 Notion 链接>" "<私有 Google Docs 链接>" "<私有 Linear Issue 链接>"
 ```
 
 生产部署后，在服务器执行同一个 `check:documents` 命令；脚本会自动读取 `/etc/zen-content-hub/zen-content-hub.env`，如使用其它受保护路径可通过 `ZEN_CONTENT_HUB_ENV_FILE` 指定。最后分别从允许名单内的 Slack 用户发送：
@@ -66,4 +85,4 @@ npm run check:documents -- "<私有 Notion 链接>" "<私有 Google Docs 链接>
 完整直译：https://...
 ```
 
-分析任务的研究 trace 应把来源标记为 `user-document`；直译 trace 的 acquisition 应包含 `notion-markdown-api` 或 `google-drive-oauth-export`。
+分析任务的研究 trace 应把来源标记为 `user-document`；直译 trace 的 acquisition 应包含 `notion-markdown-api`、`google-drive-oauth-export` 或 `linear-graphql-api`。

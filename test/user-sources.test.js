@@ -209,6 +209,46 @@ test('Notion 新版 app.notion.com/p 链接作为一级用户来源读取', asyn
   assert.equal(isDirectUserUrl(originalUrl), true);
 });
 
+test('Linear Issue 作为一级用户来源读取，不请求浏览器页面', async () => {
+  const originalUrl = 'https://linear.app/zen-trading/issue/ZEN-33/semianalysis-are-open-models-catching-up';
+  const calls = [];
+  const result = await loadDirectUserSources({
+    userUrls: [originalUrl],
+    workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'linear-issue-source-')),
+    config: {
+      translation: {
+        browserEnabled: false,
+        dnsLookup: publicDns,
+        linearApiKey: 'lin_api_user',
+      },
+      documents: {},
+    },
+    fetchFn: async (url, options = {}) => {
+      calls.push({ url: String(url), options });
+      assert.equal(String(url), 'https://api.linear.app/graphql');
+      assert.equal(options.headers.Authorization, 'lin_api_user');
+      return new Response(JSON.stringify({
+        data: {
+          issue: {
+            identifier: 'ZEN-33',
+            title: 'Are open models catching up',
+            description: `# Private Linear report\n\n${'Private user-provided Linear research. '.repeat(20)}`,
+          },
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+  assert.equal(result.errors.length, 0, JSON.stringify(result.errors));
+  assert.equal(result.sources.length, 1);
+  assert.equal(result.sources[0].url, originalUrl);
+  assert.equal(result.sources[0].sourceType, 'linear');
+  assert.equal(result.sources[0].extractor, 'linear-graphql-api');
+  assert.match(result.sources[0].text, /Private user-provided Linear research/);
+  assert.equal(isDirectUserUrl(originalUrl), true);
+  assert.equal(isDirectUserUrl('https://linear.app/zen-trading/document/notes-abc'), false);
+  assert.equal(calls.length, 1);
+});
+
 test('GitHub 仓库先读 tree，再并行读取高价值代码文件', async () => {
   let activeFiles = 0;
   let maxActiveFiles = 0;

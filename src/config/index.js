@@ -134,6 +134,7 @@ export function loadConfig(env = process.env) {
       maxAssetBytes: positiveIntegerOrThrow(env.TRANSLATION_MAX_ASSET_BYTES, 40 * 1024 * 1024, 'TRANSLATION_MAX_ASSET_BYTES'),
       maxSingleAssetBytes: positiveIntegerOrThrow(env.TRANSLATION_MAX_SINGLE_ASSET_BYTES, 10 * 1024 * 1024, 'TRANSLATION_MAX_SINGLE_ASSET_BYTES'),
       notionApiToken: env.NOTION_API_TOKEN || '',
+      linearApiKey: env.LINEAR_API_KEY || '',
       datalabApiKey: env.DATALAB_API_KEY || '',
       datalabBaseUrl: env.DATALAB_API_BASE_URL || 'https://www.datalab.to/api/v1',
       datalabMode: translationMode(env.DATALAB_MODE),

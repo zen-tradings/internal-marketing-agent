@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { isGoogleDocUrl } from '../lib/google-docs.js';
+import { isLinearIssueUrl } from '../lib/linear.js';
 import {
   acquireSourceDocument,
   assertPdfPageLimit,
@@ -585,6 +586,7 @@ function directUrlKind(rawUrl) {
   const host = url.hostname.toLowerCase();
   if (host === 'github.com' || host === 'www.github.com') return 'github';
   if (isGoogleDocUrl(rawUrl)) return 'google-doc';
+  if (isLinearIssueUrl(rawUrl)) return 'linear';
   if (host === 'app.notion.com'
     || host === 'notion.so'
     || host.endsWith('.notion.so')

@@ -89,6 +89,7 @@ export function configuredSecretValues(config = {}) {
     config.wechat?.appSecret,
     config.customerio?.appApiKey,
     config.translation?.notionApiToken,
+    config.translation?.linearApiKey,
     config.translation?.datalabApiKey,
   ];
 }
