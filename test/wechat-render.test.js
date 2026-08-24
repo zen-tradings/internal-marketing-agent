@@ -14,7 +14,7 @@ import {
   styleKeyHighlights,
   validatePreparedWechatHtml,
 } from '../src/lib/wechat-render.js';
-import { restyleSectionHeadings } from '../src/lib/wechat-heading.js';
+import { headingCardHtml, restyleSectionHeadings } from '../src/lib/wechat-heading.js';
 
 test('微信最终 HTML:尾图移动到脚注和来源之后且只出现一次', () => {
   const footer = '/assets/zen-footer-qr.png';
@@ -178,7 +178,10 @@ test('微信最终 HTML:Wenyan 代码换行节点转成 pre 内纯文本换行',
   assert.doesNotThrow(() => validatePreparedWechatHtml(normalized));
 });
 
-test('微信分区标题:双语 h2 改写成序号卡片并跳过引用链接', () => {
+test('微信分区标题:双语 h2 改写成序号卡片图并跳过引用链接', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-heading-card-'));
+  fs.writeFileSync(path.join(dir, 'heading-01.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  fs.writeFileSync(path.join(dir, 'heading-02.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
   const html = [
     '<section>',
     '<h2>What Niu Lai Is About, at the Very Least｜《牛来》在最低限度上关于什么</h2>',
@@ -187,34 +190,59 @@ test('微信分区标题:双语 h2 改写成序号卡片并跳过引用链接', 
     '<h2>引用链接</h2>',
     '</section>',
   ].join('');
-  const output = restyleSectionHeadings(html, { stripOrdinals: true });
+  const output = await restyleSectionHeadings(html, {
+    stripOrdinals: true,
+    absoluteDirPath: dir,
+    renderCards: async (cards) => cards.map((card) => ({
+      src: `heading-${String(card.index).padStart(2, '0')}.png`,
+      number: String(card.index).padStart(2, '0'),
+    })),
+  });
   const document = new JSDOM(`<body>${output}</body>`).window.document;
   const cards = [...document.querySelectorAll('[data-zen-section-heading="true"]')];
   assert.equal(cards.length, 2);
   assert.equal(document.querySelectorAll('h2').length, 1);
   assert.equal(document.querySelector('h2').textContent.trim(), '引用链接');
   assert.equal(cards[0].querySelectorAll('table').length, 0);
-  assert.equal(cards[0].querySelector('[data-zen-heading-index]').textContent, '01');
-  assert.equal(cards[0].querySelector('[data-zen-heading-en]').textContent, 'What Niu Lai Is About, at the Very Least');
-  assert.equal(cards[0].querySelector('[data-zen-heading-en]').style.textAlign, 'right');
-  assert.equal(cards[0].querySelector('[data-zen-heading-zh]').textContent, '《牛来》在最低限度上关于什么');
-  assert.equal(cards[0].querySelector('[data-zen-heading-zh]').style.textAlign, 'right');
-  assert.equal(cards[0].querySelector('[data-zen-heading-en]').style.color, 'rgb(196, 191, 182)');
-  assert.equal(cards[1].querySelector('[data-zen-heading-index]').textContent, '02');
-  assert.equal(cards[1].querySelector('[data-zen-heading-en]'), null);
-  assert.equal(cards[1].querySelector('[data-zen-heading-zh]').textContent, '先看数字：一张超级周期的加速图');
-  assert.doesNotThrow(() => validatePreparedWechatHtml(output));
+  assert.equal(cards[0].querySelector('img').getAttribute('src'), 'heading-01.png');
+  assert.match(cards[0].querySelector('img').getAttribute('alt'), /01 What Niu Lai Is About, at the Very Least/);
+  assert.match(cards[0].querySelector('img').getAttribute('alt'), /《牛来》在最低限度上关于什么/);
+  assert.equal(cards[1].querySelector('img').getAttribute('src'), 'heading-02.png');
+  assert.match(cards[1].querySelector('img').getAttribute('alt'), /先看数字：一张超级周期的加速图/);
+  assert.doesNotThrow(() => validatePreparedWechatHtml(output, { absoluteDirPath: dir }));
 });
 
-test('微信分区标题:直译不去序号且不发明英文', () => {
-  const output = restyleSectionHeadings(
+test('微信分区标题卡 HTML 锁定原图结构:短条、右对齐双语、无内部分隔线', () => {
+  const html = headingCardHtml({
+    index: 1,
+    en: 'What Niu Lai Is About, at the Very Least',
+    zh: '《牛来》在最低限度上关于什么',
+  });
+  const document = new JSDOM(html).window.document;
+  assert.equal(document.querySelectorAll('table').length, 0);
+  assert.equal(document.querySelector('[data-zen-heading-index]').textContent, '01');
+  assert.equal(document.querySelector('[data-zen-heading-en]').textContent, 'What Niu Lai Is About, at the Very Least');
+  assert.equal(document.querySelector('[data-zen-heading-zh]').textContent, '《牛来》在最低限度上关于什么');
+  assert.match(html, /position:absolute;top:-6px;left:48px/);
+  assert.match(html, /text-align:right/);
+  assert.match(html, /Helvetica Neue/);
+  assert.match(html, /#C9C4BB/);
+});
+
+test('微信分区标题:直译不去序号且不发明英文', async () => {
+  const seen = [];
+  await restyleSectionHeadings(
     '<section><h2>1. 引言</h2><h2>一、方法</h2></section>',
-    { stripOrdinals: false },
+    {
+      stripOrdinals: false,
+      absoluteDirPath: '/tmp',
+      renderCards: async (cards) => {
+        seen.push(...cards);
+        return cards.map((card) => ({ src: `heading-${String(card.index).padStart(2, '0')}.png`, number: String(card.index).padStart(2, '0') }));
+      },
+    },
   );
-  const document = new JSDOM(`<body>${output}</body>`).window.document;
-  const cards = [...document.querySelectorAll('[data-zen-section-heading="true"]')];
-  assert.equal(cards[0].querySelector('[data-zen-heading-index]').textContent, '01');
-  assert.equal(cards[0].querySelector('[data-zen-heading-en]'), null);
-  assert.equal(cards[0].querySelector('[data-zen-heading-zh]').textContent, '1. 引言');
-  assert.equal(cards[1].querySelector('[data-zen-heading-zh]').textContent, '一、方法');
+  assert.equal(seen[0].zh, '1. 引言');
+  assert.equal(seen[0].en, '');
+  assert.equal(seen[1].zh, '一、方法');
 });

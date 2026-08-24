@@ -34,9 +34,15 @@ export async function renderAndPublishWithFinalFooter(inputContent, options, get
   const { gzhContent, absoluteDirPath } = await prepareRenderContext(inputContent, options, getInputContent);
   if (!gzhContent?.title) throw new Error('未能找到文章标题');
   gzhContent.content = normalizeCodeBreaks(normalizeBodyTypography(
-    restyleSectionHeadings(
+    await restyleSectionHeadings(
       styleKeyHighlights(alignTerminalReferences(removeDuplicateReferenceSections(gzhContent.content))),
-      { stripOrdinals: options.stripHeadingOrdinals === true },
+      {
+        stripOrdinals: options.stripHeadingOrdinals === true,
+        absoluteDirPath,
+        executablePath: options.headingBrowserExecutablePath,
+        signal: options.signal,
+        renderCards: options.renderHeadingCards,
+      },
     ),
   ));
   if (options.finalSurveyPath || options.finalFooterPath) {
