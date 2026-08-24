@@ -14,6 +14,7 @@ import {
   styleKeyHighlights,
   validatePreparedWechatHtml,
 } from '../src/lib/wechat-render.js';
+import { restyleSectionHeadings } from '../src/lib/wechat-heading.js';
 
 test('微信最终 HTML:尾图移动到脚注和来源之后且只出现一次', () => {
   const footer = '/assets/zen-footer-qr.png';
@@ -175,4 +176,41 @@ test('微信最终 HTML:Wenyan 代码换行节点转成 pre 内纯文本换行',
   assert.doesNotMatch(normalized, /<br/i);
   assert.match(normalized, /ASCII\n<span class="hljs-keyword">line<\/span>\nend/);
   assert.doesNotThrow(() => validatePreparedWechatHtml(normalized));
+});
+
+test('微信分区标题:双语 h2 改写成序号卡片并跳过引用链接', () => {
+  const html = [
+    '<section>',
+    '<h2>What Niu Lai Is About, at the Very Least｜《牛来》在最低限度上关于什么</h2>',
+    '<p>正文</p>',
+    '<h2>一、先看数字：一张超级周期的加速图</h2>',
+    '<h2>引用链接</h2>',
+    '</section>',
+  ].join('');
+  const output = restyleSectionHeadings(html, { stripOrdinals: true });
+  const document = new JSDOM(`<body>${output}</body>`).window.document;
+  const cards = [...document.querySelectorAll('[data-zen-section-heading="true"]')];
+  assert.equal(cards.length, 2);
+  assert.equal(document.querySelectorAll('h2').length, 1);
+  assert.equal(document.querySelector('h2').textContent.trim(), '引用链接');
+  assert.equal(cards[0].querySelector('[data-zen-heading-index]').textContent, '01');
+  assert.equal(cards[0].querySelector('[data-zen-heading-en]').textContent, 'What Niu Lai Is About, at the Very Least');
+  assert.equal(cards[0].querySelector('[data-zen-heading-zh]').textContent, '《牛来》在最低限度上关于什么');
+  assert.equal(cards[1].querySelector('[data-zen-heading-index]').textContent, '02');
+  assert.equal(cards[1].querySelector('[data-zen-heading-en]'), null);
+  assert.equal(cards[1].querySelector('[data-zen-heading-zh]').textContent, '先看数字：一张超级周期的加速图');
+  assert.doesNotThrow(() => validatePreparedWechatHtml(output));
+});
+
+test('微信分区标题:直译不去序号且不发明英文', () => {
+  const output = restyleSectionHeadings(
+    '<section><h2>1. 引言</h2><h2>一、方法</h2></section>',
+    { stripOrdinals: false },
+  );
+  const document = new JSDOM(`<body>${output}</body>`).window.document;
+  const cards = [...document.querySelectorAll('[data-zen-section-heading="true"]')];
+  assert.equal(cards[0].querySelector('[data-zen-heading-index]').textContent, '01');
+  assert.equal(cards[0].querySelector('[data-zen-heading-en]'), null);
+  assert.equal(cards[0].querySelector('[data-zen-heading-zh]').textContent, '1. 引言');
+  assert.equal(cards[1].querySelector('[data-zen-heading-zh]').textContent, '一、方法');
 });

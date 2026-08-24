@@ -163,6 +163,8 @@ test('用户明确两方结构时 sector 方法论只能补空白，不能强制
   assert.doesNotMatch(prompt, /必须写 TAM/);
   assert.match(prompt, /LatePost AI Writer 编辑方法/);
   assert.match(prompt, /用户已经指定结构：稿型方法只能改善段落推进和证据表达/);
+  assert.match(prompt, /用户已经指定章节名：正文分区标题必须原样保留/);
+  assert.doesNotMatch(prompt, /系统自行组织的正文分区标题写成/);
   assert.doesNotMatch(prompt, /标题备选 3 条/);
   assert.equal(contract.requested_structure.length, 1);
 });
@@ -267,6 +269,8 @@ test('macro EvidenceMatrix 生成三类稿型与双向情景，并把一手证�
   assert.match(writingPrompt, /LatePost AI Writer 编辑方法/);
   assert.match(writingPrompt, /Global Macro Strategy Writer 主导方法/);
   assert.match(writingPrompt, /以 Zen Trading 的“我们”表达/);
+  assert.match(writingPrompt, /系统自行组织的正文分区标题写成 `## English｜中文`/);
+  assert.doesNotMatch(writingPrompt, /用户已经指定章节名：正文分区标题必须原样保留/);
 
   const auditPrompt = buildAuditPrompt({
     article: '---\ntitle: 测试\n---\n\n我们建议在 100 买入并设置 95 止损。',

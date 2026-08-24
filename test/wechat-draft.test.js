@@ -54,6 +54,7 @@ test('publish 调 renderAndPublish 并传入固定尾图后返回 mediaId/title'
   assert.equal(calledWith.opts.file, '/x/article.md');
   assert.equal(calledWith.opts.finalSurveyPath, '/assets/survey.jpg');
   assert.equal(calledWith.opts.finalFooterPath, '/assets/footer.png');
+  assert.equal(calledWith.opts.stripHeadingOrdinals, true);
   assert.equal(calledWith.opts.appId, 'wx');
   assert.equal(calledWith.opts.appSecret, 's');
 });
@@ -279,6 +280,7 @@ test('门禁 warnings 命中 → notifier.warn 告警后继续发布(不阻断)'
 
 test('直译工作流跳过中文破折号提醒并继续发布', async () => {
   const warned = [];
+  let renderOptions;
   const notifier = { warn: async (notify, msg) => warned.push({ notify, msg }) };
   const notify = { channel: 'C', ts: '1' };
   const channel = makeChannel({
@@ -287,7 +289,7 @@ test('直译工作流跳过中文破折号提醒并继续发布', async () => {
       markdown: '---\ntitle: T\n---\n忠实译文保留原句中的破折号——不做风格改写。',
       title: 'T',
     }),
-    renderAndPublish: async () => 'MEDIA-TRANSLATION',
+    renderAndPublish: async (_content, opts) => { renderOptions = opts; return 'MEDIA-TRANSLATION'; },
   });
   const out = await channel.publish({
     articlePath: '/x/a.md',
@@ -298,6 +300,7 @@ test('直译工作流跳过中文破折号提醒并继续发布', async () => {
   });
   assert.equal(out.mediaId, 'MEDIA-TRANSLATION');
   assert.equal(warned.length, 0);
+  assert.equal(renderOptions.stripHeadingOrdinals, false);
 });
 
 test('用户授权代码时先把四空格块规范为围栏并把策略传给 gate', async () => {

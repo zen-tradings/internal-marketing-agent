@@ -311,8 +311,8 @@ export function buildEditorialWritingGuidance(brief, {
     throw new Error(`写作 skill 未加载稿型:${normalized.archetype}`);
   }
   const structureRule = userSpecifiedStructure
-    ? '用户已经指定结构：稿型方法只能改善段落推进和证据表达，不得增删、改名或重排用户要求的章节。'
-    : '用户没有指定结构：可用稿型方法组织文章，但只采用证据能够支持的部分。';
+    ? '用户已经指定结构：稿型方法只能改善段落推进和证据表达，不得增删、改名或重排用户要求的章节；用户点名的章节名必须原样保留，不要改写成双语标题。'
+    : '用户没有指定结构：可用稿型方法组织文章，但只采用证据能够支持的部分；正文分区标题写成 `## English｜中文`，不要手写序号。';
   return `【LatePost AI Writer 编辑方法】
 Skill:${skill.id}
 Digest:${skill.digest}
@@ -347,8 +347,8 @@ export function buildMacroEditorialWritingGuidance(brief, {
   const archetypeMethod = skill.archetypes[normalized.archetype];
   if (!archetypeMethod) throw new Error(`宏观写作 skill 未加载稿型:${normalized.archetype}`);
   const structureRule = userSpecifiedStructure
-    ? '用户已经指定结构：不得增删、改名或重排用户要求的章节；宏观方法只改善每章内部的判断和证据表达。'
-    : '用户没有指定结构：按所选稿型自然组织，不把分析步骤机械写成栏目。';
+    ? '用户已经指定结构：不得增删、改名或重排用户要求的章节；宏观方法只改善每章内部的判断和证据表达；用户点名的章节名必须原样保留，不要改写成双语标题。'
+    : '用户没有指定结构：按所选稿型自然组织，不把分析步骤机械写成栏目；正文分区标题写成 `## English｜中文`，不要手写序号。';
   return `【Global Macro Strategy Writer 主导方法】
 Skill:${skill.id}
 Digest:${skill.digest}
