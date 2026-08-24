@@ -56,7 +56,7 @@ export function headingCardHtml({ index, en = '', zh = '', fontUrl = '' } = {}) 
     : '';
   return `<!doctype html><html><head><meta charset="utf-8"><style>
 ${fontFace}
-html,body{margin:0;background:#E9E5DC}
+html,body{margin:0;background:#FFFFFF}
 .canvas{width:${HEADING_CARD_WIDTH}px;padding:28px 28px 36px;box-sizing:border-box}
 .card{position:relative;display:inline-block;max-width:720px;background:#FFFFFF;border:1px solid #C9C4BB;border-radius:34px;box-shadow:0 14px 28px rgba(40,36,30,.13);padding:26px 40px 52px 28px;box-sizing:border-box}
 .bar{position:absolute;top:-6px;left:48px;width:62px;height:16px;background:#C9C4BB;border-radius:3px}

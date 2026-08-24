@@ -227,6 +227,8 @@ test('微信分区标题卡 HTML 锁定原图结构:短条、右对齐双语、�
   assert.match(html, /text-align:right/);
   assert.match(html, /Helvetica Neue/);
   assert.match(html, /#C9C4BB/);
+  assert.match(html, /background:#FFFFFF/);
+  assert.doesNotMatch(html, /#E9E5DC/);
 });
 
 test('微信分区标题:直译不去序号且不发明英文', async () => {
