@@ -225,7 +225,7 @@ test('微信分区标题卡 HTML 锁定原图底板和原文字颜色', () => {
   assert.equal(document.querySelector('[data-zen-heading-index]').textContent, '01');
   assert.equal(document.querySelector('[data-zen-heading-en]').textContent, 'What Niu Lai Is About, at the Very Least');
   assert.equal(document.querySelector('[data-zen-heading-zh]').textContent, '《牛来》在最低限度上关于什么');
-  assert.match(html, /left:108px;top:58px/);
+  assert.match(html, /left:108px;top:74px/);
   assert.match(html, /text-align:right/);
   assert.match(html, /Helvetica Neue/);
   assert.match(html, /PingFang SC/);

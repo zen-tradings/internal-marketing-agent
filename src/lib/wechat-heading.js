@@ -72,7 +72,7 @@ ${fontFace}
 html,body{margin:0;background:#FFFFFF}
 .canvas{position:relative;width:${HEADING_CARD_WIDTH}px;height:${HEADING_CARD_HEIGHT}px;overflow:hidden;background:#FFFFFF}
 .plate{position:absolute;inset:0;width:100%;height:100%;display:block}
-.index{position:absolute;left:108px;top:58px;margin:0;font-family:Georgia,"Times New Roman",serif;font-size:72px;line-height:.86;font-weight:400;color:#C9C8C4;letter-spacing:.02em}
+.index{position:absolute;left:108px;top:74px;margin:0;font-family:Georgia,"Times New Roman",serif;font-size:72px;line-height:.86;font-weight:400;color:#C9C8C4;letter-spacing:.02em}
 .copy{position:absolute;left:430px;right:56px;top:88px;text-align:right}
 .en{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:28px;line-height:1.15;font-weight:300;color:#A0A0A0;letter-spacing:.02em}
 .zh{margin-top:10px;font-family:"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Noto Sans SC","Microsoft YaHei","Zen Heading CJK",sans-serif;font-size:40px;line-height:1.2;font-weight:400;color:#3E3E3E;letter-spacing:.08em}
