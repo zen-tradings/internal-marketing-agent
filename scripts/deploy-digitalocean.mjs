@@ -13,6 +13,10 @@ const DEFAULT_REASONING = 'high';
 const DEFAULT_PLANNER_MODEL = 'moonshotai/kimi-k3';
 const DEFAULT_PLANNER_REASONING = 'high';
 const DEFAULT_OPENING_DIGEST_MODEL = 'openai/gpt-oss-120b';
+const DEFAULT_OPTIONS_STRATEGY_MODEL = 'anthropic/claude-fable-5';
+const DEFAULT_OPTIONS_STRATEGY_REASONING = 'high';
+const DEFAULT_OPTIONS_STRATEGY_MAX_TOKENS = 32000;
+const DEFAULT_OPTIONS_STRATEGY_TIMEOUT_MS = 900000;
 
 export const DEPLOY_MANAGED_ENV_KEYS = Object.freeze([
   'MAX_CONCURRENCY',
@@ -32,6 +36,10 @@ export const DEPLOY_MANAGED_ENV_KEYS = Object.freeze([
   'OPENROUTER_PLANNER_REASONING_EFFORT',
   'OPENROUTER_REVIEW_REASONING_EFFORT',
   'OPENROUTER_ROUTER_REASONING_EFFORT',
+  'OPTIONS_STRATEGY_MODEL',
+  'OPTIONS_STRATEGY_REASONING_EFFORT',
+  'OPTIONS_STRATEGY_MAX_TOKENS',
+  'OPTIONS_STRATEGY_TIMEOUT_MS',
   'QDII_ENABLED',
   'QDII_PYTHON_PATH',
   'QDII_WORKER_PATH',
@@ -78,12 +86,16 @@ export function parseDeployArgs(argv) {
     openingDigestWechatEnabled: undefined,
     openingDigestSegmentId: 0,
     syncDiscordConfig: false,
+    optionsStrategyModel: DEFAULT_OPTIONS_STRATEGY_MODEL,
+    optionsStrategyReasoning: DEFAULT_OPTIONS_STRATEGY_REASONING,
+    optionsStrategyMaxTokens: DEFAULT_OPTIONS_STRATEGY_MAX_TOKENS,
+    optionsStrategyTimeoutMs: DEFAULT_OPTIONS_STRATEGY_TIMEOUT_MS,
   };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === '--activate') parsed.activate = true;
     else if (arg === '--sync-discord-config') parsed.syncDiscordConfig = true;
-    else if (['--commit', '--target', '--model', '--reasoning', '--planner-model', '--planner-reasoning', '--max-concurrency', '--opening-digest-model', '--opening-digest-wechat-enabled', '--opening-digest-segment-id'].includes(arg)) {
+    else if (['--commit', '--target', '--model', '--reasoning', '--planner-model', '--planner-reasoning', '--max-concurrency', '--opening-digest-model', '--opening-digest-wechat-enabled', '--opening-digest-segment-id', '--options-strategy-model', '--options-strategy-reasoning', '--options-strategy-max-tokens', '--options-strategy-timeout-ms'].includes(arg)) {
       const value = argv[++index];
       if (!value) throw new Error(`${arg} requires a value`);
       const key = arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
@@ -143,7 +155,22 @@ export function loadDeployTarget({ target = '', targetFile = TARGET_FILE } = {})
   return config.ZEN_DEPLOY_SSH_TARGET;
 }
 
-export function validateDeployInputs({ target, commit, model, reasoning, plannerModel, plannerReasoning, maxConcurrency, openingDigestModel, openingDigestWechatEnabled, openingDigestSegmentId = 0 }) {
+export function validateDeployInputs({
+  target,
+  commit,
+  model,
+  reasoning,
+  plannerModel,
+  plannerReasoning,
+  maxConcurrency,
+  openingDigestModel,
+  openingDigestWechatEnabled,
+  openingDigestSegmentId = 0,
+  optionsStrategyModel = DEFAULT_OPTIONS_STRATEGY_MODEL,
+  optionsStrategyReasoning = DEFAULT_OPTIONS_STRATEGY_REASONING,
+  optionsStrategyMaxTokens = DEFAULT_OPTIONS_STRATEGY_MAX_TOKENS,
+  optionsStrategyTimeoutMs = DEFAULT_OPTIONS_STRATEGY_TIMEOUT_MS,
+}) {
   if (!/^[a-z_][a-z0-9_-]*@[a-z0-9_.:-]+$/i.test(target)) {
     throw new Error('Invalid SSH target; expected user@host with no shell metacharacters');
   }
@@ -152,6 +179,18 @@ export function validateDeployInputs({ target, commit, model, reasoning, planner
   if (typeof plannerModel !== 'string' || !/^[a-z0-9._/-]+$/i.test(plannerModel)) throw new Error('Invalid OpenRouter planner model id');
   if (openingDigestModel != null && (typeof openingDigestModel !== 'string' || !/^[a-z0-9._/-]+$/i.test(openingDigestModel))) {
     throw new Error('Invalid Opening Digest model id');
+  }
+  if (typeof optionsStrategyModel !== 'string' || !/^[a-z0-9._/-]+$/i.test(optionsStrategyModel)) {
+    throw new Error('Invalid options strategy model id');
+  }
+  if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(optionsStrategyReasoning)) {
+    throw new Error('Options strategy reasoning must be low, medium, high, xhigh, or max');
+  }
+  for (const [value, label] of [
+    [optionsStrategyMaxTokens, 'Options strategy max tokens'],
+    [optionsStrategyTimeoutMs, 'Options strategy timeout'],
+  ]) {
+    if (!Number.isInteger(Number(value)) || Number(value) <= 0) throw new Error(`${label} must be a positive integer`);
   }
   if (!['low', 'medium', 'high'].includes(reasoning)) {
     throw new Error('Reasoning must be low, medium, or high');
@@ -218,7 +257,7 @@ process.stdin.on("end", () => {
   console.log("queue_active=" + Number(value.queue?.active || 0));
   console.log("queue_pending=" + Number(value.queue?.pending || 0));
 });'
-for key in MAX_CONCURRENCY BROWSER_CONCURRENCY WECHAT_WRITE_CONCURRENCY CUSTOMERIO_WRITE_CONCURRENCY OPENROUTER_CONCURRENCY EXA_SEARCH_QPS SLACK_POST_INTERVAL_MS OPENROUTER_MODEL OPENROUTER_ROUTER_MODEL OPENROUTER_PLANNER_MODEL OPENROUTER_REVIEW_MODEL OPENROUTER_REASONING_EFFORT OPENROUTER_PLANNER_REASONING_EFFORT OPENROUTER_REVIEW_REASONING_EFFORT OPENROUTER_ROUTER_REASONING_EFFORT CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID OPENING_DIGEST_MODEL OPENING_DIGEST_WECHAT_ENABLED DISCORD_OPENING_DIGEST_ENABLED DISCORD_OPENING_DIGEST_CHANNEL_ID DISCORD_WEBHOOK_TIMEOUT_MS DISCORD_WEBHOOK_MAX_ATTEMPTS; do
+for key in MAX_CONCURRENCY BROWSER_CONCURRENCY WECHAT_WRITE_CONCURRENCY CUSTOMERIO_WRITE_CONCURRENCY OPENROUTER_CONCURRENCY EXA_SEARCH_QPS SLACK_POST_INTERVAL_MS OPENROUTER_MODEL OPENROUTER_ROUTER_MODEL OPENROUTER_PLANNER_MODEL OPENROUTER_REVIEW_MODEL OPENROUTER_REASONING_EFFORT OPENROUTER_PLANNER_REASONING_EFFORT OPENROUTER_REVIEW_REASONING_EFFORT OPENROUTER_ROUTER_REASONING_EFFORT OPTIONS_STRATEGY_MODEL OPTIONS_STRATEGY_REASONING_EFFORT OPTIONS_STRATEGY_MAX_TOKENS OPTIONS_STRATEGY_TIMEOUT_MS CUSTOMERIO_OPENING_DIGEST_SEGMENT_ID OPENING_DIGEST_MODEL OPENING_DIGEST_WECHAT_ENABLED DISCORD_OPENING_DIGEST_ENABLED DISCORD_OPENING_DIGEST_CHANNEL_ID DISCORD_WEBHOOK_TIMEOUT_MS DISCORD_WEBHOOK_MAX_ATTEMPTS; do
   value=$(sudo awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
   printf '%s=%s\n' "env_$key" "$value"
 done
@@ -235,6 +274,11 @@ opening_digest_wechat_enabled=$7
 opening_digest_segment_id=$8
 max_concurrency=$9
 shift 9
+options_strategy_model=$1
+options_strategy_reasoning=$2
+options_strategy_max_tokens=$3
+options_strategy_timeout_ms=$4
+shift 4
 discord_config_path=$1
 short=$(printf '%.12s' "$sha")
 active=/opt/zen-content-hub
@@ -386,6 +430,10 @@ update_env OPENROUTER_REASONING_EFFORT "$reasoning"
 update_env OPENROUTER_PLANNER_REASONING_EFFORT "$planner_reasoning"
 update_env OPENROUTER_REVIEW_REASONING_EFFORT none
 update_env OPENROUTER_ROUTER_REASONING_EFFORT none
+update_env OPTIONS_STRATEGY_MODEL "$options_strategy_model"
+update_env OPTIONS_STRATEGY_REASONING_EFFORT "$options_strategy_reasoning"
+update_env OPTIONS_STRATEGY_MAX_TOKENS "$options_strategy_max_tokens"
+update_env OPTIONS_STRATEGY_TIMEOUT_MS "$options_strategy_timeout_ms"
 update_env QDII_ENABLED true
 update_env QDII_PYTHON_PATH /opt/zen-content-hub/.venv/bin/python
 update_env QDII_WORKER_PATH /opt/zen-content-hub/python/qdii_worker.py
@@ -464,6 +512,10 @@ test "$(sudo awk -F= '$1 == "OPENROUTER_MODEL" { print $2 }' "$env_file" | tail 
 test "$(sudo awk -F= '$1 == "OPENROUTER_REASONING_EFFORT" { print $2 }' "$env_file" | tail -n 1)" = "$reasoning"
 test "$(sudo awk -F= '$1 == "OPENROUTER_PLANNER_MODEL" { print $2 }' "$env_file" | tail -n 1)" = "$planner_model"
 test "$(sudo awk -F= '$1 == "OPENROUTER_PLANNER_REASONING_EFFORT" { print $2 }' "$env_file" | tail -n 1)" = "$planner_reasoning"
+test "$(sudo awk -F= '$1 == "OPTIONS_STRATEGY_MODEL" { print $2 }' "$env_file" | tail -n 1)" = "$options_strategy_model"
+test "$(sudo awk -F= '$1 == "OPTIONS_STRATEGY_REASONING_EFFORT" { print $2 }' "$env_file" | tail -n 1)" = "$options_strategy_reasoning"
+test "$(sudo awk -F= '$1 == "OPTIONS_STRATEGY_MAX_TOKENS" { print $2 }' "$env_file" | tail -n 1)" = "$options_strategy_max_tokens"
+test "$(sudo awk -F= '$1 == "OPTIONS_STRATEGY_TIMEOUT_MS" { print $2 }' "$env_file" | tail -n 1)" = "$options_strategy_timeout_ms"
 test "$(sudo awk -F= '$1 == "QDII_ENABLED" { print $2 }' "$env_file" | tail -n 1)" = true
 test "$(sudo awk -F= '$1 == "QDII_PYTHON_PATH" { print $2 }' "$env_file" | tail -n 1)" = /opt/zen-content-hub/.venv/bin/python
 test "$(sudo awk -F= '$1 == "QDII_WORKER_PATH" { print $2 }' "$env_file" | tail -n 1)" = /opt/zen-content-hub/python/qdii_worker.py
@@ -527,7 +579,7 @@ export function assertLocalRelease(commit, run = runCommand) {
   run('git', ['merge-base', '--is-ancestor', commit, '@{upstream}'], { quiet: true });
 }
 
-export function activateRemote({ target, commit, model, reasoning, plannerModel, plannerReasoning, maxConcurrency, openingDigestModel = DEFAULT_OPENING_DIGEST_MODEL, openingDigestWechatEnabled, openingDigestSegmentId = 0, discordConfig = null }, run = runCommand) {
+export function activateRemote({ target, commit, model, reasoning, plannerModel, plannerReasoning, maxConcurrency, openingDigestModel = DEFAULT_OPENING_DIGEST_MODEL, openingDigestWechatEnabled, openingDigestSegmentId = 0, optionsStrategyModel = DEFAULT_OPTIONS_STRATEGY_MODEL, optionsStrategyReasoning = DEFAULT_OPTIONS_STRATEGY_REASONING, optionsStrategyMaxTokens = DEFAULT_OPTIONS_STRATEGY_MAX_TOKENS, optionsStrategyTimeoutMs = DEFAULT_OPTIONS_STRATEGY_TIMEOUT_MS, discordConfig = null }, run = runCommand) {
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-content-hub-deploy-'));
   const short = commit.slice(0, 12);
   const archive = path.join(temporaryDir, `zen-content-hub-${short}.tar.gz`);
@@ -545,7 +597,7 @@ export function activateRemote({ target, commit, model, reasoning, plannerModel,
     return run('ssh', [
       ...SSH_OPTIONS,
       target,
-      `printf '%s' '${encodedScript}' | base64 -d > ${remoteScript} && bash ${remoteScript} ${commit} ${model} ${reasoning} ${plannerModel} ${plannerReasoning} ${openingDigestModel} ${openingDigestWechatEnabled} ${openingDigestSegmentId} ${maxConcurrency} ${remoteDiscordConfig}; status=$?; rm -f ${remoteScript} ${remoteDiscordConfig === '-' ? '' : remoteDiscordConfig}; exit $status`,
+      `printf '%s' '${encodedScript}' | base64 -d > ${remoteScript} && bash ${remoteScript} ${commit} ${model} ${reasoning} ${plannerModel} ${plannerReasoning} ${openingDigestModel} ${openingDigestWechatEnabled} ${openingDigestSegmentId} ${maxConcurrency} ${optionsStrategyModel} ${optionsStrategyReasoning} ${optionsStrategyMaxTokens} ${optionsStrategyTimeoutMs} ${remoteDiscordConfig}; status=$?; rm -f ${remoteScript} ${remoteDiscordConfig === '-' ? '' : remoteDiscordConfig}; exit $status`,
     ], { quiet: true });
   } finally {
     fs.rmSync(temporaryDir, { recursive: true, force: true });
@@ -601,6 +653,10 @@ export async function main(argv = process.argv.slice(2)) {
     openingDigestModel,
     openingDigestWechatEnabled,
     openingDigestSegmentId: options.openingDigestSegmentId,
+    optionsStrategyModel: options.optionsStrategyModel,
+    optionsStrategyReasoning: options.optionsStrategyReasoning,
+    optionsStrategyMaxTokens: options.optionsStrategyMaxTokens,
+    optionsStrategyTimeoutMs: options.optionsStrategyTimeoutMs,
     discordConfig,
   });
   console.log(output.trim());

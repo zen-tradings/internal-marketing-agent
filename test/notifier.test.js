@@ -68,6 +68,20 @@ test('入队回执显示 Prompt 修订、精确实体、链接数量与完整要
   assert.match(sent[1].text, /请确认 Opus 5/);
 });
 
+test('入队回执显示 options-strategy profile 和 Fable 模型', async () => {
+  const sent = [];
+  const n = createNotifier(async (message) => sent.push(message));
+  await n.ack({
+    channel: 'C',
+    ts: '1',
+    runId: '1786332000123-route',
+    modelRouteLabel: 'options-strategy → anthropic/claude-fable-5',
+    modelRouteReason: 'named-options-strategy',
+  }, '用备兑看涨策略分析这家公司');
+  assert.match(sent[0].text, /模型:options-strategy → anthropic\/claude-fable-5/);
+  assert.match(sent[0].text, /模型路由原因:named-options-strategy/);
+});
+
 test('Slack 出站调度优先终态并丢弃同线程过时进度', async () => {
   const sent = [];
   let release;

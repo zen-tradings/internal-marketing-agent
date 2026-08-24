@@ -814,6 +814,119 @@ test('V2 完整链路按 Opus 5/Kimi K2 定向搜索、写作、局部审计并�
   assert.equal(trace.factReview.approved, true);
 });
 
+test('五类 V2 期权策略按 Fable planner/evidence/writer + 原 review 模型执行', async () => {
+  for (const workflowId of ['wechat', 'company', 'earnings', 'sector', 'macro']) {
+    const completionBodies = [];
+    let completionIndex = 0;
+    const fetchFn = async (url, options) => {
+      const body = JSON.parse(options.body || '{}');
+      if (String(url).endsWith('/search')) {
+        return jsonResponse({ results: [{
+          title: 'Exchange options education',
+          url: 'https://www.nasdaq.com/options-education',
+          publishedDate: '2026-08-20',
+          text: 'Covered calls cap upside and retain downside exposure. Quotes vary by strike and expiry.',
+        }] });
+      }
+      completionBodies.push(body);
+      completionIndex++;
+      if (completionIndex === 1) {
+        return jsonResponse({ choices: [{ message: { content: JSON.stringify({
+          task_contract: {
+            output_language: '简体中文',
+            article_type: 'analysis',
+            must_cover: ['比较备兑看涨与保护性看跌'],
+            freshness_requirement: 'recent',
+          },
+          search_plan: [{ query: 'covered call protective put strategy risks', lane: 'open', language: 'en' }],
+        }) } }] });
+      }
+      if (completionIndex === 2) {
+        return jsonResponse({ choices: [{ message: { content: JSON.stringify({
+          source_assessments: [{
+            source_id: 'S1', source_type: 'secondary', relevant: true,
+            safe_statements: ['备兑看涨限制上行并保留下行敞口'],
+          }],
+          requirements: [{
+            requirement: '比较备兑看涨与保护性看跌', source_ids: ['S1'],
+            safe_statements: ['只能定性比较，当前没有合格期权链报价'], covered: true,
+          }],
+          entities: [], conflicts: [], relevant_source_ids: ['S1'], selected_reference_ids: ['S1'],
+          clarification_needed: false,
+        }) } }] });
+      }
+      if (completionIndex === 3) {
+        assert.match(body.messages[1].content, /期权策略研究边界/);
+        assert.match(body.messages[1].content, /时间戳、到期日、执行价和报价依据/);
+        if (workflowId === 'macro') assert.match(body.messages[1].content, /不得写具体买卖 legs/);
+        return jsonResponse({ choices: [{ message: { content: '---\ntitle: 期权策略的条件与边界\n---\n\n本文只做定性策略比较，不提供具体合约或仓位。' } }] });
+      }
+      return jsonResponse({ choices: [{ message: { content: '{"approved":true,"issues":[]}' } }] });
+    };
+    const testConfig = config();
+    Object.assign(testConfig.writer, {
+      optionsStrategyModel: 'anthropic/claude-fable-5',
+      optionsStrategyReasoningEffort: 'high',
+      optionsStrategyMaxTokens: 32000,
+      optionsStrategyTimeoutMs: 900000,
+    });
+    const result = await runWriter({
+      workflow: workflow({ id: workflowId }),
+      input: '比较备兑看涨和保护性看跌策略；没有实时链数据时不要给合约参数',
+      config: testConfig,
+      fetchFn,
+      taskContext: { modelProfile: 'options-strategy', modelRouteReason: 'named-options-strategy' },
+    });
+
+    assert.equal(result.ok, true, `${workflowId}: ${result.stderr || ''}`);
+    assert.deepEqual(completionBodies.map((body) => body.model), [
+      'anthropic/claude-fable-5',
+      'anthropic/claude-fable-5',
+      'anthropic/claude-fable-5',
+      'z-ai/glm-5.2',
+    ], workflowId);
+    assert.ok(completionBodies.slice(0, 3).every((body) => body.reasoning.effort === 'high'));
+    assert.equal(completionBodies[2].max_tokens, 32000);
+    assert.equal(completionBodies[3].reasoning.effort, 'none');
+    const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+    assert.deepEqual(trace.models, {
+      writer: 'anthropic/claude-fable-5',
+      planner: 'anthropic/claude-fable-5',
+      review: 'z-ai/glm-5.2',
+      evidence: 'anthropic/claude-fable-5',
+    });
+    assert.equal(trace.modelProfile.id, 'options-strategy');
+    assert.equal(trace.modelProfile.fallbackAllowed, false);
+  }
+});
+
+test('V2 Fable 规划失败时硬失败且不调用普通模型', async () => {
+  const models = [];
+  const testConfig = config();
+  Object.assign(testConfig.writer, {
+    optionsStrategyModel: 'anthropic/claude-fable-5',
+    optionsStrategyReasoningEffort: 'high',
+    optionsStrategyMaxTokens: 32000,
+    optionsStrategyTimeoutMs: 900000,
+  });
+  const result = await runWriter({
+    workflow: workflow(),
+    input: '为这家公司构建期权对冲策略',
+    config: testConfig,
+    fetchFn: async (url, options) => {
+      if (String(url).endsWith('/search')) throw new Error('search should not run before planning');
+      const body = JSON.parse(options.body || '{}');
+      models.push(body.model);
+      return jsonResponse({ error: { message: 'Fable unavailable' } }, { ok: false, status: 503, statusText: 'Unavailable' });
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.stderr, /Fable 期权策略规划失败/);
+  assert.ok(models.length >= 1);
+  assert.ok(models.every((model) => model === 'anthropic/claude-fable-5'));
+  assert.doesNotMatch(models.join(','), /qwen|glm|kimi/);
+});
+
 test('V2 无法从一手来源确认精确型号时停止无依据写作，但不反复向用户确认', async () => {
   let completionIndex = 0;
   const fetchFn = async (url, options) => {

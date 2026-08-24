@@ -340,6 +340,82 @@ test('关系型 Newsletter:首封问候/需求收集不搜索、不要求引用�
   assert.deepEqual(trace.factReview, { skipped: true, reason: 'non-research-newsletter' });
 });
 
+test('Newsletter 与 morning 的期权策略只切换 writer 到 Fable', async () => {
+  for (const workflowSpec of [
+    { id: 'email', mode: 'newsletter' },
+    { id: 'morning', mode: 'analysis' },
+  ]) {
+    const calls = [];
+    const fetchFn = async (url, opts) => {
+      const body = JSON.parse(opts.body || '{}');
+      calls.push({ url: String(url), body });
+      if (String(url).endsWith('/search')) {
+        return jsonResponse({ results: [{
+          title: 'Options strategy overview',
+          url: 'https://example.com/options-strategy',
+          text: 'Covered calls and protective puts have different risk profiles.',
+        }] });
+      }
+      return jsonResponse({ choices: [{ message: { content: '---\ntitle: 条件化期权策略\n---\n\n只讨论策略条件与风险。' } }] });
+    };
+    const testConfig = baseConfig();
+    Object.assign(testConfig.writer, {
+      plannerModel: 'planner/model',
+      reviewModel: 'review/model',
+      optionsStrategyModel: 'anthropic/claude-fable-5',
+      optionsStrategyReasoningEffort: 'high',
+      optionsStrategyMaxTokens: 32000,
+      optionsStrategyTimeoutMs: 900000,
+    });
+    const result = await runWriter({
+      workflow: tempWorkflow({ ...workflowSpec, factReview: false }),
+      input: '比较备兑看涨和现金担保看跌策略',
+      config: testConfig,
+      fetchFn,
+    });
+    assert.equal(result.ok, true, `${workflowSpec.id}: ${result.stderr || ''}`);
+    const completions = calls.filter((call) => call.url.endsWith('/chat/completions'));
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0].body.model, 'anthropic/claude-fable-5');
+    assert.equal(completions[0].body.max_tokens, 32000);
+    assert.equal(completions[0].body.reasoning.effort, 'high');
+    assert.match(completions[0].body.messages[1].content, /期权策略研究边界/);
+    const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+    assert.deepEqual(trace.modelProfile.appliedRoles, ['writer']);
+    assert.equal(trace.models.planner, 'planner/model');
+    assert.equal(trace.models.review, 'review/model');
+  }
+});
+
+test('legacy Fable writer 失败时不回退普通 writer', async () => {
+  const models = [];
+  const testConfig = baseConfig();
+  Object.assign(testConfig.writer, {
+    model: 'ordinary/writer',
+    optionsStrategyModel: 'anthropic/claude-fable-5',
+    optionsStrategyReasoningEffort: 'high',
+    optionsStrategyMaxTokens: 32000,
+    optionsStrategyTimeoutMs: 900000,
+  });
+  const result = await runWriter({
+    workflow: tempWorkflow({ id: 'email', mode: 'newsletter', factReview: false }),
+    input: '为持仓设计保护性看跌策略',
+    config: testConfig,
+    fetchFn: async (url, opts) => {
+      if (String(url).endsWith('/search')) {
+        return jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/options', text: 'Options risks.' }] });
+      }
+      const body = JSON.parse(opts.body || '{}');
+      models.push(body.model);
+      return jsonResponse({ error: { message: 'Fable unavailable' } }, { ok: false, status: 503, statusText: 'Unavailable' });
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.ok(models.length >= 1);
+  assert.ok(models.every((model) => model === 'anthropic/claude-fable-5'));
+  assert.doesNotMatch(models.join(','), /ordinary\/writer/);
+});
+
 test('研究型 Newsletter:即使同时提到首封，明确要求市场分析时仍保留官方来源门禁', () => {
   const workflow = { mode: 'newsletter', sourcePolicy: { officialFirst: true, requireCitations: true } };
   const policy = sourcePolicyFor({ input: '第一篇 newsletter，请做 AI 基建市场分析并使用官方数据', workflow });
@@ -372,6 +448,40 @@ test('Qwen3.8-Max 首次空正文时从 high 降到 low 重试并成功', async 
   assert.deepEqual(completionBodies[0].reasoning, { effort: 'high', exclude: true });
   assert.deepEqual(completionBodies[1].reasoning, { effort: 'low', exclude: true });
   assert.equal(completionBodies[1].max_tokens, 16000);
+});
+
+test('Fable profile 空正文重试保持同一模型且 adaptive thinking 不降为 none', async () => {
+  const workflow = tempWorkflow({ id: 'email', mode: 'newsletter', factReview: false });
+  const config = baseConfig();
+  Object.assign(config.writer, {
+    optionsStrategyModel: 'anthropic/custom-fable',
+    optionsStrategyReasoningEffort: 'high',
+    optionsStrategyMaxTokens: 32000,
+    optionsStrategyTimeoutMs: 900000,
+  });
+  const completionBodies = [];
+  const fetchFn = async (url, opts) => {
+    if (String(url).endsWith('/search')) return jsonResponse({ results: [{
+      title: 'Options source', url: 'https://example.com/options', text: 'Options strategy risks.',
+    }] });
+    completionBodies.push(JSON.parse(opts.body));
+    if (completionBodies.length === 1) {
+      return jsonResponse({
+        choices: [{ finish_reason: 'length', message: { content: null, reasoning: 'thinking' } }],
+        usage: { completion_tokens: 32000, completion_tokens_details: { reasoning_tokens: 32000 } },
+      });
+    }
+    return jsonResponse({ choices: [{ message: { content: '---\ntitle: Fable retry\n---\n正文。[source](https://example.com/options)' } }] });
+  };
+  const result = await runWriter({
+    workflow,
+    input: '比较备兑看涨和保护性看跌策略',
+    config,
+    fetchFn,
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(completionBodies.map((body) => body.model), ['anthropic/custom-fable', 'anthropic/custom-fable']);
+  assert.deepEqual(completionBodies.map((body) => body.reasoning.effort), ['high', 'low']);
 });
 
 test('OpenRouter 连续空正文时返回 finish reason 与 token 诊断', async () => {

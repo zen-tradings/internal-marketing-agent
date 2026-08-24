@@ -200,6 +200,8 @@ export function makeHandler(deps) {
               attachments: notify.attachments,
               resolvedClarification: notify.resolvedClarification,
               routeReason: notify.routeReason,
+              modelProfile: notify.modelProfile,
+              modelRouteReason: notify.modelRouteReason,
               ...(runtimeWorkflow.id === 'opening-digest' ? {
                 openingDigestHistory: {
                   recordCapture: (entry) => store.recordOpeningDigestOicCapture?.(entry),

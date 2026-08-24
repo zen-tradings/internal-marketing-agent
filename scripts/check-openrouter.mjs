@@ -9,7 +9,10 @@ const reasoningEffort = process.env.OPENROUTER_REASONING_EFFORT || 'high';
 const openingDigestModel = process.env.OPENING_DIGEST_MODEL || model;
 const plannerModel = process.env.OPENROUTER_PLANNER_MODEL || model;
 const plannerReasoningEffort = process.env.OPENROUTER_PLANNER_REASONING_EFFORT || 'high';
+const optionsStrategyModel = process.env.OPTIONS_STRATEGY_MODEL || 'anthropic/claude-fable-5';
+const optionsStrategyReasoningEffort = process.env.OPTIONS_STRATEGY_REASONING_EFFORT || 'high';
 const timeoutMs = positiveInteger(process.env.OPENROUTER_CHECK_TIMEOUT_MS, 60000);
+const optionsStrategyCheckTimeoutMs = positiveInteger(process.env.OPTIONS_STRATEGY_TIMEOUT_MS, 900000);
 
 if (!key) {
   console.error('OPENROUTER_API_KEY is missing. Add it to the project .env file.');
@@ -23,6 +26,8 @@ console.log(`OpenRouter reasoning effort: ${reasoningEffort}`);
 console.log(`Opening Digest writer model: ${openingDigestModel}`);
 console.log(`OpenRouter planner model: ${plannerModel}`);
 console.log(`OpenRouter planner reasoning effort: ${plannerReasoningEffort}`);
+console.log(`Options strategy model: ${optionsStrategyModel}`);
+console.log(`Options strategy reasoning effort: ${optionsStrategyReasoningEffort}`);
 
 const headers = {
   Authorization: `Bearer ${key}`,
@@ -46,7 +51,7 @@ if (!models.ok) {
 }
 try {
   const available = JSON.parse(models.body)?.data || [];
-  for (const requiredModel of new Set([model, openingDigestModel, plannerModel])) {
+  for (const requiredModel of new Set([model, openingDigestModel, plannerModel, optionsStrategyModel])) {
     if (!available.some((item) => item?.id === requiredModel)) {
       console.error(`OpenRouter model is not available: ${requiredModel}`);
       process.exit(1);
@@ -61,6 +66,11 @@ for (const role of [
   { name: 'writer', model, reasoningEffort, json: false },
   { name: 'opening-digest-writer', model: openingDigestModel, reasoningEffort, json: false, requireEnglish: true, maxTokens: 1024 },
   { name: 'planner', model: plannerModel, reasoningEffort: plannerReasoningEffort, json: true },
+  {
+    name: 'options-strategy', model: optionsStrategyModel,
+    reasoningEffort: optionsStrategyReasoningEffort, json: true,
+    maxTokens: 1024, timeoutMs: optionsStrategyCheckTimeoutMs,
+  },
 ]) {
   const completion = await request(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -79,7 +89,7 @@ for (const role of [
       temperature: 0,
       ...(role.json ? { response_format: { type: 'json_object' } } : {}),
     }),
-  });
+  }, role.timeoutMs);
 
   if (!completion.ok) {
     console.error(`OpenRouter ${role.name} completion failed: ${completion.status} ${completion.statusText}`);
@@ -99,17 +109,17 @@ for (const role of [
   }
 }
 
-console.log('OpenRouter writer, Opening Digest writer, and planner completion checks passed.');
+console.log('OpenRouter writer, Opening Digest writer, planner, and options-strategy completion checks passed.');
 
-async function request(url, options) {
+async function request(url, options, requestTimeoutMs = timeoutMs) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
   try {
     const res = await fetch(url, { ...options, signal: controller.signal });
     return { ok: res.ok, status: res.status, statusText: res.statusText, body: await res.text() };
   } catch (e) {
     const statusText = e?.name === 'AbortError'
-      ? `request timed out after ${timeoutMs}ms`
+      ? `request timed out after ${requestTimeoutMs}ms`
       : e.message || String(e);
     return { ok: false, status: 'NETWORK', statusText, body: '' };
   } finally {

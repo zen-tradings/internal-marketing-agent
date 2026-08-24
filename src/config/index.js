@@ -70,6 +70,7 @@ export function loadConfig(env = process.env) {
       routerModel: env.OPENROUTER_ROUTER_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
       plannerModel: env.OPENROUTER_PLANNER_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
       reviewModel: env.OPENROUTER_REVIEW_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
+      optionsStrategyModel: env.OPTIONS_STRATEGY_MODEL || 'anthropic/claude-fable-5',
       baseUrl: env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
       maxTokens: positiveIntegerOrThrow(env.OPENROUTER_MAX_TOKENS, 12000, 'OPENROUTER_MAX_TOKENS'),
       maxPromptChars: positiveIntegerOrThrow(env.OPENROUTER_MAX_PROMPT_CHARS, 160000, 'OPENROUTER_MAX_PROMPT_CHARS'),
@@ -79,6 +80,21 @@ export function loadConfig(env = process.env) {
       plannerReasoningEffort: env.OPENROUTER_PLANNER_REASONING_EFFORT || 'none',
       reviewReasoningEffort: env.OPENROUTER_REVIEW_REASONING_EFFORT || 'none',
       routerReasoningEffort: env.OPENROUTER_ROUTER_REASONING_EFFORT || 'none',
+      optionsStrategyReasoningEffort: reasoningEffort(
+        env.OPTIONS_STRATEGY_REASONING_EFFORT,
+        'high',
+        'OPTIONS_STRATEGY_REASONING_EFFORT',
+      ),
+      optionsStrategyMaxTokens: positiveIntegerOrThrow(
+        env.OPTIONS_STRATEGY_MAX_TOKENS,
+        32000,
+        'OPTIONS_STRATEGY_MAX_TOKENS',
+      ),
+      optionsStrategyTimeoutMs: positiveNumber(
+        env.OPTIONS_STRATEGY_TIMEOUT_MS,
+        15 * 60 * 1000,
+        'OPTIONS_STRATEGY_TIMEOUT_MS',
+      ),
       // Translation needs only the original link/PDF and OpenRouter; Exa is required only by original research.
       exaApiKey: env.EXA_API_KEY || '',
       exaBaseUrl: env.EXA_BASE_URL || 'https://api.exa.ai',
@@ -346,4 +362,12 @@ function analysisPipelineVersion(value) {
     throw new Error('ANALYSIS_PIPELINE_VERSION 必须是 v1 或 v2');
   }
   return version;
+}
+
+function reasoningEffort(value, fallback, label) {
+  const effort = String(value || fallback).trim().toLowerCase();
+  if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) {
+    throw new Error(`${label} 必须是 low、medium、high、xhigh 或 max`);
+  }
+  return effort;
 }

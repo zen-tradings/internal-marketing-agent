@@ -4,6 +4,10 @@ import { attachmentsFromSlackMessages, normalizeSlackAttachments } from '../core
 import { detectQdiiTaskPlan } from '../core/qdii.js';
 import { decodeBasicHtmlEntities } from '../lib/html-entities.js';
 import { createSlackPostScheduler } from '../core/notifier.js';
+import {
+  OPTIONS_STRATEGY_PROFILE,
+  resolveOptionsStrategyProfile,
+} from '../lib/options-strategy-route.js';
 const { App } = boltPkg;
 
 export function cleanSlackText(text) {
@@ -163,7 +167,8 @@ export async function resolveNaturalWorkflowTask(task, {
 
   if (typeof classify === 'function') {
     try {
-      const id = await classify(task, workflowIds);
+      const classification = await classify(task, workflowIds);
+      const id = typeof classification === 'object' ? classification?.workflowId : classification;
       const matched = workflowIds.find((workflowId) => workflowId.toLowerCase() === String(id || '').toLowerCase());
       if (matched) return { workflowId: matched, task, reason: 'model-classifier' };
     } catch (error) {
@@ -197,7 +202,7 @@ export function createSlackIntentClassifier(config, fetchFn = globalThis.fetch) 
           max_tokens: 256,
           reasoning: { effort: writer.routerReasoningEffort || 'none', exclude: true },
           messages: [
-            { role: 'system', content: `Classify a Slack request. Return JSON only: {"workflowId":"..."}. Allowed: ${workflowIds.join(', ')}. A URL is research material, not translation intent. Never choose translate for a URL alone; choose translate only when the user explicitly asks for faithful/full translation. qdii=direct Slack lookup of disclosed equity holdings for one or more six-digit public QDII fund codes; email=newsletter/Customer.io draft; earnings=quarterly earnings; sector=industry; morning=daily brief; company=single-company deep dive including financials, competitors, or value chain; macro=cross-asset macro analysis; wechat=other public-account analysis and bare URLs. A WeChat or Newsletter request that uses QDII holdings keeps its destination workflow rather than qdii. For mixed requests, choose the workflow that answers the user's final requested destination.` },
+            { role: 'system', content: `Classify a Slack request. Return JSON only: {"workflowId":"...","contentProfile":"standard|options-strategy"}. Allowed workflows: ${workflowIds.join(', ')}. contentProfile=options-strategy only when the user asks to construct, compare, recommend, hedge with, or evaluate a concrete options strategy or named multi-leg/covered/protective strategy. Pure implied-volatility, Greeks, options-flow, volume, open-interest, OIC-table, or general options-market analysis is standard. A URL is research material, not translation intent. Never choose translate for a URL alone; choose translate only when the user explicitly asks for faithful/full translation. qdii=direct Slack lookup of disclosed equity holdings for one or more six-digit public QDII fund codes; email=newsletter/Customer.io draft; earnings=quarterly earnings; sector=industry; morning=daily brief; company=single-company deep dive including financials, competitors, or value chain; macro=cross-asset macro analysis; wechat=other public-account analysis and bare URLs. A WeChat or Newsletter request that uses QDII holdings keeps its destination workflow rather than qdii. For mixed requests, choose the workflow that answers the user's final requested destination.` },
             { role: 'user', content: String(task).slice(0, 4000) },
           ],
         }),
@@ -207,7 +212,12 @@ export function createSlackIntentClassifier(config, fetchFn = globalThis.fetch) 
       const raw = data?.choices?.[0]?.message?.content;
       const text = Array.isArray(raw) ? raw.map((part) => part?.text || '').join('') : String(raw || '');
       const json = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, '').trim());
-      return json.workflowId;
+      return {
+        workflowId: json.workflowId,
+        contentProfile: json.contentProfile === OPTIONS_STRATEGY_PROFILE
+          ? OPTIONS_STRATEGY_PROFILE
+          : 'standard',
+      };
     } finally { clearTimeout(timer); }
   };
 }
@@ -275,6 +285,16 @@ export function createKeyedMutex() {
         if (tails.get(key) === tail) tails.delete(key);
       }
     },
+  };
+}
+
+export function memoizedClassify(classify) {
+  const cache = new Map();
+  return async (task, workflowIds) => {
+    if (typeof classify !== 'function') return undefined;
+    const key = `${String(task || '')}\u0000${(workflowIds || []).join(',')}`;
+    if (!cache.has(key)) cache.set(key, Promise.resolve().then(() => classify(task, workflowIds)));
+    return cache.get(key);
   };
 }
 
@@ -429,11 +449,12 @@ export async function registerSlack({
         }
         if (result?.done) await result.done;
       }
+      const classifyForTask = memoizedClassify(classify);
       const route = await resolveNaturalWorkflowTask(task, {
         workflowIds,
         defaultWorkflowId,
         previousWorkflowId: previous?.workflow_id,
-        classify,
+        classify: classifyForTask,
       });
       const incomingText = String(ts) === String(rootTs) ? route.task : task;
       const promptRevision = previous ? Number(previous.prompt_revision || 1) + 1 : 1;
@@ -446,6 +467,11 @@ export async function registerSlack({
         ...(incomingAttachments.length ? { attachments: incomingAttachments } : {}),
       });
       const input = buildSlackThreadInput(messages, { clarification: previous?.clarification });
+      const modelRoute = await resolveOptionsStrategyProfile(input, {
+        workflowId: route.workflowId,
+        workflowIds,
+        classify: classifyForTask,
+      });
       const userAttachments = attachmentsFromSlackMessages(messages);
       const metadata = slackPromptMetadata(input, promptRevision, userAttachments);
       const detectedQdiiPlan = detectQdiiTaskPlan(input);
@@ -467,6 +493,11 @@ export async function registerSlack({
           user,
           routeLabel: workflowRouteLabel(route.workflowId),
           routeReason: route.reason,
+          ...(modelRoute.modelProfile ? {
+            modelProfile: modelRoute.modelProfile,
+            modelRouteReason: modelRoute.reason,
+            modelRouteLabel: `${modelRoute.modelProfile} → ${config.writer.optionsStrategyModel}`,
+          } : {}),
           ...(qdiiPlan.qdii ? { qdiiPlan } : {}),
           threadKey,
           attachments: userAttachments,

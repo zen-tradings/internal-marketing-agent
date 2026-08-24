@@ -33,12 +33,18 @@ test('DigitalOcean deploy defaults to read-only preflight and preserves protecte
     openingDigestWechatEnabled: undefined,
     openingDigestSegmentId: 0,
     syncDiscordConfig: false,
+    optionsStrategyModel: 'anthropic/claude-fable-5',
+    optionsStrategyReasoning: 'high',
+    optionsStrategyMaxTokens: 32000,
+    optionsStrategyTimeoutMs: 900000,
   });
   assert.equal(parseDeployArgs(['--activate', '--commit', SHA]).activate, true);
   assert.equal(parseDeployArgs(['--opening-digest-segment-id', '19']).openingDigestSegmentId, '19');
   assert.equal(parseDeployArgs(['--opening-digest-wechat-enabled', 'true']).openingDigestWechatEnabled, 'true');
   assert.equal(parseDeployArgs(['--opening-digest-model', 'openai/gpt-oss-20b']).openingDigestModel, 'openai/gpt-oss-20b');
   assert.equal(parseDeployArgs(['--max-concurrency', '1']).maxConcurrency, '1');
+  assert.equal(parseDeployArgs(['--options-strategy-model', 'anthropic/custom']).optionsStrategyModel, 'anthropic/custom');
+  assert.equal(parseDeployArgs(['--options-strategy-timeout-ms', '1200000']).optionsStrategyTimeoutMs, '1200000');
   assert.equal(parseDeployArgs(['--sync-discord-config']).syncDiscordConfig, true);
   assert.throws(() => parseDeployArgs(['--unknown']), /Unknown argument/);
 });
@@ -68,6 +74,10 @@ test('embedded remote preflight and activation scripts are valid Bash', () => {
   assert.match(ACTIVATE_SCRIPT, /update_env WECHAT_WRITE_CONCURRENCY 1/);
   assert.match(ACTIVATE_SCRIPT, /update_env CUSTOMERIO_WRITE_CONCURRENCY 1/);
   assert.match(ACTIVATE_SCRIPT, /update_env OPENROUTER_CONCURRENCY 2/);
+  assert.match(ACTIVATE_SCRIPT, /update_env OPTIONS_STRATEGY_MODEL "\$options_strategy_model"/);
+  assert.match(ACTIVATE_SCRIPT, /update_env OPTIONS_STRATEGY_REASONING_EFFORT "\$options_strategy_reasoning"/);
+  assert.match(ACTIVATE_SCRIPT, /update_env OPTIONS_STRATEGY_MAX_TOKENS "\$options_strategy_max_tokens"/);
+  assert.match(ACTIVATE_SCRIPT, /update_env OPTIONS_STRATEGY_TIMEOUT_MS "\$options_strategy_timeout_ms"/);
   assert.match(ACTIVATE_SCRIPT, /update_env EXA_SEARCH_QPS 8/);
   assert.match(ACTIVATE_SCRIPT, /update_env SLACK_POST_INTERVAL_MS 1000/);
   assert.match(ACTIVATE_SCRIPT, /env_without_managed_after/);
@@ -170,6 +180,16 @@ test('deployment inputs reject shell injection and invalid reasoning', () => {
     target: 'root@example.com', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
     plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high', maxConcurrency: '3',
   }), /max concurrency must be 1 or 2/);
+  assert.throws(() => validateDeployInputs({
+    target: 'root@example.com', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
+    plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
+    optionsStrategyReasoning: 'none',
+  }), /Options strategy reasoning must be/);
+  assert.throws(() => validateDeployInputs({
+    target: 'root@example.com', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
+    plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
+    optionsStrategyTimeoutMs: 0,
+  }), /Options strategy timeout must be/);
 });
 
 test('preflight requires DigitalOcean metadata, healthy idle service and valid marker', () => {
