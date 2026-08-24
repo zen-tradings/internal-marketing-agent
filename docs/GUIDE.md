@@ -33,8 +33,9 @@ You send `@bot earnings: Micron FY26Q3 https://example.com/xxx` in Slack. Then, 
    English/legal aliases, then generate up to 8 targeted SearchPlan
    queries. Slack PDF/text attachments and PDF/Notion/Google Docs/Linear/GitHub
    URLs are read in parallel with Exa search and kept as first-class user
-   sources. On direct-read failure, recovery tries the exact cache and
-   then URL-semantic recovery; an FCC PDF is restored via the official
+   sources. Private Notion, Google Docs, and Linear issue reads hard-fail
+   the task. For other user URLs, recovery tries the exact cache and then
+   URL-semantic recovery; an FCC PDF is restored via the official
    docs.fcc.gov TXT attachment only when agency, `DA` document number,
    and file subject all match, proving it is the same user document.
    Every task includes at least one Chinese and one English query, and
