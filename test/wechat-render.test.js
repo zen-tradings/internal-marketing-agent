@@ -14,7 +14,11 @@ import {
   styleKeyHighlights,
   validatePreparedWechatHtml,
 } from '../src/lib/wechat-render.js';
-import { headingCardHtml, restyleSectionHeadings } from '../src/lib/wechat-heading.js';
+import {
+  headingCardHtml,
+  renderHeadingCardImages,
+  restyleSectionHeadings,
+} from '../src/lib/wechat-heading.js';
 
 test('微信最终 HTML:尾图移动到脚注和来源之后且只出现一次', () => {
   const footer = '/assets/zen-footer-qr.png';
@@ -226,12 +230,41 @@ test('微信分区标题卡 HTML 锁定原图底板和原文字颜色', () => {
   assert.equal(document.querySelector('[data-zen-heading-en]').textContent, 'What Niu Lai Is About, at the Very Least');
   assert.equal(document.querySelector('[data-zen-heading-zh]').textContent, '《牛来》在最低限度上关于什么');
   assert.match(html, /left:108px;top:74px/);
+  assert.match(html, /left:350px;right:88px;top:74px/);
+  assert.match(html, /overflow-wrap:anywhere/);
   assert.match(html, /text-align:right/);
   assert.match(html, /Helvetica Neue/);
   assert.match(html, /PingFang SC/);
   assert.match(html, /#C9C8C4/);
   assert.match(html, /#A0A0A0/);
   assert.match(html, /#3E3E3E/);
+});
+
+test('微信分区标题卡:长双语标题自适应缩放且不越过安全区', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-heading-card-long-'));
+  const images = await renderHeadingCardImages([{
+    index: 7,
+    en: 'Risks and Open Questions: High Beta, Monetization Pace, and Post-Hoc Verification',
+    zh: '风险与未决问题：高Beta、兑现节奏与事后验证',
+  }, {
+    index: 8,
+    en: 'Risks, Open Questions, Scenario Boundaries, Monetization Pace, Competitive Pressure, and Post-Hoc Verification',
+    zh: '风险、未决问题、情景边界、商业化兑现节奏、竞争压力与事后验证框架',
+  }], { absoluteDirPath: dir });
+  assert.equal(images[0].number, '07');
+  assert.equal(images[1].number, '08');
+  assert.ok(images[1].layout.scale < 1, `超长标题应缩放，实际 scale=${images[1].layout.scale}`);
+  for (const image of images) {
+    assert.ok(image.layout.scale >= 0.68);
+    assert.ok(image.layout.left >= image.layout.safeLeft);
+    assert.ok(image.layout.right <= image.layout.safeRight);
+    assert.ok(image.layout.top >= image.layout.safeTop);
+    assert.ok(image.layout.bottom <= image.layout.safeBottom);
+    assert.deepEqual(
+      [...fs.readFileSync(image.path).subarray(0, 8)],
+      [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+    );
+  }
 });
 
 test('微信分区标题:直译不去序号且不发明英文', async () => {

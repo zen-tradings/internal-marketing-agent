@@ -19,6 +19,18 @@ const RESERVED_HEADINGS = new Set([
 const ORDINAL_RE = /^(?:(?:0?\d{1,2}|[一二三四五六七八九十百]+)[、.．]|[（(](?:0?\d{1,2}|[一二三四五六七八九十百]+)[)）])\s*/;
 export const HEADING_CARD_WIDTH = 1068;
 export const HEADING_CARD_HEIGHT = 310;
+const COPY_SAFE_AREA = Object.freeze({
+  left: 350,
+  right: 88,
+  top: 74,
+  bottom: 54,
+});
+const COPY_TYPE = Object.freeze({
+  englishPx: 28,
+  chinesePx: 40,
+  gapPx: 10,
+  minScale: 0.68,
+});
 export const HEADING_CARD_BACKGROUND = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -73,9 +85,9 @@ html,body{margin:0;background:#FFFFFF}
 .canvas{position:relative;width:${HEADING_CARD_WIDTH}px;height:${HEADING_CARD_HEIGHT}px;overflow:hidden;background:#FFFFFF}
 .plate{position:absolute;inset:0;width:100%;height:100%;display:block}
 .index{position:absolute;left:108px;top:74px;margin:0;font-family:Georgia,"Times New Roman",serif;font-size:72px;line-height:.86;font-weight:400;color:#C9C8C4;letter-spacing:.02em}
-.copy{position:absolute;left:430px;right:56px;top:88px;text-align:right}
-.en{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:28px;line-height:1.15;font-weight:300;color:#A0A0A0;letter-spacing:.02em}
-.zh{margin-top:10px;font-family:"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Noto Sans SC","Microsoft YaHei","Zen Heading CJK",sans-serif;font-size:40px;line-height:1.2;font-weight:400;color:#3E3E3E;letter-spacing:.08em}
+.copy{position:absolute;left:${COPY_SAFE_AREA.left}px;right:${COPY_SAFE_AREA.right}px;top:${COPY_SAFE_AREA.top}px;text-align:right}
+.en{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:${COPY_TYPE.englishPx}px;line-height:1.15;font-weight:300;color:#A0A0A0;letter-spacing:.02em;overflow-wrap:anywhere}
+.zh{margin-top:${COPY_TYPE.gapPx}px;font-family:"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Noto Sans SC","Microsoft YaHei","Zen Heading CJK",sans-serif;font-size:${COPY_TYPE.chinesePx}px;line-height:1.2;font-weight:400;color:#3E3E3E;letter-spacing:.08em;overflow-wrap:anywhere}
 </style></head><body><div class="canvas" data-zen-heading-card="true"><img class="plate" alt="" src="${escapeAttr(backgroundUrl)}"><div data-zen-heading-index="true" class="index">${number}</div><div class="copy">${englishRow}<div data-zen-heading-zh="true" class="zh">${escapeHtml(chinese)}</div></div></div></body></html>`;
 }
 
@@ -162,8 +174,21 @@ export async function renderHeadingCardImages(cards, {
         }), { waitUntil: 'load' });
         await page.locator('.plate').evaluate((image) => new Promise((resolve, reject) => {
           const done = () => {
-            if (image.naturalWidth === 1068 && image.naturalHeight === 310) resolve();
-            else reject(new Error(`分区标题卡底板尺寸无效:${image.naturalWidth}x${image.naturalHeight}`));
+            if (image.naturalWidth !== 1068 || image.naturalHeight !== 310) {
+              reject(new Error(`分区标题卡底板尺寸无效:${image.naturalWidth}x${image.naturalHeight}`));
+              return;
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = image.naturalWidth;
+            canvas.height = image.naturalHeight;
+            const context = canvas.getContext('2d', { willReadFrequently: true });
+            context.drawImage(image, 0, 0);
+            const [red, green, blue] = context.getImageData(1040, 50, 1, 1).data;
+            if (Math.min(red, green, blue) >= 245) {
+              reject(new Error('分区标题卡右上边框被白色覆盖'));
+              return;
+            }
+            resolve();
           };
           if (image.complete) done();
           else {
@@ -175,6 +200,12 @@ export async function renderHeadingCardImages(cards, {
           await document.fonts.ready;
           try { await document.fonts.load('500 36px "Zen Heading CJK"', '标题'); } catch {}
         });
+        const layout = await page.evaluate(fitHeadingCardCopy, {
+          ...COPY_SAFE_AREA,
+          ...COPY_TYPE,
+          cardWidth: HEADING_CARD_WIDTH,
+          cardHeight: HEADING_CARD_HEIGHT,
+        });
         await page.screenshot({
           path: outPath,
           type: 'png',
@@ -182,7 +213,7 @@ export async function renderHeadingCardImages(cards, {
           omitBackground: false,
           animations: 'disabled',
         });
-        images.push({ src: filename, number, path: outPath });
+        images.push({ src: filename, number, path: outPath, layout });
       }
       return images;
     } catch (error) {
@@ -191,6 +222,89 @@ export async function renderHeadingCardImages(cards, {
       await browser?.close();
     }
   }, signal);
+}
+
+export function fitHeadingCardCopy({
+  left,
+  right,
+  top,
+  bottom,
+  englishPx,
+  chinesePx,
+  gapPx,
+  minScale,
+  cardWidth,
+  cardHeight,
+}) {
+  const copy = document.querySelector('.copy');
+  const english = document.querySelector('.en');
+  const chinese = document.querySelector('.zh');
+  if (!copy || !chinese) throw new Error('分区标题卡缺少文案节点');
+  const safeWidth = cardWidth - left - right;
+  const safeHeight = cardHeight - top - bottom;
+
+  const applyScale = (scale) => {
+    if (english) {
+      english.style.fontSize = `${englishPx * scale}px`;
+      english.style.letterSpacing = `${englishPx * 0.02 * scale}px`;
+    }
+    chinese.style.fontSize = `${chinesePx * scale}px`;
+    chinese.style.letterSpacing = `${chinesePx * 0.08 * scale}px`;
+    chinese.style.marginTop = english ? `${gapPx * scale}px` : '0px';
+    copy.dataset.zenHeadingScale = scale.toFixed(3);
+  };
+  const measure = () => {
+    const box = copy.getBoundingClientRect();
+    return {
+      width: Math.max(copy.scrollWidth, box.width),
+      height: Math.max(copy.scrollHeight, box.height),
+    };
+  };
+  const fits = () => {
+    const size = measure();
+    return size.width <= safeWidth + 0.5 && size.height <= safeHeight + 0.5;
+  };
+
+  applyScale(1);
+  let scale = 1;
+  if (!fits()) {
+    applyScale(minScale);
+    if (!fits()) throw new Error('分区标题过长，最小字号仍无法放入安全区');
+    let low = minScale;
+    let high = 1;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const candidate = (low + high) / 2;
+      applyScale(candidate);
+      if (fits()) low = candidate;
+      else high = candidate;
+    }
+    scale = low;
+    applyScale(scale);
+  }
+
+  const size = measure();
+  const spareHeight = Math.max(0, safeHeight - size.height);
+  const copyTop = top + spareHeight * 0.22;
+  copy.style.top = `${copyTop}px`;
+  const box = copy.getBoundingClientRect();
+  const epsilon = 0.75;
+  if (box.left < left - epsilon
+    || box.right > cardWidth - right + epsilon
+    || box.top < top - epsilon
+    || box.bottom > cardHeight - bottom + epsilon) {
+    throw new Error('分区标题排版越过安全区');
+  }
+  return {
+    scale: Number(scale.toFixed(3)),
+    left: Number(box.left.toFixed(2)),
+    right: Number(box.right.toFixed(2)),
+    top: Number(box.top.toFixed(2)),
+    bottom: Number(box.bottom.toFixed(2)),
+    safeLeft: left,
+    safeRight: cardWidth - right,
+    safeTop: top,
+    safeBottom: cardHeight - bottom,
+  };
 }
 
 function splitHeadingParts(text) {
