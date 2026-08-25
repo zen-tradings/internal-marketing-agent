@@ -23,8 +23,8 @@ You send `@bot earnings: Micron FY26Q3 https://example.com/xxx` in Slack. Then, 
    can cancel a task during the generate phase and clean up its run
    directory; force-kill is refused once the task enters an external
    publish phase. On crash/restart, running tasks are marked interrupted;
-   persisted queued tasks resume on next start only after an explicit
-   admin requeue, so historical interrupted tasks are never auto-published
+   persisted queued tasks resume on next start. Historical interrupted
+   tasks require an explicit admin requeue, so they are never auto-published
    by mistake.
 
 ③ Research + writing   src/core/analysis-v2.js + src/core/runner.js
@@ -123,7 +123,7 @@ You send `@bot earnings: Micron FY26Q3 https://example.com/xxx` in Slack. Then, 
 
 ## 2. The Three Layers of Configuration
 
-1. **`.env` (runtime switches; restart the process after changes)**: secrets, models, task directories, queue limits, fetch/external-API timeouts, Slack allowlists, data retention, `HUB_DRY_RUN=1`, fixed header image, the two fixed footer images, and cron expressions. See `.env.example` for the full list and defaults. The service does not configure or validate a public egress IP.
+1. **`.env` (runtime switches; restart the process after changes)**: secrets, models, task directories, queue limits, fetch/external-API timeouts, Slack allowlists, data retention, `HUB_DRY_RUN=1`, fixed header image, the two fixed footer images, and cron expressions. See `.env.example` for the full list and deployment-oriented example values; `src/config/index.js` owns fallback defaults when a key is absent. The service does not configure or validate a public egress IP.
 2. **`src/workflows/*.js` (declarative workflows)**: each file declares an id, triggers, channels, priority sources, and a fallback methodology. In V2 the Slack Prompt drives content; sector/company/earnings methodologies only fill in structure the user did not specify. Shared sources live in `workflows/shared.js`; structured translation keeps its own fixed pipeline.
 3. **`src/config/index.js` (translation layer from env → config object)**: give new env keys their defaults here.
 
