@@ -241,7 +241,8 @@ export function fitHeadingCardCopy({
   const chinese = document.querySelector('.zh');
   if (!copy || !chinese) throw new Error('分区标题卡缺少文案节点');
   const safeWidth = cardWidth - left - right;
-  const safeHeight = cardHeight - top - bottom;
+  const edgeInset = 1;
+  const safeHeight = cardHeight - top - bottom - edgeInset * 2;
 
   const applyScale = (scale) => {
     if (english) {
@@ -262,7 +263,7 @@ export function fitHeadingCardCopy({
   };
   const fits = () => {
     const size = measure();
-    return size.width <= safeWidth + 0.5 && size.height <= safeHeight + 0.5;
+    return size.width <= safeWidth && size.height <= safeHeight;
   };
 
   applyScale(1);
@@ -284,14 +285,13 @@ export function fitHeadingCardCopy({
 
   const size = measure();
   const spareHeight = Math.max(0, safeHeight - size.height);
-  const copyTop = top + spareHeight * 0.22;
+  const copyTop = top + edgeInset + spareHeight * 0.22;
   copy.style.top = `${copyTop}px`;
   const box = copy.getBoundingClientRect();
-  const epsilon = 0.75;
-  if (box.left < left - epsilon
-    || box.right > cardWidth - right + epsilon
-    || box.top < top - epsilon
-    || box.bottom > cardHeight - bottom + epsilon) {
+  if (box.left < left
+    || box.right > cardWidth - right
+    || box.top < top
+    || box.bottom > cardHeight - bottom) {
     throw new Error('分区标题排版越过安全区');
   }
   return {
