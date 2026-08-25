@@ -66,6 +66,11 @@ test('QDII 意图支持中英文、批量代码、渠道默认和显式双输出
   assert.equal(dual.dualReply, true);
   assert.equal(detectQdiiTaskPlan('分析股票 600519').qdii, false, '普通股票代码不能仅因六位数字触发');
   assert.equal(detectQdiiTaskPlan('513100').codeOnly, true);
+  assert.equal(
+    detectQdiiTaskPlan('write analysis post based on https://linear.app/zen-trading/issue/ZEN-36/qdii-holdings-513100').qdii,
+    false,
+    'URL slug 中的主题词和六位数字不能成为 QDII 查询参数',
+  );
 });
 
 test('报告期解析统一 Q1/H1/Q3/FY，latest 门禁按法定时限加三个工作日推进', () => {
