@@ -30,10 +30,13 @@ export function extractQdiiFundCodes(input) {
 
 export function detectQdiiTaskPlan(input) {
   const text = String(input || '').trim();
-  const codes = extractQdiiFundCodes(text);
-  const explicitQdii = /^(?:qdii|fund|holdings?|基金查询)\s*[:：]/i.test(text);
-  const codeOnly = codes.length > 0 && text.replace(FUND_CODE_RE, '').replace(/[\s,，、;；]+/g, '') === '';
-  const qdii = codes.length > 0 && (explicitQdii || codeOnly || QDII_TERMS_RE.test(text));
+  // URLs are source locators, not QDII parameters. A slug may contain "qdii", "holdings", or a six-digit
+  // issue/topic identifier; only fund codes and data intent written in the user's instruction may select this flow.
+  const intentText = text.replace(/https?:\/\/\S+/gi, ' ').trim();
+  const codes = extractQdiiFundCodes(intentText);
+  const explicitQdii = /^(?:qdii|fund|holdings?|基金查询)\s*[:：]/i.test(intentText);
+  const codeOnly = codes.length > 0 && intentText.replace(FUND_CODE_RE, '').replace(/[\s,，、;；]+/g, '') === '';
+  const qdii = codes.length > 0 && (explicitQdii || codeOnly || QDII_TERMS_RE.test(intentText));
   if (!qdii) return { qdii: false, codes: [] };
   const wantsWechat = WECHAT_TERMS_RE.test(text) || /^(?:wechat|微信)\s*[:：]/i.test(text);
   const wantsNewsletter = NEWSLETTER_TERMS_RE.test(text) || /^(?:newsletter|email|邮件)\s*[:：]/i.test(text);

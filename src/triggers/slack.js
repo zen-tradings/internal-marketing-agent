@@ -96,6 +96,9 @@ const NATURAL_RULES = [
     test: (text) => MACRO_THEME_RE.test(text) && MACRO_ANALYSIS_INTENT_RE.test(text),
     reason: 'macro-theme+analysis-intent',
   },
+  // Generic article/post requests belong to prompt-driven WeChat analysis. In particular, topic words in a
+  // user URL (for example a Linear slug containing "qdii") must not override the requested article output.
+  { id: 'wechat', re: /(?:\b(?:write|create|draft|prepare|produce)\b.{0,40}\b(?:analysis\s+)?(?:post|article)\b|(?:写|撰写|生成|创作).{0,30}(?:分析文章|文章|帖子|公众号))/i },
   // A single URL without a task verb is an ambiguous request and defaults to WeChat analysis, never translation.
   { id: 'wechat', re: /^\s*https?:\/\/\S+\s*$/i },
 ];
@@ -161,16 +164,24 @@ export async function resolveNaturalWorkflowTask(task, {
     return { workflowId: previousWorkflowId, task, reason: 'thread-context' };
   }
 
+  let rejectedModelQdii = false;
   if (typeof classify === 'function') {
     try {
       const id = await classify(task, workflowIds);
       const matched = workflowIds.find((workflowId) => workflowId.toLowerCase() === String(id || '').toLowerCase());
-      if (matched) return { workflowId: matched, task, reason: 'model-classifier' };
+      // The model is only a fallback router. It cannot waive the deterministic QDII contract or infer fund codes
+      // from an opaque document/URL, so reject a qdii classification unless the original Slack text passed it.
+      if (matched?.toLowerCase() === 'qdii' && !detectQdiiTaskPlan(task).qdii) rejectedModelQdii = true;
+      else if (matched) return { workflowId: matched, task, reason: 'model-classifier' };
     } catch (error) {
       console.error('[slack] 自然语言路由模型失败,回退微信公众号:', error.message);
     }
   }
-  return { workflowId: defaultWorkflowId, task, reason: 'default-wechat' };
+  return {
+    workflowId: defaultWorkflowId,
+    task,
+    reason: rejectedModelQdii ? 'model-classifier-rejected-qdii' : 'default-wechat',
+  };
 }
 
 export function createSlackIntentClassifier(config, fetchFn = globalThis.fetch) {
@@ -197,7 +208,7 @@ export function createSlackIntentClassifier(config, fetchFn = globalThis.fetch) 
           max_tokens: 256,
           reasoning: { effort: writer.routerReasoningEffort || 'none', exclude: true },
           messages: [
-            { role: 'system', content: `Classify a Slack request. Return JSON only: {"workflowId":"..."}. Allowed: ${workflowIds.join(', ')}. A URL is research material, not translation intent. Never choose translate for a URL alone; choose translate only when the user explicitly asks for faithful/full translation. qdii=direct Slack lookup of disclosed equity holdings for one or more six-digit public QDII fund codes; email=newsletter/Customer.io draft; earnings=quarterly earnings; sector=industry; morning=daily brief; company=single-company deep dive including financials, competitors, or value chain; macro=cross-asset macro analysis; wechat=other public-account analysis and bare URLs. A WeChat or Newsletter request that uses QDII holdings keeps its destination workflow rather than qdii. For mixed requests, choose the workflow that answers the user's final requested destination.` },
+            { role: 'system', content: `Classify a Slack request. Return JSON only: {"workflowId":"..."}. Allowed: ${workflowIds.join(', ')}. A URL is research material, not translation intent. Never choose translate for a URL alone; choose translate only when the user explicitly asks for faithful/full translation. qdii=direct Slack lookup of disclosed equity holdings for one or more six-digit public QDII fund codes; choose it only when the request text itself contains at least one such code and asks for holdings data, never from a URL path or title alone. email=newsletter/Customer.io draft; earnings=quarterly earnings; sector=industry; morning=daily brief; company=single-company deep dive including financials, competitors, or value chain; macro=cross-asset macro analysis; wechat=other public-account analysis and bare URLs. A WeChat or Newsletter request that uses QDII holdings keeps its destination workflow rather than qdii. For mixed requests, choose the workflow that answers the user's final requested destination.` },
             { role: 'user', content: String(task).slice(0, 4000) },
           ],
         }),
