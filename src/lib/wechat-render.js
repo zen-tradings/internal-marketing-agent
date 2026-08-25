@@ -6,6 +6,7 @@ import { createWechatClient } from '@wenyan-md/core/wechat';
 import { defaultHttpAdapter } from '@wenyan-md/core/http';
 import { prepareRenderContext, publishToWechatDraft, wechatPublisher } from '@wenyan-md/core/wrapper';
 import { fetchWithTimeout } from './http-timeout.js';
+import { restyleSectionHeadings } from './wechat-heading.js';
 
 const wechatRequestContext = new AsyncLocalStorage();
 const boundedWechatClient = createWechatClient({
@@ -33,7 +34,16 @@ export async function renderAndPublishWithFinalFooter(inputContent, options, get
   const { gzhContent, absoluteDirPath } = await prepareRenderContext(inputContent, options, getInputContent);
   if (!gzhContent?.title) throw new Error('未能找到文章标题');
   gzhContent.content = normalizeCodeBreaks(normalizeBodyTypography(
-    styleKeyHighlights(alignTerminalReferences(removeDuplicateReferenceSections(gzhContent.content))),
+    await restyleSectionHeadings(
+      styleKeyHighlights(alignTerminalReferences(removeDuplicateReferenceSections(gzhContent.content))),
+      {
+        stripOrdinals: options.stripHeadingOrdinals === true,
+        absoluteDirPath,
+        executablePath: options.headingBrowserExecutablePath,
+        signal: options.signal,
+        renderCards: options.renderHeadingCards,
+      },
+    ),
   ));
   if (options.finalSurveyPath || options.finalFooterPath) {
     gzhContent.content = appendFinalTailImages(gzhContent.content, {
@@ -115,7 +125,7 @@ export function validatePreparedWechatHtml(html, {
     .filter((node) => node.textContent.trim() === '原文信息');
   if (sourceInfoLabels.length > 1) errors.push(`最终 HTML 含 ${sourceInfoLabels.length} 个“原文信息”板块`);
   const oversizedBodyNodes = [...document.querySelectorAll('p,li,blockquote')]
-    .filter((node) => !node.closest('[data-zen-final-tail-wrapper]'))
+    .filter((node) => !node.closest('[data-zen-final-tail-wrapper],[data-zen-section-heading]'))
     .filter((node) => {
       const size = effectiveEmFontSize(node);
       return size !== undefined && size > 0.9;

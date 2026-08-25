@@ -289,6 +289,8 @@ export function makeChannel({
           appSecret,
           timeoutMs: config.wechat.timeoutMs,
           signal,
+          stripHeadingOrdinals: (workflow?.mode || '') !== 'translation',
+          headingBrowserExecutablePath: config.translation?.browserExecutablePath,
           finalSurveyPath: assetsConfig.surveyImage,
           finalFooterPath: assetsConfig.footerImage,
         }, getInputContent), signal);
