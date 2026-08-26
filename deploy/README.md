@@ -25,13 +25,13 @@ npm run deploy:digitalocean
 After reviewing the preflight output, activate the exact pushed commit:
 
 ```bash
-npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --max-concurrency 1 --opening-digest-model openai/gpt-oss-120b --opening-digest-wechat-enabled true --sync-discord-config --activate
+npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --max-concurrency 2 --opening-digest-model openai/gpt-oss-120b --opening-digest-wechat-enabled true --sync-discord-config --activate
 ```
 
 需要同时切换 Opening Digest 的受控测试受众时，必须通过同一事务化部署命令传入已在 Customer.io 核验的 segment ID；部署失败会连同受保护环境文件一起回滚：
 
 ```bash
-npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --max-concurrency 1 --activate --opening-digest-segment-id 19
+npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --max-concurrency 2 --activate --opening-digest-segment-id 19
 ```
 
 The command requires a clean worktree and a commit present on the upstream
@@ -81,9 +81,8 @@ DATALAB_MODE=balanced
 CRON_TIMEZONE=America/Los_Angeles
 HEALTH_HOST=127.0.0.1
 HEALTH_PORT=8080
-# Production currently uses one task slot. The validated 1 vCPU/2GB host supports
-# up to two, but raising it requires an explicit capacity decision during deployment.
-MAX_CONCURRENCY=1
+# The validated 1 vCPU/2GB host uses two task slots while remaining one process.
+MAX_CONCURRENCY=2
 MAX_QUEUE_SIZE=100
 BROWSER_CONCURRENCY=1
 WECHAT_WRITE_CONCURRENCY=1

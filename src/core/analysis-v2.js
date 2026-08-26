@@ -529,6 +529,10 @@ ${editorialGuidance ? `${editorialGuidance}\n\n` : ''}${macroGuidance ? `${macro
     ? '用户已明确要求代码或 ASCII 图，必须保留必要的 fenced code block。'
     : '用户未要求代码，不要主动生成代码围栏。'}
 - 固定模板只处理排版，不能改变用户要求。
+${contract.requested_structure?.length
+    ? '- 用户已经指定章节名：正文分区标题必须原样保留，不得改写成双语，也不得自行添加序号。'
+    : '- 系统自行组织的正文分区标题写成 `## English｜中文`，英文在前、中文在后，用全角竖线分隔；不要手写 01、一、或 1. 这类序号，发布时由模板自动编号。'}
+- 不要给“引用链接”或任何来源章节写英文小标题。
 `;
 }
 

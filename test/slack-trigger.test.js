@@ -123,6 +123,29 @@ test('自然语言路由:用户链接加财务、竞品和上下游要求进入�
   assert.equal(route.reason, 'natural-rule');
 });
 
+test('Linear URL slug 含 qdii 时，明确的 analysis post 仍进入微信分析并由文档摄取读取表格', async () => {
+  const task = 'write analysis post based on: https://linear.app/zen-trading/issue/ZEN-36/qdii-spreadsheet';
+  let classifierCalled = false;
+  const route = await resolveNaturalWorkflowTask(task, {
+    workflowIds: ['wechat', 'email', 'qdii'],
+    classify: async () => { classifierCalled = true; return 'qdii'; },
+  });
+  assert.equal(route.workflowId, 'wechat');
+  assert.equal(route.reason, 'natural-rule');
+  assert.equal(classifierCalled, false, '明确文章输出不应交给模型从 URL slug 猜路由');
+});
+
+test('模型不能把缺少六位代码与持仓请求的文档分析兜底路由成 qdii', async () => {
+  const task = 'analyze the spreadsheet at https://linear.app/zen-trading/issue/ZEN-36/qdii-spreadsheet';
+  const route = await resolveNaturalWorkflowTask(task, {
+    workflowIds: ['wechat', 'qdii'],
+    defaultWorkflowId: 'wechat',
+    classify: async () => 'qdii',
+  });
+  assert.equal(route.workflowId, 'wechat');
+  assert.equal(route.reason, 'model-classifier-rejected-qdii');
+});
+
 test('QDII 中英文路由区分 Slack 直答、微信草稿和 Newsletter 草稿', async () => {
   const ids = ['wechat', 'email', 'qdii'];
   const direct = await resolveNaturalWorkflowTask(
@@ -283,6 +306,7 @@ test('模型路由给短 JSON 预留足够输出预算并关闭 reasoning', asyn
   });
   assert.equal(body.max_tokens, 256);
   assert.deepEqual(body.reasoning, { effort: 'none', exclude: true });
+  assert.match(body.messages[0].content, /choose it only when the request text itself contains at least one such code/);
 });
 
 test('多工作流路由:无前缀走 defaultWorkflowId', () => {
