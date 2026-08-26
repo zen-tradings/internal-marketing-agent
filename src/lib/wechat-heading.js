@@ -27,7 +27,7 @@ const COPY_SAFE_AREA = Object.freeze({
 });
 const COPY_TYPE = Object.freeze({
   englishPx: 28,
-  chinesePx: 40,
+  chinesePx: 44,
   gapPx: 10,
   minScale: 0.68,
 });
