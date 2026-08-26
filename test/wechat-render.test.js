@@ -235,6 +235,8 @@ test('微信分区标题卡 HTML 锁定原图底板和原文字颜色', () => {
   assert.match(html, /text-align:right/);
   assert.match(html, /Helvetica Neue/);
   assert.match(html, /PingFang SC/);
+  assert.match(html, /font-size:44px/);
+  assert.match(html, /font-size:28px/);
   assert.match(html, /#C9C8C4/);
   assert.match(html, /#A0A0A0/);
   assert.match(html, /#3E3E3E/);
