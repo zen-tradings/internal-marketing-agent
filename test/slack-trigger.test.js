@@ -13,6 +13,7 @@ import {
   slackMessageEventKey,
   slackPromptMetadata,
 } from '../src/triggers/slack.js';
+import { resolveOptionsStrategyProfile } from '../src/lib/options-strategy-route.js';
 
 test('识别 "任务:" 前缀', () => {
   assert.equal(parseSlackTask('任务:写英伟达', 'B1'), '写英伟达');
@@ -253,6 +254,33 @@ test('自然语言路由:同线程短补充继承上个工作流,模糊长任务
   assert.equal(fallback.workflowId, 'wechat');
 });
 
+test('显式微信/Newsletter 前缀与线程补充都能选择 options-strategy profile', async () => {
+  const ids = ['wechat', 'email', 'translate'];
+  for (const [prompt, expectedWorkflow] of [
+    ['微信：比较备兑看涨和保护性看跌策略', 'wechat'],
+    ['Newsletter: compare a covered call and a cash-secured put strategy', 'email'],
+  ]) {
+    const route = await resolveNaturalWorkflowTask(prompt, { workflowIds: ids });
+    const modelRoute = await resolveOptionsStrategyProfile(route.task, { workflowId: route.workflowId });
+    assert.equal(route.workflowId, expectedWorkflow);
+    assert.equal(route.reason, 'explicit-prefix');
+    assert.equal(modelRoute.modelProfile, 'options-strategy');
+  }
+
+  const fullThreadInput = buildSlackThreadInput([
+    { ts: '1.0', text: '写一篇英伟达 Newsletter' },
+    { ts: '2.0', text: '补充比较备兑看涨和保护性看跌策略，不给具体仓位' },
+  ]);
+  const threadRoute = await resolveNaturalWorkflowTask('补充比较备兑看涨和保护性看跌策略，不给具体仓位', {
+    workflowIds: ids,
+    previousWorkflowId: 'email',
+  });
+  const modelRoute = await resolveOptionsStrategyProfile(fullThreadInput, { workflowId: threadRoute.workflowId });
+  assert.equal(threadRoute.workflowId, 'email');
+  assert.equal(threadRoute.reason, 'thread-context');
+  assert.equal(modelRoute.modelProfile, 'options-strategy');
+});
+
 test('模型路由给短 JSON 预留足够输出预算并关闭 reasoning', async () => {
   let body;
   const fetchFn = async (_url, options) => {
@@ -272,7 +300,10 @@ test('模型路由给短 JSON 预留足够输出预算并关闭 reasoning', asyn
     },
   }, fetchFn);
 
-  assert.equal(await classify('写一封 newsletter', ['wechat', 'email']), 'email');
+  assert.deepEqual(await classify('写一封 newsletter', ['wechat', 'email']), {
+    workflowId: 'email',
+    contentProfile: 'standard',
+  });
   assert.equal(body.max_tokens, 256);
   assert.deepEqual(body.reasoning, { effort: 'none', exclude: true });
   assert.match(body.messages[0].content, /choose it only when the request text itself contains at least one such code/);

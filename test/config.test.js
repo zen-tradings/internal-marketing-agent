@@ -33,6 +33,10 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal(c.writer.plannerReasoningEffort, 'none');
   assert.equal(c.writer.reviewReasoningEffort, 'none');
   assert.equal(c.writer.routerReasoningEffort, 'none');
+  assert.equal(c.writer.optionsStrategyModel, 'anthropic/claude-fable-5');
+  assert.equal(c.writer.optionsStrategyReasoningEffort, 'high');
+  assert.equal(c.writer.optionsStrategyMaxTokens, 32000);
+  assert.equal(c.writer.optionsStrategyTimeoutMs, 900000);
   assert.equal(c.writer.exaApiKey, 'exa-key');
   assert.equal(c.writer.exaBaseUrl, 'https://api.exa.ai');
   assert.equal(c.writer.exaPriorityResults, 4); // 默认
@@ -226,6 +230,32 @@ test('OpenRouter 各角色的生成预算与 reasoning 可独立覆盖', () => {
   assert.equal(c.writer.plannerReasoningEffort, 'medium');
   assert.equal(c.writer.reviewReasoningEffort, 'low');
   assert.equal(c.writer.routerReasoningEffort, 'low');
+});
+
+test('期权策略 Fable profile 的模型、reasoning、预算和超时可独立覆盖', () => {
+  const base = {
+    SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
+    WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec', OPENROUTER_API_KEY: 'or-key',
+  };
+  const c = loadConfig({
+    ...base,
+    OPTIONS_STRATEGY_MODEL: 'anthropic/custom-fable',
+    OPTIONS_STRATEGY_REASONING_EFFORT: 'xhigh',
+    OPTIONS_STRATEGY_MAX_TOKENS: '64000',
+    OPTIONS_STRATEGY_TIMEOUT_MS: '1200000',
+  });
+  assert.equal(c.writer.optionsStrategyModel, 'anthropic/custom-fable');
+  assert.equal(c.writer.optionsStrategyReasoningEffort, 'xhigh');
+  assert.equal(c.writer.optionsStrategyMaxTokens, 64000);
+  assert.equal(c.writer.optionsStrategyTimeoutMs, 1200000);
+  assert.throws(
+    () => loadConfig({ ...base, OPTIONS_STRATEGY_REASONING_EFFORT: 'none' }),
+    /OPTIONS_STRATEGY_REASONING_EFFORT/,
+  );
+  assert.throws(
+    () => loadConfig({ ...base, OPTIONS_STRATEGY_MAX_TOKENS: '0' }),
+    /OPTIONS_STRATEGY_MAX_TOKENS/,
+  );
 });
 
 test('分析 V2 的模型角色、搜索预算、时效窗口和 Slack 编辑防抖可独立配置', () => {

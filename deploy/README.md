@@ -100,6 +100,10 @@ OPENROUTER_REASONING_EFFORT=high
 OPENROUTER_PLANNER_REASONING_EFFORT=high
 OPENROUTER_REVIEW_REASONING_EFFORT=none
 OPENROUTER_ROUTER_REASONING_EFFORT=none
+OPTIONS_STRATEGY_MODEL=anthropic/claude-fable-5
+OPTIONS_STRATEGY_REASONING_EFFORT=high
+OPTIONS_STRATEGY_MAX_TOKENS=32000
+OPTIONS_STRATEGY_TIMEOUT_MS=900000
 OPENING_DIGEST_MODEL=openai/gpt-oss-120b
 # Full English multi-post delivery for formal cron runs only. Keep the webhook
 # secret in this root-owned environment file; never commit it.

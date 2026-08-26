@@ -17,13 +17,19 @@ export function createNotifier(postMessage, { intervalMs = 0 } = {}) {
       const freshness = notify?.freshnessRequirement
         ? `\n时效:${notify.freshnessRequirement}`
         : '';
+      const modelRoute = notify?.modelRouteLabel
+        ? `\n模型:${notify.modelRouteLabel}`
+        : '';
+      const modelRouteReason = notify?.modelRouteReason
+        ? `\n模型路由原因:${notify.modelRouteReason}`
+        : '';
       const fullPrompt = String(input || '').trim();
       const displayed = fullPrompt.length > 2000
         ? `${fullPrompt.slice(0, 2000)}\n…完整 Prompt 已保存，共 ${fullPrompt.length} 字符`
         : fullPrompt;
       return send(
         notify,
-        `收到,${notify?.queueState === 'running' ? '正在执行' : '已排队'} · 任务 ${shortRunId(notify?.runId)}:${route}${revision}${entities}${links}${freshness}\n\n完整要求:\n> ${displayed.replace(/\n/g, '\n> ')}`,
+        `收到,${notify?.queueState === 'running' ? '正在执行' : '已排队'} · 任务 ${shortRunId(notify?.runId)}:${route}${modelRoute}${modelRouteReason}${revision}${entities}${links}${freshness}\n\n完整要求:\n> ${displayed.replace(/\n/g, '\n> ')}`,
         2,
         'ack',
       );

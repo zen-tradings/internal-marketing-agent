@@ -480,6 +480,7 @@ export function buildWritingPrompt({
   sources,
   workflow,
   asOf,
+  optionsStrategyGuidance = '',
 }) {
   const relevant = new Set(evidenceMatrix.relevant_source_ids || []);
   const selected = sources.filter((source) => relevant.has(source.id));
@@ -516,7 +517,7 @@ ${selected.map((source) => formatSourceForWriter(source)).join('\n\n') || '没�
 【当前时间】
 ${String(asOf)}
 
-${editorialGuidance ? `${editorialGuidance}\n\n` : ''}${macroGuidance ? `${macroGuidance}\n\n` : ''}【写作要求】
+${editorialGuidance ? `${editorialGuidance}\n\n` : ''}${macroGuidance ? `${macroGuidance}\n\n` : ''}${optionsStrategyGuidance ? `${optionsStrategyGuidance}\n\n` : ''}【写作要求】
 - 原始 Prompt 是内容、观点、比较对象、篇幅和结构的最高优先级。
 - 只使用上面证据可以支持的事实，不得自行添加其他型号、部署平台、榜单、财务数据或竞品结论。
 - 用户的观点和因果判断应作为待分析假设或作者判断表达，不得伪装成已证实事实。

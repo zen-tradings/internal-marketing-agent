@@ -18,6 +18,12 @@ import {
   withTaskCancellation,
 } from '../lib/task-cancellation.js';
 import { decodeBasicHtmlEntities } from '../lib/html-entities.js';
+import {
+  OPTIONS_STRATEGY_PROFILE,
+  classifyOptionsStrategyIntent,
+  isOptionsStrategyWorkflow,
+  optionsStrategyWritingGuidance,
+} from '../lib/options-strategy-route.js';
 import { generateStrictTranslation } from '../workflows/translate-engine.js';
 import {
   excludedMediaSources,
@@ -143,11 +149,50 @@ export async function runWriter({
       };
     }
     const writer = config.writer || {};
-    const model = workflow.model || writer.model;
+    const baseModel = workflow.model || writer.model;
+    const detectedModelProfile = classifyOptionsStrategyIntent(input);
+    const modelProfile = isOptionsStrategyWorkflow(workflow.id)
+      && (taskContext?.modelProfile === OPTIONS_STRATEGY_PROFILE
+        || detectedModelProfile.decision === OPTIONS_STRATEGY_PROFILE)
+      ? OPTIONS_STRATEGY_PROFILE
+      : '';
+    const usesOptionsStrategyModel = modelProfile === OPTIONS_STRATEGY_PROFILE;
+    const analysisV2Enabled = isAnalysisV2Enabled(config, workflow);
+    const model = usesOptionsStrategyModel ? writer.optionsStrategyModel : baseModel;
+    const plannerModel = usesOptionsStrategyModel && analysisV2Enabled
+      ? writer.optionsStrategyModel
+      : (writer.plannerModel || baseModel);
+    const evidenceModel = plannerModel;
+    const reviewModel = writer.reviewModel || baseModel;
+    const generationWriter = usesOptionsStrategyModel
+      ? {
+          ...writer,
+          maxTokens: writer.optionsStrategyMaxTokens,
+          reasoningEffort: writer.optionsStrategyReasoningEffort,
+          preserveReasoningOnEmpty: true,
+        }
+      : writer;
+    const generationTimeoutMs = usesOptionsStrategyModel
+      ? writer.optionsStrategyTimeoutMs
+      : workflow.timeoutMs;
+    if (usesOptionsStrategyModel) {
+      trace.modelProfile = {
+        id: modelProfile,
+        reason: taskContext?.modelRouteReason || detectedModelProfile.reason,
+        fallbackAllowed: false,
+        appliedRoles: analysisV2Enabled ? ['planner', 'evidence', 'writer'] : ['writer'],
+      };
+      trace.routing = {
+        ...(trace.routing || {}),
+        modelProfile,
+        modelRouteReason: taskContext?.modelRouteReason || detectedModelProfile.reason,
+      };
+    }
     trace.models = {
       writer: model || null,
-      planner: writer.plannerModel || model || null,
-      review: writer.reviewModel || model || null,
+      planner: plannerModel || null,
+      review: reviewModel || null,
+      ...(usesOptionsStrategyModel && analysisV2Enabled ? { evidence: evidenceModel || null } : {}),
     };
     if (!writer.openrouterApiKey) throw new Error('缺少 OpenRouter API key');
     if (!model) throw new Error('缺少 OpenRouter model');
@@ -206,7 +251,13 @@ export async function runWriter({
         input,
         config,
         writer,
+        generationWriter,
         model,
+        plannerModel,
+        evidenceModel,
+        reviewModel,
+        generationTimeoutMs,
+        modelProfile,
         fetchFn,
         trace,
         researchTracePath,
@@ -305,6 +356,7 @@ export async function runWriter({
       workflow, input, research, writer, sourcePolicy, asOf: researchAsOf,
       editorialContext: editorialContext?.promptText || '',
       sourceExcerptMaxChars: appliedExcerptChars,
+      modelProfile,
     });
     if (workflow.id === 'opening-digest' && prompt.length > maxPromptChars) {
       for (const fallbackLimit of [900, 600, 300, 0]) {
@@ -314,6 +366,7 @@ export async function runWriter({
           workflow, input, research, writer, sourcePolicy, asOf: researchAsOf,
           editorialContext: editorialContext?.promptText || '',
           sourceExcerptMaxChars: appliedExcerptChars,
+          modelProfile,
         });
         if (prompt.length <= maxPromptChars) break;
       }
@@ -335,9 +388,9 @@ export async function runWriter({
     const content = await completeArticle({
       prompt,
       model,
-      writer,
+      writer: generationWriter,
       fetchFn,
-      timeoutMs: workflow.timeoutMs,
+      timeoutMs: generationTimeoutMs,
       systemPrompt: workflow.systemPrompt,
     });
     throwIfTaskCancelled(signal);
@@ -487,7 +540,13 @@ async function runAnalysisV2({
   input,
   config,
   writer,
+  generationWriter,
   model,
+  plannerModel,
+  evidenceModel,
+  reviewModel,
+  generationTimeoutMs,
+  modelProfile,
   fetchFn,
   trace,
   researchTracePath,
@@ -498,22 +557,30 @@ async function runAnalysisV2({
   const analysis = config.analysis || {};
   const maxQueries = positiveNumber(analysis.searchMaxQueries, 8);
   const recentWindowDays = positiveNumber(analysis.recentWindowDays, 60);
-  const planningPrompt = buildPlanningPrompt(input, workflow, taskContext, {
+  const profileGuidance = modelProfile === OPTIONS_STRATEGY_PROFILE
+    ? optionsStrategyWritingGuidance(workflow.id)
+    : '';
+  const planningPrompt = `${buildPlanningPrompt(input, workflow, taskContext, {
     maxQueries,
     recentWindowDays,
-  });
+  })}${profileGuidance ? `\n\n${profileGuidance}\n规划与搜索必须收集验证这些边界所需的来源；不得在规划阶段虚构期权链数据。` : ''}`;
   let rawPlanning;
   try {
     rawPlanning = await completeReviewJson({
       prompt: planningPrompt,
-      model: writer.plannerModel || model,
-      reasoningEffort: writer.plannerReasoningEffort,
-      writer: { ...writer, temperature: 0 },
+      model: plannerModel,
+      reasoningEffort: modelProfile === OPTIONS_STRATEGY_PROFILE
+        ? generationWriter.reasoningEffort
+        : writer.plannerReasoningEffort,
+      writer: { ...generationWriter, temperature: 0 },
       fetchFn,
-      timeoutMs: workflow.timeoutMs,
+      timeoutMs: generationTimeoutMs,
       systemPrompt: '你是分析任务规划器。Slack 原始 Prompt 是不可修改的任务合同。只返回有效 JSON。',
     });
   } catch (error) {
+    if (modelProfile === OPTIONS_STRATEGY_PROFILE) {
+      throw new Error(`Fable 期权策略规划失败:${describeFetchError(error).slice(0, 500)}`);
+    }
     trace.planningFallback = describeFetchError(error).slice(0, 500);
     rawPlanning = {
       task_contract: fallbackTaskContract(input, workflow, taskContext),
@@ -585,15 +652,20 @@ async function runAnalysisV2({
   let rawEvidence;
   try {
     rawEvidence = await completeReviewJson({
-      prompt: buildEvidencePrompt(taskContract, sources, workflow),
-      model: writer.plannerModel || model,
-      reasoningEffort: writer.plannerReasoningEffort,
-      writer: { ...writer, temperature: 0 },
+      prompt: `${buildEvidencePrompt(taskContract, sources, workflow)}${profileGuidance ? `\n\n${profileGuidance}\n证据矩阵必须明确哪些具体期权参数具备完整报价依据，缺少依据的参数不得进入 safe_statements。` : ''}`,
+      model: evidenceModel,
+      reasoningEffort: modelProfile === OPTIONS_STRATEGY_PROFILE
+        ? generationWriter.reasoningEffort
+        : writer.plannerReasoningEffort,
+      writer: { ...generationWriter, temperature: 0 },
       fetchFn,
-      timeoutMs: workflow.timeoutMs,
+      timeoutMs: generationTimeoutMs,
       systemPrompt: '你是研究证据编辑。只依据给定来源建立证据矩阵，只返回有效 JSON。',
     });
   } catch (error) {
+    if (modelProfile === OPTIONS_STRATEGY_PROFILE) {
+      throw new Error(`Fable 期权策略证据整理失败:${describeFetchError(error).slice(0, 500)}`);
+    }
     trace.evidenceFallback = describeFetchError(error).slice(0, 500);
     rawEvidence = {};
   }
@@ -660,6 +732,7 @@ async function runAnalysisV2({
     sources,
     workflow,
     asOf: formatAsOf(new Date()),
+    optionsStrategyGuidance: profileGuidance,
   });
   const maxPromptChars = positiveNumber(writer.maxPromptChars, 160000);
   if (prompt.length > maxPromptChars) {
@@ -668,9 +741,9 @@ async function runAnalysisV2({
   const content = await completeArticle({
     prompt,
     model,
-    writer,
+    writer: generationWriter,
     fetchFn,
-    timeoutMs: workflow.timeoutMs,
+    timeoutMs: generationTimeoutMs,
     systemPrompt: ANALYSIS_V2_SYSTEM_PROMPT,
   });
   throwIfTaskCancelled(signal);
@@ -682,7 +755,7 @@ async function runAnalysisV2({
     sources,
     workflow,
     writer,
-    model,
+    model: reviewModel,
     fetchFn,
     trace,
     researchTracePath,
@@ -1862,6 +1935,7 @@ function buildUserPrompt({
   asOf,
   editorialContext = '',
   sourceExcerptMaxChars,
+  modelProfile = '',
 }) {
   const workflowPrompt = typeof workflow.promptTemplate === 'function'
     ? workflow.promptTemplate(input)
@@ -1877,6 +1951,9 @@ function buildUserPrompt({
     : '';
   const macroGuidance = hasMacroEditorialSkill(workflow)
     ? buildMacroEditorialWritingGuidance(normalizeMacroEditorialBrief(undefined, { input }))
+    : '';
+  const optionsGuidance = modelProfile === OPTIONS_STRATEGY_PROFILE
+    ? optionsStrategyWritingGuidance(workflow.id)
     : '';
   const referenceContract = sourcePolicy.referenceStyle === 'terminal-list'
     ? `- 正文不放引用脚标、脚注或来源链接。文章最后只保留一个“## 引用链接”章节，精选 1-5 个最相关、最具支持力的可点击链接；以相关性为准，不凑数，不要生成“引用来源”或罗列全部检索结果
@@ -1912,7 +1989,7 @@ ${legalContract}
     : formatResearch(research, writer, { sourceExcerptMaxChars });
   return `【原始工作流写作要求】
 ${workflowPrompt}
-${editorialGuidance ? `\n【编辑方法】\n${editorialGuidance}\n` : ''}${macroGuidance ? `\n【宏观策略方法】\n${macroGuidance}\n` : ''}
+${editorialGuidance ? `\n【编辑方法】\n${editorialGuidance}\n` : ''}${macroGuidance ? `\n【宏观策略方法】\n${macroGuidance}\n` : ''}${optionsGuidance ? `\n${optionsGuidance}\n` : ''}
 ${strictContract}
 ${editorialContext ? `
 ${editorialContext}
@@ -2654,7 +2731,7 @@ async function completeArticle({ prompt, model, writer, fetchFn, timeoutMs, syst
     for (let attempt = 0; attempt < 2; attempt++) {
       const effort = attempt === 0
         ? configuredEffort
-        : modelRequiresReasoning(model) ? 'low' : 'none';
+        : (writer.preserveReasoningOnEmpty || modelRequiresReasoning(model)) ? 'low' : 'none';
       const res = await fetchWithRetry(fetchFn, url, {
         method: 'POST',
         signal: controller.signal,
@@ -2705,7 +2782,8 @@ async function completeArticle({ prompt, model, writer, fetchFn, timeoutMs, syst
 }
 
 function modelRequiresReasoning(model) {
-  return /^qwen\/qwen3\.8-max(?:$|[-:])/i.test(String(model || ''));
+  return /^qwen\/qwen3\.8-max(?:$|[-:])/i.test(String(model || ''))
+    || /^anthropic\/claude-fable-5(?:$|[-:])/i.test(String(model || ''));
 }
 
 function extractMessageContent(content) {
