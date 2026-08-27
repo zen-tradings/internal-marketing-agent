@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import dotenv from 'dotenv';
 import { loadConfig } from '../src/config/index.js';
 import { runWriter } from '../src/core/runner.js';
@@ -24,11 +27,24 @@ if (!['http:', 'https:'].includes(parsed.protocol)) {
   process.exit(2);
 }
 
-const config = loadConfig();
+// This acceptance path never starts Slack or publishes to WeChat, so do not require
+// unrelated channel credentials when a developer is validating translation only.
+const config = loadConfig({
+  ...process.env,
+  SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN || 'xoxb-translation-acceptance',
+  SLACK_APP_TOKEN: process.env.SLACK_APP_TOKEN || 'xapp-translation-acceptance',
+  WECHAT_APP_ID: process.env.WECHAT_APP_ID || 'translation-acceptance',
+  WECHAT_APP_SECRET: process.env.WECHAT_APP_SECRET || 'translation-acceptance',
+});
+
+const acceptanceWorkDir = process.env.TRANSLATION_ACCEPTANCE_WORK_DIR
+  ? path.resolve(process.env.TRANSLATION_ACCEPTANCE_WORK_DIR)
+  : fs.mkdtempSync(path.join(os.tmpdir(), 'zen-translation-check-'));
+const acceptanceWorkflow = { ...translateWorkflow, workDir: acceptanceWorkDir };
 
 console.log('[translation] 按指定范围提取并翻译结构化内容，生成本地验收稿，不会调用微信草稿接口。');
 const result = await runWriter({
-  workflow: translateWorkflow,
+  workflow: acceptanceWorkflow,
   input: instruction,
   config,
   onProgress(progress) {

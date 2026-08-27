@@ -1,5 +1,9 @@
 import { cancellationErrorFromSignal, throwIfTaskCancelled } from '../lib/task-cancellation.js';
 
+// Internal fetch option used to report time spent waiting for a governed resource.
+// It is removed before the request reaches undici or an injected fetch implementation.
+export const RESOURCE_TELEMETRY = Symbol('zen.resourceTelemetry');
+
 export function createResourceGovernor({
   browserConcurrency = 1,
   wechatWriteConcurrency = 1,
@@ -32,12 +36,26 @@ export function createResourceGovernor({
     if (isExaSearchUrl(url)) await exaSearch.wait(signal);
     if (!isOpenRouterUrl(url)) return fetchFn(resource, options);
 
-    const first = await run('openrouter', () => fetchFn(resource, options), signal);
+    const onTelemetry = options?.[RESOURCE_TELEMETRY];
+    const fetchOptions = onTelemetry ? { ...options } : options;
+    if (onTelemetry) delete fetchOptions[RESOURCE_TELEMETRY];
+    const fetchOpenRouter = async () => {
+      const queuedAt = now();
+      const release = await resources.get('openrouter').acquire(signal);
+      safeTelemetry(onTelemetry, {
+        resource: 'openrouter',
+        queueWaitMs: Math.max(0, now() - queuedAt),
+      });
+      try { return await fetchFn(resource, fetchOptions); }
+      finally { release(); }
+    };
+
+    const first = await fetchOpenRouter();
     if (![429, 503].includes(Number(first?.status))) return first;
     const retryMs = retryAfterMilliseconds(first?.headers?.get?.('retry-after'), now());
     if (retryMs === null) return first;
     await cancellableSleep(Math.min(retryMs, 60_000), signal, sleep);
-    return run('openrouter', () => fetchFn(resource, options), signal);
+    return fetchOpenRouter();
   }
 
   return {
@@ -144,6 +162,11 @@ async function cancellableSleep(ms, signal, sleep) {
   } finally {
     if (onAbort) signal.removeEventListener('abort', onAbort);
   }
+}
+
+function safeTelemetry(callback, event) {
+  if (typeof callback !== 'function') return;
+  try { callback(event); } catch {}
 }
 
 function requestUrl(resource) {

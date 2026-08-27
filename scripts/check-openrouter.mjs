@@ -7,6 +7,8 @@ const baseUrl = String(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai
 const model = process.env.OPENROUTER_MODEL || 'qwen/qwen3.8-max';
 const reasoningEffort = process.env.OPENROUTER_REASONING_EFFORT || 'high';
 const openingDigestModel = process.env.OPENING_DIGEST_MODEL || model;
+const translationModel = process.env.OPENROUTER_TRANSLATION_MODEL || model;
+const translationReasoningEffort = process.env.OPENROUTER_TRANSLATION_REASONING_EFFORT || 'high';
 const plannerModel = process.env.OPENROUTER_PLANNER_MODEL || model;
 const plannerReasoningEffort = process.env.OPENROUTER_PLANNER_REASONING_EFFORT || 'high';
 const optionsStrategyModel = process.env.OPTIONS_STRATEGY_MODEL || 'anthropic/claude-fable-5';
@@ -24,6 +26,8 @@ console.log(`OpenRouter base URL: ${baseUrl}`);
 console.log(`OpenRouter model: ${model}`);
 console.log(`OpenRouter reasoning effort: ${reasoningEffort}`);
 console.log(`Opening Digest writer model: ${openingDigestModel}`);
+console.log(`OpenRouter translation model: ${translationModel}`);
+console.log(`OpenRouter translation reasoning effort: ${translationReasoningEffort}`);
 console.log(`OpenRouter planner model: ${plannerModel}`);
 console.log(`OpenRouter planner reasoning effort: ${plannerReasoningEffort}`);
 console.log(`Options strategy model: ${optionsStrategyModel}`);
@@ -51,7 +55,13 @@ if (!models.ok) {
 }
 try {
   const available = JSON.parse(models.body)?.data || [];
-  for (const requiredModel of new Set([model, openingDigestModel, plannerModel, optionsStrategyModel])) {
+  for (const requiredModel of new Set([
+    model,
+    openingDigestModel,
+    translationModel,
+    plannerModel,
+    optionsStrategyModel,
+  ])) {
     if (!available.some((item) => item?.id === requiredModel)) {
       console.error(`OpenRouter model is not available: ${requiredModel}`);
       process.exit(1);
@@ -65,6 +75,7 @@ try {
 for (const role of [
   { name: 'writer', model, reasoningEffort, json: false },
   { name: 'opening-digest-writer', model: openingDigestModel, reasoningEffort, json: false, requireEnglish: true, maxTokens: 1024 },
+  { name: 'translation', model: translationModel, reasoningEffort: translationReasoningEffort, json: false },
   { name: 'planner', model: plannerModel, reasoningEffort: plannerReasoningEffort, json: true },
   {
     name: 'options-strategy', model: optionsStrategyModel,
@@ -109,7 +120,7 @@ for (const role of [
   }
 }
 
-console.log('OpenRouter writer, Opening Digest writer, planner, and options-strategy completion checks passed.');
+console.log('OpenRouter writer, translation, Opening Digest writer, planner, and options-strategy completion checks passed.');
 
 async function request(url, options, requestTimeoutMs = timeoutMs) {
   const controller = new AbortController();

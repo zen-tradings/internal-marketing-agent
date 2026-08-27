@@ -1355,7 +1355,7 @@ test('英文 both 可忠实译为中文“两者”，但不得扩成三者', ()
   assert.match(changed.hardErrors.join(' '), /译文新增不等值数字/);
 });
 
-test('低置信度数字差异在定向修复后只告警并写入 checkpoint', async () => {
+test('低置信度数字差异不消耗修复请求，只告警并写入 checkpoint', async () => {
   const source = {
     version: 5,
     contentMode: 'structured-document',
@@ -1382,11 +1382,6 @@ test('低置信度数字差异在定向修复后只告警并写入 checkpoint', 
     completeArticle: async ({ prompt }) => {
       calls += 1;
       const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
-      if (calls === 2) {
-        assert.equal(payload.units[0].id, 'b000001');
-        assert.match(payload.units[0].currentTranslation, /2 个分支/);
-        assert.match(payload.units[0].issues.join(' '), /低置信度数字格式差异/);
-      }
       return JSON.stringify({
         translations: payload.units.map((unit) => ({
           id: unit.id,
@@ -1395,7 +1390,7 @@ test('低置信度数字差异在定向修复后只告警并写入 checkpoint', 
       });
     },
   });
-  assert.equal(calls, 3);
+  assert.equal(calls, 1);
   assert.equal(translated.validationWarnings.length, 1);
   assert.match(translated.validationWarnings[0], /低置信度数字格式差异/);
   const checkpoint = JSON.parse(fs.readFileSync(path.join(workDir, 'translation-checkpoint.json'), 'utf8'));
@@ -1556,7 +1551,7 @@ test('旧 checkpoint 按新 token 规则重验，只重做异常单元并保留�
   assert.match(translated.blocks[0].translatedText, /\\bench/);
 });
 
-test('长文正常翻译批次最多 24 个单元，尽早写入分块 checkpoint', async () => {
+test('短碎片文档自适应到每批最多 48 个单元，尽早写入分块 checkpoint', async () => {
   const source = {
     version: 5,
     contentMode: 'structured-document',
@@ -1566,7 +1561,7 @@ test('长文正常翻译批次最多 24 个单元，尽早写入分块 checkpoin
     title: 'Batch Test',
     author: '',
     sha256: 'bounded-translation-batches',
-    blocks: Array.from({ length: 25 }, (_, index) => ({
+    blocks: Array.from({ length: 49 }, (_, index) => ({
       id: `b${String(index + 1).padStart(6, '0')}`,
       order: index,
       type: 'paragraph',
@@ -1592,8 +1587,92 @@ test('长文正常翻译批次最多 24 个单元，尽早写入分块 checkpoin
     },
   });
   const checkpoint = JSON.parse(fs.readFileSync(path.join(workDir, 'translation-checkpoint.json'), 'utf8'));
-  assert.deepEqual(batchSizes, [24, 2]);
-  assert.equal(checkpoint.translations.length, 26);
+  assert.deepEqual(batchSizes, [48, 2]);
+  assert.equal(checkpoint.translations.length, 50);
+});
+
+test('单个长翻译最多并行两个初译批次并记录批次 telemetry 上下文', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/concurrent',
+    title: 'Concurrent translation',
+    author: '',
+    sha256: 'concurrent-translation-batches',
+    blocks: Array.from({ length: 72 }, (_, index) => ({
+      id: `b${String(index + 1).padStart(6, '0')}`,
+      order: index,
+      type: 'paragraph',
+      text: 'This deliberately long source paragraph contains enough ordinary prose to keep adaptive batching on the conservative document path while preserving faithful translation behavior.',
+    })),
+  };
+  let active = 0;
+  let maxActive = 0;
+  const contexts = [];
+  await translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    batchConcurrency: 2,
+    completeArticle: async ({ prompt, inferenceContext }) => {
+      contexts.push(inferenceContext);
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return JSON.stringify({
+        translations: payload.units.map((unit) => ({
+          id: unit.id,
+          text: unit.kind === 'title' ? '并发翻译' : '这是一段完整、忠实且清晰的中文译文，用于验证受限并发不会破坏结构化翻译结果。',
+        })),
+      });
+    },
+  });
+  assert.equal(maxActive, 2);
+  assert.equal(contexts.length, 4);
+  assert.deepEqual(contexts.map((item) => item.batchIndex).sort((a, b) => a - b), [1, 2, 3, 4]);
+  assert.ok(contexts.every((item) => item.phase === 'initial' && item.batchTotal === 4));
+});
+
+test('并发批次首错后停止领取新批次，并等待已启动请求结束再失败', async () => {
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/concurrent-failure',
+    title: 'Concurrent failure',
+    author: '',
+    sha256: 'concurrent-failure-settles',
+    blocks: Array.from({ length: 72 }, (_, index) => ({
+      id: `b${String(index + 1).padStart(6, '0')}`,
+      order: index,
+      type: 'paragraph',
+      text: 'This deliberately long source paragraph keeps the conservative batch limit active while testing deterministic failure settlement across workers.',
+    })),
+  };
+  const started = [];
+  let secondSettled = false;
+  await assert.rejects(() => translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    batchConcurrency: 2,
+    completeArticle: async ({ inferenceContext }) => {
+      started.push(inferenceContext.batchIndex);
+      if (inferenceContext.batchIndex === 1) throw new Error('first batch failed');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      secondSettled = true;
+      throw new Error('second batch stopped');
+    },
+  }), /first batch failed/);
+  assert.equal(secondSettled, true);
+  assert.deepEqual(started.sort((a, b) => a - b), [1, 2]);
 });
 
 test('结构化响应连续截断时自动缩小批次并完成翻译', async () => {

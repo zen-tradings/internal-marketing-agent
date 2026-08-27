@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createResourceGovernor, createSemaphore, retryAfterMilliseconds } from '../src/core/resource-governor.js';
+import {
+  createResourceGovernor,
+  createSemaphore,
+  RESOURCE_TELEMETRY,
+  retryAfterMilliseconds,
+} from '../src/core/resource-governor.js';
 
 test('资源 semaphore FIFO、限制并发且等待者可取消', async () => {
   const semaphore = createSemaphore('browser', 1);
@@ -18,6 +23,7 @@ test('Exa search 全局按 8 QPS 起步，OpenRouter 遵守 Retry-After 后只�
   let current = 1000;
   const delays = [];
   let openrouterCalls = 0;
+  const telemetry = [];
   const governor = createResourceGovernor({
     now: () => current,
     sleep: async (ms) => { delays.push(ms); current += ms; },
@@ -33,8 +39,14 @@ test('Exa search 全局按 8 QPS 起步，OpenRouter 遵守 Retry-After 后只�
   });
   await governor.fetch('https://api.exa.ai/search', {});
   await governor.fetch('https://api.exa.ai/search', {});
-  await governor.fetch('https://openrouter.ai/api/v1/chat/completions', {});
+  await governor.fetch('https://openrouter.ai/api/v1/chat/completions', {
+    [RESOURCE_TELEMETRY]: (event) => telemetry.push(event),
+  });
   assert.deepEqual(delays, [125, 10]);
   assert.equal(openrouterCalls, 2);
+  assert.deepEqual(telemetry, [
+    { resource: 'openrouter', queueWaitMs: 0 },
+    { resource: 'openrouter', queueWaitMs: 0 },
+  ]);
   assert.equal(retryAfterMilliseconds('2'), 2000);
 });

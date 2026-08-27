@@ -88,6 +88,11 @@ BROWSER_CONCURRENCY=1
 WECHAT_WRITE_CONCURRENCY=1
 CUSTOMERIO_WRITE_CONCURRENCY=1
 OPENROUTER_CONCURRENCY=2
+# Structured translation uses the same model by default with an independently configurable role;
+# live no-regression acceptance requires high reasoning. One long translation may consume both global slots.
+OPENROUTER_TRANSLATION_MODEL=qwen/qwen3.8-max
+OPENROUTER_TRANSLATION_REASONING_EFFORT=high
+TRANSLATION_BATCH_CONCURRENCY=2
 EXA_SEARCH_QPS=8
 QDII_ENABLED=true
 QDII_PYTHON_PATH=.venv/bin/python
@@ -157,6 +162,10 @@ artifact directory before translation and rendering continue locally. The
 Droplet therefore does not need Marker/MinerU models; `DATALAB_API_KEY` is
 required only when a translation resolves to PDF. Keep it in the protected
 service environment, never in the repository.
+
+Translation inference is remote and I/O-bound. A single long translation runs at most two independent batches while the global OpenRouter gate remains fixed at two across the process. Keep translation reasoning at `high`: live A/B acceptance on the same paper found that `low` and `medium` reduced latency but introduced truncated blocks, while `high` retained strict equivalence. Short fragmented sources adapt from 24 to 48 items per batch without exceeding 8,000 source characters. Low-confidence numeric-format warnings go directly to review instead of consuming two repair calls; explicit numeric/token differences retain the two-round repair limit. `research-trace.json` stores content-free batch timing, resource wait, generation ID, model/provider, finish reason, token usage and cost for each OpenRouter attempt. The production startup gate rejects `TRANSLATION_BATCH_CONCURRENCY` above 2.
+
+The no-publish live acceptance baseline for this design used the two recent arXiv documents and Linear ZEN-38. With `high` reasoning, arXiv 2508.00828 fell from 32.1 to 20.9 minutes with strict equivalence; arXiv 2603.04601 fell from 37.7 to 34.8 minutes with the same single low-confidence review item; the 1,363-unit Linear transcript fell from 190.6 to 88.0 minutes with the same total of 20 review units. A local rerun of the 120k-character public webpage was intentionally blocked by the existing Fake-IP/private-address DNS safety gate and was not bypassed. Revalidate that source on the normal production network after deployment rather than weakening URL safety.
 
 Paginated Datalab HTML is consumed as the complete ordered set of
 `.page[data-page-id]` containers rather than passed through the single-article

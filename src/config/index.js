@@ -45,6 +45,9 @@ export function loadConfig(env = process.env) {
     if (resources.wechatWriteConcurrency !== 1) throw new Error('生产环境 WECHAT_WRITE_CONCURRENCY 必须为 1');
     if (resources.customerioWriteConcurrency !== 1) throw new Error('生产环境 CUSTOMERIO_WRITE_CONCURRENCY 必须为 1');
     if (resources.openrouterConcurrency > 2) throw new Error('生产环境 OPENROUTER_CONCURRENCY 不得超过 2');
+    if (positiveIntegerOrThrow(env.TRANSLATION_BATCH_CONCURRENCY, 2, 'TRANSLATION_BATCH_CONCURRENCY') > 2) {
+      throw new Error('生产环境 TRANSLATION_BATCH_CONCURRENCY 不得超过 2');
+    }
     if (resources.exaSearchQps > 8) throw new Error('生产环境 EXA_SEARCH_QPS 不得超过 8');
     if (slackPostIntervalMs < 1000) throw new Error('生产环境 SLACK_POST_INTERVAL_MS 不得小于 1000');
     if (!path.isAbsolute(workDir)) throw new Error('生产环境 WORK_DIR 必须是绝对路径');
@@ -136,6 +139,14 @@ export function loadConfig(env = process.env) {
     },
     translation: {
       // Translation prefers structured HTML from the source; Datalab parses PDFs before returning to the same pipeline.
+      // It has an independent quality-gated inference role and can consume both globally-governed OpenRouter slots.
+      model: env.OPENROUTER_TRANSLATION_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
+      reasoningEffort: env.OPENROUTER_TRANSLATION_REASONING_EFFORT || 'high',
+      batchConcurrency: positiveIntegerOrThrow(
+        env.TRANSLATION_BATCH_CONCURRENCY,
+        2,
+        'TRANSLATION_BATCH_CONCURRENCY',
+      ),
       browserEnabled: env.TRANSLATION_BROWSER_ENABLED === undefined
         ? true
         : booleanFlag(env.TRANSLATION_BROWSER_ENABLED),

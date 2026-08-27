@@ -25,6 +25,7 @@ import {
   optionsStrategyWritingGuidance,
 } from '../lib/options-strategy-route.js';
 import { generateStrictTranslation } from '../workflows/translate-engine.js';
+import { RESOURCE_TELEMETRY } from './resource-governor.js';
 import {
   excludedMediaSources,
   independentReportingSources,
@@ -149,7 +150,9 @@ export async function runWriter({
       };
     }
     const writer = config.writer || {};
-    const baseModel = workflow.model || writer.model;
+    const baseModel = workflow.mode === 'translation'
+      ? config.translation?.model || workflow.model || writer.model
+      : workflow.model || writer.model;
     const detectedModelProfile = classifyOptionsStrategyIntent(input);
     const modelProfile = isOptionsStrategyWorkflow(workflow.id)
       && (taskContext?.modelProfile === OPTIONS_STRATEGY_PROFILE
@@ -201,15 +204,27 @@ export async function runWriter({
       const inputSourceUrl = extractUrls(input).urls[0];
       const attachedSource = inputSourceUrl ? undefined : translationAttachment(taskContext.attachments);
       const sourceUrl = inputSourceUrl || attachedSource?.url;
+      const translationWriter = {
+        ...writer,
+        reasoningEffort: config.translation?.reasoningEffort || 'high',
+      };
+      const translationWorkflow = { ...workflow, model };
+      trace.translationInference = { requests: [], summary: summarizeInferenceTelemetry([]) };
+      const onInferenceTelemetry = (event) => {
+        trace.translationInference.requests.push(event);
+        trace.translationInference.summary = summarizeInferenceTelemetry(trace.translationInference.requests);
+        writeResearchTrace(researchTracePath, trace);
+      };
       const result = await generateStrictTranslation({
         input,
         sourceUrl,
         sourceRequestHeaders: sourceRequestHeadersForAttachment(attachedSource, config.slack?.botToken),
-        workflow, writer, fetchFn, trace,
+        workflow: translationWorkflow, writer: translationWriter, fetchFn, trace,
         completeArticle,
         fetchWithRetry,
         translationConfig: config.translation || {},
         documentConfig: config.documents || {},
+        onInferenceTelemetry,
         onProgress: async (progress) => {
           throwIfTaskCancelled(signal);
           trace.translationProgress = { ...progress, updatedAt: new Date().toISOString() };
@@ -2717,7 +2732,17 @@ function parseJsonObject(raw) {
   throw new Error('未找到有效 JSON 对象');
 }
 
-async function completeArticle({ prompt, model, writer, fetchFn, timeoutMs, systemPrompt, responseFormat }) {
+async function completeArticle({
+  prompt,
+  model,
+  writer,
+  fetchFn,
+  timeoutMs,
+  systemPrompt,
+  responseFormat,
+  onTelemetry,
+  inferenceContext,
+}) {
   const controller = new AbortController();
   const timer = timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
   try {
@@ -2732,9 +2757,19 @@ async function completeArticle({ prompt, model, writer, fetchFn, timeoutMs, syst
       const effort = attempt === 0
         ? configuredEffort
         : (writer.preserveReasoningOnEmpty || modelRequiresReasoning(model)) ? 'low' : 'none';
-      const res = await fetchWithRetry(fetchFn, url, {
+      const requestStartedAt = new Date().toISOString();
+      const requestStartedMs = Date.now();
+      let queueWaitMs = 0;
+      let transportRequests = 0;
+      let res;
+      try {
+        res = await fetchWithRetry(fetchFn, url, {
         method: 'POST',
         signal: controller.signal,
+        [RESOURCE_TELEMETRY]: (event) => {
+          queueWaitMs += Number(event?.queueWaitMs) || 0;
+          transportRequests += 1;
+        },
         headers: {
           Authorization: `Bearer ${writer.openrouterApiKey}`,
           'Content-Type': 'application/json',
@@ -2753,13 +2788,31 @@ async function completeArticle({ prompt, model, writer, fetchFn, timeoutMs, syst
           ...(responseFormat ? { response_format: responseFormat } : {}),
         }),
       });
-      if (!res.ok) throw new Error(formatOpenRouterHttpError(res, await safeText(res)));
+      } catch (error) {
+        emitInferenceTelemetry(onTelemetry, buildInferenceTelemetry({
+          inferenceContext, requestStartedAt, requestStartedMs, queueWaitMs, transportRequests,
+          attempt, effort, model, error,
+        }));
+        throw error;
+      }
+      if (!res.ok) {
+        const error = new Error(formatOpenRouterHttpError(res, await safeText(res)));
+        emitInferenceTelemetry(onTelemetry, buildInferenceTelemetry({
+          inferenceContext, requestStartedAt, requestStartedMs, queueWaitMs, transportRequests,
+          attempt, effort, model, response: res, error,
+        }));
+        throw error;
+      }
       let data;
       try {
         const rawResponse = await res.text();
         data = JSON.parse(rawResponse);
       } catch (error) {
         lastDiagnostic = `malformed_json=${String(error?.message || error || 'unknown')}`;
+        emitInferenceTelemetry(onTelemetry, buildInferenceTelemetry({
+          inferenceContext, requestStartedAt, requestStartedMs, queueWaitMs, transportRequests,
+          attempt, effort, model, response: res, error, outcome: 'malformed-json',
+        }));
         if (attempt === 0) continue;
         const malformed = new Error(
           `OpenRouter returned malformed JSON response after retry (${lastDiagnostic})`,
@@ -2769,6 +2822,11 @@ async function completeArticle({ prompt, model, writer, fetchFn, timeoutMs, syst
         throw malformed;
       }
       const content = extractMessageContent(data?.choices?.[0]?.message?.content);
+      const outcome = content ? 'completed' : 'empty';
+      emitInferenceTelemetry(onTelemetry, buildInferenceTelemetry({
+        inferenceContext, requestStartedAt, requestStartedMs, queueWaitMs, transportRequests,
+        attempt, effort, model, response: res, data, outcome,
+      }));
       if (content) return content;
       lastDiagnostic = describeEmptyCompletion(data);
     }
@@ -2779,6 +2837,67 @@ async function completeArticle({ prompt, model, writer, fetchFn, timeoutMs, syst
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+function buildInferenceTelemetry({
+  inferenceContext,
+  requestStartedAt,
+  requestStartedMs,
+  queueWaitMs,
+  transportRequests,
+  attempt,
+  effort,
+  model,
+  response,
+  data,
+  error,
+  outcome,
+}) {
+  const usage = data?.usage || {};
+  return {
+    ...(inferenceContext || {}),
+    requestStartedAt,
+    durationMs: Math.max(0, Date.now() - requestStartedMs),
+    queueWaitMs: Math.max(0, Math.round(queueWaitMs || 0)),
+    transportRequests: Math.max(transportRequests || 0, response ? 1 : 0),
+    applicationAttempt: attempt + 1,
+    reasoningEffort: effort,
+    requestedModel: model,
+    resolvedModel: data?.model || null,
+    provider: data?.provider || null,
+    generationId: response?.headers?.get?.('x-generation-id') || data?.id || null,
+    httpStatus: Number(response?.status) || null,
+    finishReason: data?.choices?.[0]?.finish_reason || null,
+    promptTokens: Number(usage.prompt_tokens) || 0,
+    completionTokens: Number(usage.completion_tokens) || 0,
+    reasoningTokens: Number(usage.completion_tokens_details?.reasoning_tokens) || 0,
+    cost: Number(usage.cost) || 0,
+    outcome: outcome || (error ? 'error' : 'completed'),
+    ...(error ? { error: String(error?.message || error).slice(0, 300) } : {}),
+  };
+}
+
+function emitInferenceTelemetry(callback, event) {
+  if (typeof callback !== 'function') return;
+  try { callback(event); } catch {}
+}
+
+function summarizeInferenceTelemetry(requests) {
+  const values = Array.isArray(requests) ? requests : [];
+  const sum = (key) => values.reduce((total, item) => total + (Number(item?.[key]) || 0), 0);
+  return {
+    requestAttempts: values.length,
+    completedRequests: values.filter((item) => item?.outcome === 'completed').length,
+    emptyRequests: values.filter((item) => item?.outcome === 'empty').length,
+    failedRequests: values.filter((item) => !['completed', 'empty'].includes(item?.outcome)).length,
+    totalInferenceMs: sum('durationMs'),
+    totalQueueWaitMs: sum('queueWaitMs'),
+    maxRequestMs: values.reduce((maximum, item) => Math.max(maximum, Number(item?.durationMs) || 0), 0),
+    promptTokens: sum('promptTokens'),
+    completionTokens: sum('completionTokens'),
+    reasoningTokens: sum('reasoningTokens'),
+    cost: sum('cost'),
+  };
 }
 
 function modelRequiresReasoning(model) {

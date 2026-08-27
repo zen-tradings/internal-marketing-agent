@@ -60,6 +60,9 @@ test('loadConfig 读取 env 并给出默认值', () => {
     timeoutMs: 30000,
     maxAttempts: 8,
   });
+  assert.equal(c.translation.model, 'deepseek/deepseek-chat');
+  assert.equal(c.translation.reasoningEffort, 'high');
+  assert.equal(c.translation.batchConcurrency, 2);
   assert.equal(c.translation.browserEnabled, true);
   assert.equal(c.translation.maxPdfPages, 120);
   assert.equal(c.translation.maxSourceBytes, 50 * 1024 * 1024);
@@ -102,6 +105,7 @@ test('生产环境允许已验证的 1-2 并发并锁住重资源上限', () => 
   assert.throws(() => loadConfig({ ...base, MAX_CONCURRENCY: '3' }), /只能为 1 或 2/);
   assert.throws(() => loadConfig({ ...base, BROWSER_CONCURRENCY: '2' }), /BROWSER_CONCURRENCY 必须为 1/);
   assert.throws(() => loadConfig({ ...base, OPENROUTER_CONCURRENCY: '3' }), /不得超过 2/);
+  assert.throws(() => loadConfig({ ...base, TRANSLATION_BATCH_CONCURRENCY: '3' }), /不得超过 2/);
   assert.throws(() => loadConfig({ ...base, EXA_SEARCH_QPS: '9' }), /不得超过 8/);
   assert.throws(() => loadConfig({ ...base, SLACK_POST_INTERVAL_MS: '999' }), /不得小于 1000/);
 });
@@ -188,6 +192,9 @@ test('结构化直译抓取、浏览器、PDF、图片、Notion 与 Datalab 配�
     GITHUB_TOKEN: 'github-read-token',
     DATALAB_API_KEY: 'datalab-secret',
     DATALAB_MODE: 'accurate',
+    OPENROUTER_TRANSLATION_MODEL: 'fast/translator',
+    OPENROUTER_TRANSLATION_REASONING_EFFORT: 'none',
+    TRANSLATION_BATCH_CONCURRENCY: '1',
   });
   assert.equal(c.translation.browserEnabled, false);
   assert.equal(c.translation.browserExecutablePath, '/Applications/Chromium');
@@ -202,6 +209,9 @@ test('结构化直译抓取、浏览器、PDF、图片、Notion 与 Datalab 配�
   assert.equal(c.documents.githubToken, 'github-read-token');
   assert.equal(c.translation.datalabApiKey, 'datalab-secret');
   assert.equal(c.translation.datalabMode, 'accurate');
+  assert.equal(c.translation.model, 'fast/translator');
+  assert.equal(c.translation.reasoningEffort, 'none');
+  assert.equal(c.translation.batchConcurrency, 1);
 });
 
 test('旧公网出口白名单变量不再生成运行时门禁配置', () => {

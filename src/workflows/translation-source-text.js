@@ -38,6 +38,8 @@ const DOCUMENT_VERSION = 5;
 const CHECKPOINT_VERSION = 6;
 const TRANSLATION_BATCH_MAX_CHARS = 8000;
 const TRANSLATION_BATCH_MAX_ITEMS = 24;
+const TRANSLATION_SHORT_UNIT_MAX_ITEMS = 48;
+const TRANSLATION_SHORT_UNIT_AVERAGE_CHARS = 120;
 const REPAIR_BATCH_MAX_CHARS = 4000;
 const REPAIR_BATCH_MAX_ITEMS = 6;
 const EMBEDDED_CHART_MIN_WIDTH = 200;
@@ -78,6 +80,7 @@ export async function generateStructuredTranslation({
   fetchWithRetry,
   completeArticle,
   onProgress,
+  onInferenceTelemetry,
   translationConfig = {},
   documentConfig = {},
   resumeFromCheckpoint = false,
@@ -133,6 +136,8 @@ export async function generateStructuredTranslation({
     completeArticle,
     timeoutMs: workflow.timeoutMs,
     onProgress,
+    onInferenceTelemetry,
+    batchConcurrency: translationConfig.batchConcurrency,
     resumeFromCheckpoint,
     signal,
   });
@@ -927,6 +932,8 @@ export async function translateDocument({
   completeArticle,
   timeoutMs,
   onProgress,
+  onInferenceTelemetry,
+  batchConcurrency = 2,
   resumeFromCheckpoint = false,
   signal,
 }) {
@@ -1001,10 +1008,12 @@ export async function translateDocument({
   });
   if (checkpointInvalidatedUnits) writeCheckpoint();
 
+  const pendingUnits = units.filter((unit) => !completed.has(unit.id));
+  const initialBatchMaxItems = adaptiveTranslationBatchMaxItems(pendingUnits);
   const batches = batchUnits(
-    units.filter((unit) => !completed.has(unit.id)),
+    pendingUnits,
     TRANSLATION_BATCH_MAX_CHARS,
-    TRANSLATION_BATCH_MAX_ITEMS,
+    initialBatchMaxItems,
   );
   await report(onProgress, {
     stage: 'translation',
@@ -1017,10 +1026,15 @@ export async function translateDocument({
     total: units.length,
   });
 
-  for (const batch of batches) {
+  const effectiveBatchConcurrency = Math.max(1, Math.min(2, Number(batchConcurrency) || 1));
+  await mapBounded(batches, effectiveBatchConcurrency, async (batch, batchIndex) => {
     throwIfTaskCancelled(signal);
+    const initialContext = inferenceContextFor({
+      phase: 'initial', batch, batchIndex, batchTotal: batches.length,
+    });
     let translations = await requestTranslationBatch({
       batch, source, model, writer, fetchFn, completeArticle, timeoutMs,
+      onInferenceTelemetry, inferenceContext: initialContext, signal,
     });
     const originalTranslations = translations;
     const repairedTranslations = [];
@@ -1031,27 +1045,25 @@ export async function translateDocument({
     let assessments = assessBatchTranslations(batch, translations);
     for (let repairRound = 1; repairRound <= 2; repairRound++) {
       const repairTargets = assessments
-        .filter((item) => item.hardErrors.length
-          || item.repairableIssues.length
-          || item.warnings.length)
-        .map((item) => ({
-          ...item.unit,
-          currentTranslation: item.text || '',
-          issues: [...new Set([
-            ...item.hardErrors,
-            ...item.repairableIssues,
-            ...item.warnings,
-          ])],
-        }));
+        .map((item) => {
+          const issues = repairIssuesForAssessment(item);
+          return issues.length ? {
+            ...item.unit,
+            currentTranslation: item.text || '',
+            issues,
+          } : null;
+        })
+        .filter(Boolean);
       if (!repairTargets.length) break;
-      const repaired = [];
-      for (const repairBatch of batchUnits(
+      const repairBatches = batchUnits(
         repairTargets,
         REPAIR_BATCH_MAX_CHARS,
         REPAIR_BATCH_MAX_ITEMS,
-      )) {
-        throwIfTaskCancelled(signal);
-        repaired.push(...await requestTranslationBatch({
+      );
+      const repairedGroups = await mapBounded(
+        repairBatches,
+        effectiveBatchConcurrency,
+        async (repairBatch, repairBatchIndex) => requestTranslationBatch({
           batch: repairBatch,
           source,
           model,
@@ -1060,8 +1072,20 @@ export async function translateDocument({
           completeArticle,
           timeoutMs,
           repair: true,
-        }));
-      }
+          onInferenceTelemetry,
+          inferenceContext: inferenceContextFor({
+            phase: 'repair',
+            batch: repairBatch,
+            batchIndex: repairBatchIndex,
+            batchTotal: repairBatches.length,
+            parentBatchIndex: batchIndex,
+            repairRound,
+          }),
+          signal,
+        }),
+        signal,
+      );
+      const repaired = repairedGroups.flat();
       repairedTranslations.push(...repaired.map((item) => ({ ...item, round: repairRound })));
       for (const item of repaired) {
         if (candidateHistory.has(item.id)) {
@@ -1145,7 +1169,7 @@ export async function translateDocument({
       completed: completed.size,
       total: units.length,
     });
-  }
+  }, signal);
   throwIfTaskCancelled(signal);
   if (completed.size !== units.length) {
     const error = new Error(`结构化翻译缺块:${completed.size}/${units.length}`);
@@ -2003,6 +2027,9 @@ async function requestTranslationBatch({
   timeoutMs,
   repair = false,
   allowSplit = true,
+  onInferenceTelemetry,
+  inferenceContext = {},
+  signal,
 }) {
   const protections = new Map();
   const units = batch.map((unit) => {
@@ -2047,6 +2074,8 @@ ${JSON.stringify({ units })}`,
     writer: { ...writer, temperature: 0 },
     fetchFn,
     timeoutMs,
+    onTelemetry: onInferenceTelemetry,
+    inferenceContext,
     systemPrompt: '你是严谨的结构化文档翻译器。忠实翻译输入的标题、正文及图表标题；按要求在正文关键术语和核心观点上稳定添加 Markdown 高亮。数字可采用等价中文格式，但数值含义、占位符、链接、型号和结构绝不能改变。只输出合法 JSON。',
   };
   const responseFormat = {
@@ -2082,7 +2111,10 @@ ${JSON.stringify({ units })}`,
       return await completeArticle({ ...nextRequest, responseFormat });
     } catch (error) {
       if (!/(?:response[_ -]?format|json[_ -]?schema|structured output|HTTP 400|OpenRouter 400)/i.test(safeError(error))) throw error;
-      return completeArticle(nextRequest);
+      return completeArticle({
+        ...nextRequest,
+        inferenceContext: { ...nextRequest.inferenceContext, schemaFallback: true },
+      });
     }
   };
   const parseTranslations = (raw) => {
@@ -2098,12 +2130,14 @@ ${JSON.stringify({ units })}`,
   let bestTranslations = [];
   let lastResponseError;
   for (let attempt = 0; attempt < 2; attempt++) {
+    throwIfTaskCancelled(signal);
     const retryInstruction = attempt === 0
       ? ''
       : `${repair ? '上一次修复响应缺少输入块' : '上一次响应不是完整合法 JSON 或缺少输入块'}。请重新返回全部 ${batch.length} 个块；只允许使用这些 ID：${batch.map((unit) => unit.id).join('、')}。`;
     try {
       const translations = parseTranslations(await complete({
         ...request,
+        inferenceContext: { ...inferenceContext, translationResponseAttempt: attempt + 1 },
         prompt: retryInstruction
           ? request.prompt.replace(
             '\n\n输入 JSON:\n',
@@ -2125,7 +2159,8 @@ ${JSON.stringify({ units })}`,
     const smallerBatches = batchUnits(batch, REPAIR_BATCH_MAX_CHARS, REPAIR_BATCH_MAX_ITEMS);
     if (smallerBatches.length > 1) {
       const recovered = [];
-      for (const smallerBatch of smallerBatches) {
+      for (const [splitIndex, smallerBatch] of smallerBatches.entries()) {
+        throwIfTaskCancelled(signal);
         recovered.push(...await requestTranslationBatch({
           batch: smallerBatch,
           source,
@@ -2136,6 +2171,15 @@ ${JSON.stringify({ units })}`,
           timeoutMs,
           repair,
           allowSplit: false,
+          onInferenceTelemetry,
+          inferenceContext: {
+            ...inferenceContext,
+            itemCount: smallerBatch.length,
+            inputCharacters: smallerBatch.reduce((total, unit) => total + String(unit.text || '').length, 0),
+            splitBatchIndex: splitIndex + 1,
+            splitBatchTotal: smallerBatches.length,
+          },
+          signal,
         }));
       }
       if (recovered.length > bestTranslations.length) bestTranslations = recovered;
@@ -2326,6 +2370,64 @@ function translatedUnitText(document, id) {
   const caption = /^(b\d+):caption$/.exec(id);
   if (caption) return document.blocks.find((block) => block.id === caption[1])?.translatedCaption;
   return undefined;
+}
+
+function adaptiveTranslationBatchMaxItems(units) {
+  if (!units.length) return TRANSLATION_BATCH_MAX_ITEMS;
+  const averageChars = units.reduce((total, unit) => total + String(unit.text || '').length, 0) / units.length;
+  return averageChars <= TRANSLATION_SHORT_UNIT_AVERAGE_CHARS
+    ? TRANSLATION_SHORT_UNIT_MAX_ITEMS
+    : TRANSLATION_BATCH_MAX_ITEMS;
+}
+
+function repairIssuesForAssessment(assessment) {
+  const warningOnly = new Set(assessment.warnings || []);
+  return [...new Set([
+    ...(assessment.hardErrors || []),
+    ...(assessment.repairableIssues || []).filter((reason) => !warningOnly.has(reason)),
+  ])];
+}
+
+function inferenceContextFor({
+  phase,
+  batch,
+  batchIndex,
+  batchTotal,
+  parentBatchIndex,
+  repairRound,
+}) {
+  return {
+    phase,
+    batchIndex: batchIndex + 1,
+    batchTotal,
+    itemCount: batch.length,
+    inputCharacters: batch.reduce((total, unit) => total + String(unit.text || '').length, 0),
+    ...(parentBatchIndex === undefined ? {} : { parentBatchIndex: parentBatchIndex + 1 }),
+    ...(repairRound === undefined ? {} : { repairRound }),
+  };
+}
+
+async function mapBounded(values, concurrency, mapper, signal) {
+  const results = new Array(values.length);
+  let cursor = 0;
+  let firstError;
+  const worker = async () => {
+    while (!firstError) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= values.length) return;
+      try {
+        throwIfTaskCancelled(signal);
+        results[index] = await mapper(values[index], index);
+      } catch (error) {
+        if (!firstError) firstError = error;
+      }
+    }
+  };
+  const workerCount = Math.min(values.length, Math.max(1, Math.floor(Number(concurrency) || 1)));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  if (firstError) throw firstError;
+  return results;
 }
 
 function batchUnits(units, maxChars, maxItems) {

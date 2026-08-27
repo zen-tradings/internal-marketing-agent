@@ -425,6 +425,77 @@ test('研究型 Newsletter:即使同时提到首封，明确要求市场分析�
   assert.equal(policy.requireCitations, true);
 });
 
+test('直译使用独立模型和低 reasoning，并把无正文的逐请求 telemetry 写入 trace', async () => {
+  const paragraph = 'This is a complete source paragraph with enough ordinary prose for deterministic extraction and faithful translation. '.repeat(4);
+  const workflow = tempWorkflow({ id: 'translate', mode: 'translation', model: 'global/model' });
+  const config = baseConfig();
+  config.translation = {
+    model: 'translation/model',
+    reasoningEffort: 'low',
+    batchConcurrency: 2,
+    browserEnabled: false,
+    dnsLookup: async () => [{ address: '93.184.216.34', family: 4 }],
+  };
+  config.documents = {};
+  const requestBodies = [];
+  const fetchFn = async (url, options = {}) => {
+    if (String(url).includes('openrouter.test')) {
+      const body = JSON.parse(options.body);
+      requestBodies.push(body);
+      const prompt = body.messages[1].content;
+      const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get: (name) => name.toLowerCase() === 'x-generation-id' ? 'gen-translation-1' : null },
+        async text() {
+          return JSON.stringify({
+            id: 'gen-body-1',
+            model: 'translation/model',
+            provider: 'test-provider',
+            choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+              translations: payload.units.map((unit) => ({
+                id: unit.id,
+                text: unit.kind === 'title' ? '遥测测试' : '这是一段完整且忠实的中文译文，用来验证结构化直译遥测。',
+              })),
+            }) } }],
+            usage: {
+              prompt_tokens: 100,
+              completion_tokens: 40,
+              completion_tokens_details: { reasoning_tokens: 5 },
+              cost: 0.01,
+            },
+          });
+        },
+      };
+    }
+    return new Response(`<article><h1>Telemetry test</h1><p>${paragraph}</p></article>`, {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    });
+  };
+
+  const result = await runWriter({
+    workflow,
+    input: '直译 https://example.com/telemetry',
+    config,
+    fetchFn,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(requestBodies[0].model, 'translation/model');
+  assert.deepEqual(requestBodies[0].reasoning, { effort: 'low', exclude: true });
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.models.writer, 'translation/model');
+  assert.equal(trace.translationInference.requests.length, 1);
+  assert.equal(trace.translationInference.requests[0].generationId, 'gen-translation-1');
+  assert.equal(trace.translationInference.requests[0].provider, 'test-provider');
+  assert.equal(trace.translationInference.requests[0].itemCount, 3);
+  assert.equal(trace.translationInference.summary.reasoningTokens, 5);
+  assert.equal(trace.translationInference.summary.cost, 0.01);
+  assert.doesNotMatch(JSON.stringify(trace.translationInference), /complete source paragraph/);
+});
+
 test('Qwen3.8-Max 首次空正文时从 high 降到 low 重试并成功', async () => {
   const workflow = tempWorkflow({ model: 'qwen/qwen3.8-max' });
   const config = baseConfig();
