@@ -308,7 +308,7 @@ test('opening editorial planner keeps only real source IDs and an honest no-expe
     { title: 'Quote', url: 'https://example.com/b', openingDigestKind: 'universe-price', text: 'A stock moved.' },
   ]);
   const prompt = buildOpeningDigestPlanningPrompt({ research, asOf: new Date('2026-08-10T14:15:00Z') });
-  assert.match(prompt, /after the U\.S\. cash open, not premarket/);
+  assert.match(prompt, /during the U\.S\. cash session/);
   assert.match(prompt, /does not prove direction/);
   const plan = normalizeOpeningDigestPlan({
     stance: 'neutral', confidence: 'medium', selected_source_ids: ['OD1', 'BAD'],

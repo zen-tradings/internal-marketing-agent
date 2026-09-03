@@ -14,6 +14,26 @@ export function openingDigestSourceIds(research = []) {
   return research.map((source, index) => ({ ...source, openingDigestSourceId: `OD${index + 1}` }));
 }
 
+export function openingDigestMarketPhase(asOf = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', weekday: 'short',
+  }).formatToParts(asOf);
+  const get = (type) => parts.find((part) => part.type === type)?.value || '';
+  const minutes = Number(get('hour')) * 60 + Number(get('minute'));
+  if (['Sat', 'Sun'].includes(get('weekday'))) return 'off-session';
+  if (minutes < 9 * 60 + 30) return 'premarket-test';
+  if (minutes < 16 * 60) return 'cash-session';
+  return 'after-hours-test';
+}
+
+export function openingDigestPhaseGuidance(asOf = new Date()) {
+  const phase = openingDigestMarketPhase(asOf);
+  if (phase === 'cash-session') return 'This run is during the U.S. cash session. The formal edition is normally produced around 10:15 a.m. ET; describe it as the opening hour, not premarket.';
+  if (phase === 'premarket-test') return 'This is an off-cycle TEST before the U.S. cash open. Use premarket only for timestamped source observations, do not claim that the cash market has opened, and do not infer an opening-hour trend.';
+  if (phase === 'after-hours-test') return 'This is an off-cycle TEST after the U.S. cash close. Label observations latest available and do not present them as a live opening-hour read.';
+  return 'This is an off-session TEST. Label observations latest available and do not present them as a live opening-hour read.';
+}
+
 export function buildOpeningDigestPlanningPrompt({ research = [], editorialContext = '', history = [], asOf = new Date() } = {}) {
   const sources = research.map((source) => ({
     id: source.openingDigestSourceId,
@@ -24,7 +44,7 @@ export function buildOpeningDigestPlanningPrompt({ research = [], editorialConte
     official: Boolean(source.official),
     excerpt: [source.summary, ...(source.highlights || []), source.text].filter(Boolean).join('\n').slice(0, 1100),
   }));
-  return `Plan one evidence-bound Zen Opening Digest for ${asOf.toISOString()}. This report is written around 10:15 a.m. ET, after the U.S. cash open, not premarket.
+  return `Plan one evidence-bound Zen Opening Digest for ${asOf.toISOString()}. ${openingDigestPhaseGuidance(asOf)}
 
 Return strict JSON only:
 {
@@ -181,7 +201,7 @@ export function auditOpeningDigestInsight(markdown) {
   if (!/^[-*]\s+\*\*Base case\s*[—-]/mi.test(scenario) || !/^[-*]\s+\*\*Counter-case\s*[—-]/mi.test(scenario)) warnings.push('Scenario map 必须同时包含 Base case 与 Counter-case');
   const watchCount = (parts.sections.get('What to watch')?.match(/^[-*]\s+/gm) || []).length;
   if (watchCount < 3 || watchCount > 5) warnings.push(`What to watch 应为 3-5 条，当前 ${watchCount}`);
-  if (/\b(?:UTC|premarket)\b/i.test(parts.body)) warnings.push('Opening Digest 用户可见正文不得使用 UTC 或把 10:15 ET 稿件写成 premarket');
+  if (/\bUTC\b/i.test(parts.body)) warnings.push('Opening Digest 用户可见正文不得使用 UTC，应统一显示 ET');
   if (/\b(?:because|due to)\b[^.]{0,100}\b(?:option interest|options activity|IVX|implied volatility)\b|\b(?:option interest|options activity|IVX|implied volatility)\b[^.]{0,100}\b(?:drove|caused|pushed|lifted)\b/i.test(parts.body)) warnings.push('Opening Digest 不得用 OIC/IV 共现推断价格因果');
   if (/\btracked(?:-universe)?\b[^.]{0,40}\bmarket breadth\b/i.test(parts.body)) warnings.push('固定跟踪池不得冒充全市场 breadth');
   const narrativeWords = visibleWords(parts.body.replace(/^## Earnings ahead[\s\S]*$/m, ''));
