@@ -456,7 +456,7 @@ export async function runWriter({
       throw new Error('OpenRouter 输出缺少 title frontmatter');
     }
     if (workflow.id === 'opening-digest' && workflow.editorialPlanning === true) {
-      const refined = await refineOpeningDigestDraft({ article, research, workflow, writer, fetchFn });
+      const refined = await refineOpeningDigestDraft({ article, research: generationResearch, workflow, writer, fetchFn });
       article = refined.article;
       trace.openingDigestRefinement = refined.trace;
     }
@@ -2210,9 +2210,17 @@ async function refineOpeningDigestDraft({ article, research, workflow, writer, f
     });
     const candidate = normalizeArticle(response.revised_markdown || '');
     if (!hasTitleFrontmatter(candidate)) throw new Error('refinement omitted frontmatter');
-    const beforeInvariant = openingDraftInvariantSignature(article);
-    const afterInvariant = openingDraftInvariantSignature(candidate);
-    if (JSON.stringify(beforeInvariant) !== JSON.stringify(afterInvariant)) throw new Error('refinement changed URLs, numbers, tickers, dates, or times');
+    const truncatedRecovery = before.stats.narrativeWords < 150
+      && (!before.stats.scenarioComplete || before.stats.observableSignpostCount < 3);
+    if (!truncatedRecovery && JSON.stringify(openingDraftInvariantSignature(article)) !== JSON.stringify(openingDraftInvariantSignature(candidate))) {
+      throw new Error('refinement changed URLs, numbers, tickers, dates, or times');
+    }
+    const allowedUrls = new Set(research.filter((source) => source?.url).map((source) => referenceUrlKey(source.url)));
+    const candidateUrlKeys = new Set(extractArticleUrls(candidate).map(referenceUrlKey));
+    const missingUrls = extractArticleUrls(article).filter((url) => !candidateUrlKeys.has(referenceUrlKey(url)));
+    const unfamiliarUrls = extractArticleUrls(candidate).filter((url) => !allowedUrls.has(referenceUrlKey(url)));
+    if (missingUrls.length) throw new Error(`refinement removed existing URLs:${missingUrls.join(', ')}`);
+    if (unfamiliarUrls.length) throw new Error(`refinement added unapproved URLs:${unfamiliarUrls.join(', ')}`);
     const after = auditOpeningDigestInsight(candidate);
     if (after.warnings.length >= before.warnings.length) throw new Error('refinement did not reduce quality issues');
     return { article: candidate, trace: { attempted: true, applied: true, before, after } };

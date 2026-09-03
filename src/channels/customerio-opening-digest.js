@@ -55,8 +55,8 @@ export function makeChannel({
           throw publishError(`Opening Digest 标题或 edition 与当前美东日期不一致:${parsed.title} / ${parsed.edition}`);
         }
         const headline = editorialMeta.headline || 'Opening signals stay mixed';
-        if (headline.length > 36) {
-          throw publishError(`Opening Digest 动态标题超过 36 字符:${headline}`);
+        if (headline.length > 80) {
+          throw publishError(`Opening Digest 动态标题超过安全上限 80 字符:${headline}`);
         }
         const sanitized = sanitizeUnsubscribeTags(parsed.body);
         if (sanitized.removed) diagnostics.push(`Opening Digest 正文已移除 ${sanitized.removed} 个退订 Liquid 标签`);
