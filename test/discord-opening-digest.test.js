@@ -12,9 +12,10 @@ const WEBHOOK = 'https://discord.com/api/webhooks/123456789012345678/abcdefghijk
 
 function payload(body = "## Today's catalysts\n- [NVIDIA](https://example.com/nvda) moved on a verified catalyst.\n\n## Market read\nBreadth remains the validation condition.") {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     dateKey: '2026-08-10',
-    article: { title: 'Zen Opening Digest', preheader: 'Market signals and catalysts.', body },
+    article: { title: 'Zen Opening Digest', headline: 'Rates test market conviction', preheader: 'Market signals and catalysts.', body },
+    editorial: { stance: 'neutral', confidence: 'medium', changeSummary: 'Initial baseline.' },
     metrics: ['SPY', 'QQQ', 'IWM', 'VIX', '2Y UST', '10Y UST', 'DXY', 'WTI', 'Gold']
       .map((label, index) => ({ label, value: 100 + index, changePct: index % 2 ? -1 : 1 })),
     options: {

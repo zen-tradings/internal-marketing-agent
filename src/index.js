@@ -206,6 +206,7 @@ export function makeHandler(deps) {
                 openingDigestHistory: {
                   recordCapture: (entry) => store.recordOpeningDigestOicCapture?.(entry),
                   listHistory: (options) => store.listOpeningDigestIvHistory?.(options),
+                  listEditorialHistory: (options) => store.listOpeningDigestEditorialHistory?.(options) || [],
                 },
               } : {}),
               ...(qdiiPayload ? {
@@ -300,6 +301,17 @@ export function makeHandler(deps) {
           acceptanceId: publishContext.acceptanceId,
         });
         store.setMediaId(run.id, mediaId, title); // Persist immediately after publish to support the idempotency check above.
+        if (runtimeWorkflow.id === 'opening-digest' && publishContext.source === 'cron' && res.openingDigestEditorialState) {
+          try {
+            store.recordOpeningDigestEditorialEdition?.({
+              ...res.openingDigestEditorialState,
+              runId: run.id,
+              publishedAt: Date.now(),
+            });
+          } catch (error) {
+            appendOpeningHistoryDiagnostic(res.researchTracePath, error);
+          }
+        }
         setPhase('published');
         return { mediaId, title, sourceCount: res.sources?.length || 0, completeness: res.completeness, deliveryWarnings };
       },
@@ -365,6 +377,16 @@ export function makeHandler(deps) {
       });
     }
   };
+}
+
+function appendOpeningHistoryDiagnostic(tracePath, error) {
+  if (!tracePath) return;
+  try {
+    const trace = JSON.parse(fs.readFileSync(tracePath, 'utf8'));
+    trace.openingDigestEditorialHistory ||= {};
+    trace.openingDigestEditorialHistory.persistenceDiagnostic = `Opening Digest editorial history 写入失败:${error?.message || error}`.slice(0, 600);
+    fs.writeFileSync(tracePath, `${JSON.stringify(trace, null, 2)}\n`, { mode: 0o600 });
+  } catch {}
 }
 
 async function sleepWithCancellation(sleep, ms, signal) {

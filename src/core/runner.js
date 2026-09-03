@@ -61,6 +61,15 @@ import {
 } from './analysis-v2.js';
 import { easternDateKey } from '../lib/us-equity-calendar.js';
 import {
+  auditOpeningDigestInsight,
+  buildOpeningDigestPlanningPrompt,
+  normalizeOpeningDigestPlan,
+  openingDigestEditorialState,
+  openingDigestPlanPromptText,
+  openingDigestSelectedResearch,
+  openingDigestSourceIds,
+} from '../lib/opening-digest-editorial.js';
+import {
   compactOpeningDigestArticle,
   OPENING_DIGEST_CATALYST_MAX_WORDS,
   OPENING_DIGEST_MARKET_READ_MAX_SENTENCES,
@@ -136,6 +145,7 @@ export async function runWriter({
   };
   let editorialContext = null;
   let openingDigestResearch = [];
+  let openingDigestPlan = null;
   try { fs.rmSync(articlePath, { force: true }); } catch {}
 
   try {
@@ -349,10 +359,35 @@ export async function runWriter({
       ...(Array.isArray(taskContext.qdiiSources) ? taskContext.qdiiSources : []),
       ...(Array.isArray(editorialContext?.sources) ? editorialContext.sources : []),
     ];
-    const research = mergeInjectedSources(injectedSources, externalResearch);
-    if (workflow.id === 'opening-digest') openingDigestResearch = research;
-    if (workflow.id === 'opening-digest' && research.length === 0) {
-      throw new Error('Opening Digest 未检索到可用研究来源');
+    let research = mergeInjectedSources(injectedSources, externalResearch);
+    if (workflow.id === 'opening-digest') {
+      research = openingDigestSourceIds(research);
+      openingDigestResearch = research;
+      if (research.length === 0) throw new Error('Opening Digest 未检索到可用研究来源');
+      const editorialHistory = await Promise.resolve(taskContext?.openingDigestHistory?.listEditorialHistory?.({ limitSessions: 20 }))
+        .catch((error) => {
+          trace.openingDigestEditorialHistory = { diagnostics: [describeFetchError(error).slice(0, 300)], editions: [] };
+          return [];
+        });
+      const history = Array.isArray(editorialHistory) ? editorialHistory : editorialHistory?.rows || [];
+      trace.openingDigestEditorialHistory ||= { editions: history };
+      if (workflow.editorialPlanning === true) {
+        try {
+          openingDigestPlan = await planOpeningDigestEditorial({
+            research, editorialContext, history, asOf: researchAsOf,
+            model: plannerModel, writer, workflow, fetchFn,
+          });
+          trace.openingDigestEditorialPlan = { status: 'model', ...openingDigestPlan };
+        } catch (error) {
+          openingDigestPlan = normalizeOpeningDigestPlan({}, research, history);
+          trace.openingDigestEditorialPlan = {
+            status: 'fallback', diagnostic: describeFetchError(error).slice(0, 500), ...openingDigestPlan,
+          };
+        }
+      } else {
+        openingDigestPlan = normalizeOpeningDigestPlan({}, research, history);
+        trace.openingDigestEditorialPlan = { status: 'deterministic', ...openingDigestPlan };
+      }
     }
     throwIfTaskCancelled(signal);
     trace.selectedSources = research.map(sourceForTrace);
@@ -364,12 +399,18 @@ export async function runWriter({
     };
     trace.researchLanes = [...new Set(trace.requests.map((request) => request.kind).filter(Boolean))];
     writeResearchTrace(researchTracePath, trace);
+    const generationResearch = workflow.id === 'opening-digest' && workflow.editorialPlanning === true
+      ? openingDigestSelectedResearch(research, openingDigestPlan)
+      : research;
+    const generationEditorialContext = workflow.id === 'opening-digest' && workflow.editorialPlanning === true
+      ? [editorialContext?.promptText || '', openingDigestPlanPromptText(openingDigestPlan)].filter(Boolean).join('\n\n')
+      : editorialContext?.promptText || '';
     const maxPromptChars = positiveNumber(writer.maxPromptChars, 160000);
     const configuredExcerptChars = sourceExcerptLimitFor(workflow);
     let appliedExcerptChars = configuredExcerptChars;
     let prompt = buildUserPrompt({
-      workflow, input, research, writer, sourcePolicy, asOf: researchAsOf,
-      editorialContext: editorialContext?.promptText || '',
+      workflow, input, research: generationResearch, writer, sourcePolicy, asOf: researchAsOf,
+      editorialContext: generationEditorialContext,
       sourceExcerptMaxChars: appliedExcerptChars,
       modelProfile,
     });
@@ -378,8 +419,8 @@ export async function runWriter({
         if (fallbackLimit >= appliedExcerptChars) continue;
         appliedExcerptChars = fallbackLimit;
         prompt = buildUserPrompt({
-          workflow, input, research, writer, sourcePolicy, asOf: researchAsOf,
-          editorialContext: editorialContext?.promptText || '',
+          workflow, input, research: generationResearch, writer, sourcePolicy, asOf: researchAsOf,
+          editorialContext: generationEditorialContext,
           sourceExcerptMaxChars: appliedExcerptChars,
           modelProfile,
         });
@@ -389,6 +430,7 @@ export async function runWriter({
     if (workflow.id === 'opening-digest') {
       trace.openingDigestResearchBudget = {
         sourceCount: research.length,
+        selectedSourceCount: generationResearch.length,
         configuredExcerptChars,
         appliedExcerptChars,
         promptChars: prompt.length,
@@ -412,6 +454,11 @@ export async function runWriter({
     let article = renderQuarterlyCharts(normalizeArticle(content));
     if (!hasTitleFrontmatter(article)) {
       throw new Error('OpenRouter 输出缺少 title frontmatter');
+    }
+    if (workflow.id === 'opening-digest' && workflow.editorialPlanning === true) {
+      const refined = await refineOpeningDigestDraft({ article, research, workflow, writer, fetchFn });
+      article = refined.article;
+      trace.openingDigestRefinement = refined.trace;
     }
     if (workflow.factReview && !sourcePolicy.skipResearch) {
       const reviewed = workflow.factReviewPolicy === 'severe-only'
@@ -470,7 +517,12 @@ export async function runWriter({
     }
 
     throwIfTaskCancelled(signal);
-    if (workflow.id === 'opening-digest') trace.contentMode = 'editorial';
+    let openingDigestState;
+    if (workflow.id === 'opening-digest') {
+      trace.contentMode = 'editorial';
+      trace.openingDigestInsightAudit = auditOpeningDigestInsight(article);
+      openingDigestState = openingDigestEditorialState(article, openingDigestPlan);
+    }
     trace.finishedAt = new Date().toISOString();
     trace.citationValidation = citationValidationSummary(article, research, sourcePolicy);
     writeResearchTrace(researchTracePath, trace);
@@ -481,7 +533,7 @@ export async function runWriter({
       model,
       researchTracePath,
       sources: research.map((r) => r.url).filter(Boolean),
-      ...(workflow.id === 'opening-digest' ? { contentMode: 'editorial' } : {}),
+      ...(workflow.id === 'opening-digest' ? { contentMode: 'editorial', openingDigestEditorialState: openingDigestState } : {}),
       contentPolicy: contentPolicyForPrompt(input),
     };
   } catch (e) {
@@ -547,7 +599,7 @@ export async function runWriter({
 
 function openingDigestFallbackArticle(asOf) {
   const date = easternDateKey(asOf);
-  return `---\ntitle: Zen Opening Digest\nsubject: Zen Opening Digest · ${date}\npreheader: Market signals and available opening data.\nedition: ${date}\n---\nEditorial update unavailable for this edition.\n`;
+  return `---\ntitle: Zen Opening Digest\nheadline: Opening data, read unavailable\nstance: neutral\nconfidence: low\npreheader: Opening data are available; the evidence-bound editorial read could not be completed.\nedition: ${date}\n---\nEditorial update unavailable for this edition. Opening data are available, but the evidence-bound synthesis could not be completed, so no directional conclusion is presented.\n\n## What matters today\n\nNo evidence-ranked narrative is available.\n\nNo additional market implication is asserted.\n\n## Evidence and cross-currents\n\nThe available data are shown without a causal interpretation.\n\n## Scenario map\n\n- **Base case —** No evidence-bound scenario is available.\n- **Counter-case —** No evidence-bound counter-case is available.\n\n## What to watch\n\n- Current index levels and volatility\n- Available Treasury yield observations\n- Scheduled earnings shown below\n`;
 }
 
 async function runAnalysisV2({
@@ -1846,6 +1898,7 @@ function sourceForTrace(source) {
     independentThirdParty: Boolean(source.independentThirdParty),
     editorialWarning: source.editorialWarning || null,
     openingDigestKind: source.openingDigestKind || null,
+    openingDigestSourceId: source.openingDigestSourceId || null,
   };
 }
 
@@ -2138,7 +2191,60 @@ function citationValidationSummary(article, research, policy) {
 
 const OPENING_SEVERE_CATEGORIES = new Set([
   'core_fact_contradiction', 'fabricated_number_or_date', 'wrong_link',
+  'unsupported_core_causality', 'wrong_entity_classification', 'release_status_error',
 ]);
+
+async function refineOpeningDigestDraft({ article, research, workflow, writer, fetchFn }) {
+  const before = auditOpeningDigestInsight(article);
+  if (!before.warnings.length) return { article, trace: { attempted: false, before, after: before, applied: false } };
+  try {
+    const selected = openingCompactionSources(research, article);
+    const response = await completeReviewJson({
+      prompt: `Repair only the structural and analytical-quality issues in this Zen Opening Digest. Keep the same evidence-bound viewpoint and causal strength. Do not add facts, causes, numbers, tickers, dates, times, URLs, expectations, market levels, or advice. Preserve every existing URL and immutable token. Return strict JSON {"revised_markdown":"complete Markdown with frontmatter"}.\n\nIssues:${JSON.stringify(before.warnings)}\n\nAllowed sources:${JSON.stringify(selected)}\n\nDraft:\n${article}`,
+      model: writer.reviewModel || writer.model,
+      writer: { ...writer, temperature: 0 },
+      fetchFn,
+      timeoutMs: workflow.timeoutMs,
+      systemPrompt: 'You are a conservative financial structure editor. Preserve evidence and uncertainty. Return valid JSON only.',
+      retryInstruction: 'Return one valid JSON object containing revised_markdown only.',
+    });
+    const candidate = normalizeArticle(response.revised_markdown || '');
+    if (!hasTitleFrontmatter(candidate)) throw new Error('refinement omitted frontmatter');
+    const beforeInvariant = openingDraftInvariantSignature(article);
+    const afterInvariant = openingDraftInvariantSignature(candidate);
+    if (JSON.stringify(beforeInvariant) !== JSON.stringify(afterInvariant)) throw new Error('refinement changed URLs, numbers, tickers, dates, or times');
+    const after = auditOpeningDigestInsight(candidate);
+    if (after.warnings.length >= before.warnings.length) throw new Error('refinement did not reduce quality issues');
+    return { article: candidate, trace: { attempted: true, applied: true, before, after } };
+  } catch (error) {
+    return { article, trace: { attempted: true, applied: false, before, after: before, diagnostic: describeFetchError(error).slice(0, 500) } };
+  }
+}
+
+function openingDraftInvariantSignature(value) {
+  const text = String(value || '');
+  return {
+    urls: extractArticleUrls(text),
+    numbers: text.match(/(?<![A-Za-z0-9])(?:[$€£¥]\s*)?[-+]?\d+(?:[,.]\d+)*(?:%|‰)?/g) || [],
+    tickers: text.match(/\b[A-Z]{2,6}\b/g) || [],
+    times: text.match(/\b\d{1,2}:\d{2}(?:\s*(?:a\.m\.|p\.m\.|AM|PM))?(?:\s+(?:ET|EST|EDT|PT|PST|PDT|UTC|GMT))?\b/gi) || [],
+  };
+}
+
+async function planOpeningDigestEditorial({ research, editorialContext, history, asOf, model, writer, workflow, fetchFn }) {
+  const raw = await completeReviewJson({
+    prompt: buildOpeningDigestPlanningPrompt({
+      research, editorialContext: editorialContext?.promptText || '', history, asOf,
+    }),
+    model,
+    writer: { ...writer, temperature: 0 },
+    fetchFn,
+    timeoutMs: workflow.timeoutMs,
+    systemPrompt: 'You are the planning editor of a concise institutional U.S. equity opening brief. Separate facts from judgments, test a contrary case, and return valid JSON only.',
+    retryInstruction: 'Return one valid JSON object only. Use only the supplied source IDs and do not add commentary.',
+  });
+  return normalizeOpeningDigestPlan(raw, research, history);
+}
 
 async function compactOpeningDigestEditorial({ article, research, workflow, writer, fetchFn }) {
   return compactOpeningDigestArticle({
@@ -2229,7 +2335,7 @@ async function reviewAndRepairOpeningDigest({ article, input, research, workflow
       .join('\n')
       .slice(0, excerptLimit),
   }));
-  const auditPrompt = `Audit this Zen Opening Digest only against the supplied sources. Report ordinary weaknesses, but reserve a severe issue for a high-confidence error that changes a core conclusion and has specific source evidence. Severe categories are only core_fact_contradiction, fabricated_number_or_date, and wrong_link. Do not treat structure, catalyst count, freshness, duplicate links, missing publication dates, style, or weak sourcing as severe.\n\nReturn strict JSON:\n{"issues":[{"category":"...","confidence":"high|medium|low","core":true|false,"claim":"exact problematic text","evidence":"specific source evidence","source_url":"allowed source URL","message":"short explanation"}],"revised_markdown":"complete repaired Markdown when severe issues exist, otherwise empty"}\n\nTask:${input}\n\nAllowed sources:${JSON.stringify(allowed)}\n\nDraft:\n${article}`;
+  const auditPrompt = `Audit this Zen Opening Digest only against the supplied sources. Report ordinary weaknesses, but reserve a severe issue for a high-confidence error that changes a core conclusion and has specific source evidence. Severe categories are only core_fact_contradiction, fabricated_number_or_date, wrong_link, unsupported_core_causality, wrong_entity_classification, and release_status_error. Do not treat structure, catalyst count, freshness, duplicate links, missing publication dates, style, or weak sourcing as severe.\n\nReturn strict JSON:\n{"issues":[{"category":"...","confidence":"high|medium|low","core":true|false,"claim":"exact problematic text","evidence":"specific source evidence","source_url":"allowed source URL","message":"short explanation"}],"revised_markdown":"complete repaired Markdown when severe issues exist, otherwise empty"}\n\nTask:${input}\n\nAllowed sources:${JSON.stringify(allowed)}\n\nDraft:\n${article}`;
   let initial;
   try {
     initial = await completeReviewJson({
@@ -2293,7 +2399,7 @@ async function reviewAndRepairOpeningDigest({ article, input, research, workflow
     let verification;
     try {
       verification = await completeReviewJson({
-        prompt: `Verify whether every previously severe issue is fixed. Only report an issue as severe when it remains high-confidence, affects a core conclusion, quotes the problematic claim, and cites specific evidence from an allowed source. Return strict JSON {"issues":[{"category":"core_fact_contradiction|fabricated_number_or_date|wrong_link","confidence":"high|medium|low","core":true|false,"claim":"...","evidence":"...","source_url":"...","message":"..."}]}.\n\nPrevious severe issues:${JSON.stringify(severe)}\n\nAllowed sources:${JSON.stringify(allowed)}\n\nRevised draft:\n${current}`,
+        prompt: `Verify whether every previously severe issue is fixed. Only report an issue as severe when it remains high-confidence, affects a core conclusion, quotes the problematic claim, and cites specific evidence from an allowed source. Return strict JSON {"issues":[{"category":"core_fact_contradiction|fabricated_number_or_date|wrong_link|unsupported_core_causality|wrong_entity_classification|release_status_error","confidence":"high|medium|low","core":true|false,"claim":"...","evidence":"...","source_url":"...","message":"..."}]}.\n\nPrevious severe issues:${JSON.stringify(severe)}\n\nAllowed sources:${JSON.stringify(allowed)}\n\nRevised draft:\n${current}`,
         model: writer.reviewModel || writer.model,
         writer: { ...writer, temperature: 0 },
         fetchFn,

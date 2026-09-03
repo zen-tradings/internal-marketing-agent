@@ -17,23 +17,38 @@ const MARKET_PRIORITY_SOURCES = [
 
 function promptTemplate() {
   const date = easternDateKey(new Date());
-  return `You are writing the editorial section of Zen Opening Digest for ${date}.
+  return `You are writing Zen Opening Digest for ${date}. It is produced around 10:15 a.m. ET, after the U.S. cash open, for broad U.S. equity investors with AI infrastructure and semiconductors as important secondary coverage.
 
-Write in English. This is a short US market opening digest, not investment advice.
-Use 3 to 5 sourced market-moving items. Each item must be one Markdown list line containing no more than 40 visible English words, including its visible link label but excluding its URL. Prioritize the supplied tracked-universe signals and current-window company developments; use at most one macro item, only when it materially affects the broad market or several tracked names. Each non-price item needs one direct source link and only the essential fact plus a concise market implication. A supplied price move may be reported as a timestamped price fact. When no supplied source establishes a catalyst, write one factual price sentence only: omit a Reason clause entirely, and never comment that a cause is missing, unknown, or unasserted. Combine standalone supplied IV signals into at most one item and state that coverage is limited to tracked names appearing in the OIC Top 20.
-Then write one restrained, falsifiable “Market read” paragraph of 3 to 5 sentences and no more than 80 visible English words. Use an overview-details-optional synthesis structure: the first sentence states the overall market interpretation; the middle 1 to 3 sentences explain the main drivers, divergences, or validation conditions; an optional final sentence summarizes the read or states what would invalidate it. Do not repeat catalyst detail unnecessarily or provide investment advice. Do not invent price levels, options activity, causes, macro values, earnings dates, or conference-call times.
-Do not use evergreen background, previously disclosed items, unconfirmed rumors, price-target-only notes, or sources without a verifiable publication date as today's catalysts. Explicit upgrades or downgrades are allowed. The schedule itself is inserted later as Earnings ahead, so do not create that heading and do not repeat a merely upcoming earnings date as a catalyst. Never pad the digest with stale material; use only the number of supported items available.
+Write in concise English. The model-authored narrative should usually be 450-650 visible words, but shorten it rather than pad when evidence is sparse. This is conditional market analysis, not trading instructions.
+
+Lead with one evidence-bound opening call. State the market tone as Constructive, Neutral, or Defensive; explain the dominant constraint or support; and say what materially changed from the prior formal edition. If signals conflict, explicitly say no single signal dominates. Never force a bullish or bearish view.
+
+Build 2-3 evidence chains using What happened → Why it matters → What confirms or contradicts the interpretation. Separate observed facts from analysis and assumptions. Compare the base case with one plausible counter-case and give observable confirmation or invalidation conditions. Do not merely repeat prices from the market snapshot.
+
+Use only supplied research links. Keep links adjacent to supported facts. A supplied price move may be reported as a timestamped price fact, but it cannot establish a catalyst. When no supplied source establishes a cause, write one factual price sentence only: omit a Reason clause entirely, and never comment that a cause is missing, unknown, or unasserted. Do not invent market expectations, price levels, breadth, gamma, positioning, causes, macro values, earnings dates, release outcomes, or conference-call times. A co-occurring price move and OIC/IV signal does not establish causality or investor direction. The 72-name tracked universe is not the whole market; call its pattern tracked-universe participation or dispersion, never market breadth. Use ET in visible copy, not UTC. Do not describe the current report as premarket.
+
+The schedule is inserted later as Earnings ahead, so do not create that heading or repeat a merely upcoming earnings date as a catalyst. Do not use evergreen background, stale disclosure, unconfirmed rumors, or price-target-only notes as today's incremental information.
 
 Return Markdown only with this frontmatter:
 ---
 title: Zen Opening Digest
-subject: Zen Opening Digest · ${date}
-preheader: Market signals, earnings ahead, today’s catalysts, and options volume.
+headline: A specific 4-7 word headline, no more than 36 characters
+stance: constructive|neutral|defensive
+confidence: high|medium|low
+preheader: One specific sentence, no more than 140 characters
 edition: ${date}
 ---
-Then use exactly these headings:
-## Today's catalysts
-## Market read`;
+
+After frontmatter, write a 2-4 sentence Opening call as one paragraph with no heading. Then use exactly these headings in this order:
+## What matters today
+Write 2-3 short paragraphs, each beginning with a bold judgment-led phrase.
+## Evidence and cross-currents
+Write one compact paragraph containing both supporting and contrary evidence.
+## Scenario map
+- **Base case —** conditions, expected read, and observable confirmation.
+- **Counter-case —** conditions and how the main judgment would be invalidated.
+## What to watch
+Write 3-5 observable, evidence-bound bullets. Do not give entry, exit, position, stop-loss, or take-profit instructions.`;
 }
 
 export default {
@@ -42,6 +57,7 @@ export default {
   sourcePolicy: { officialFirst: false, requireCitations: true, minOfficialSources: 0, failClosed: true },
   factReview: true,
   factReviewPolicy: 'severe-only',
+  editorialPlanning: true,
   triggers: ['slack', 'cron:15 10 * * 1-5'],
   get cronTimezone() { return runtimeConfig()?.openingDigest?.timezone || process.env.OPENING_DIGEST_TIMEZONE || 'America/New_York'; },
   cronCatchUpWindowMinutes: 120,

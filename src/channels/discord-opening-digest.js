@@ -1,4 +1,5 @@
 import { fetchWithTimeout } from '../lib/http-timeout.js';
+import { openingDigestBodyParts } from '../lib/opening-digest-editorial.js';
 
 const DISCORD_EMBED_DESCRIPTION_LIMIT = 4096;
 const DISCORD_EMBED_FIELD_LIMIT = 25;
@@ -95,9 +96,10 @@ function marketSnapshotMessage(payload, coverImageUrl) {
     inline: true,
   }));
   const sourceNotes = [...new Set(payload.metrics.map((metric) => cleanText(metric.sourceNote)).filter(Boolean))];
+  const lead = openingDigestBodyParts(payload.article.body).lead;
   const embed = {
-    title: `Zen Opening Digest · ${displayDate(payload.dateKey)}`,
-    description: cleanText(payload.article.preheader),
+    title: cleanText(payload.article.headline || `Zen Opening Digest · ${displayDate(payload.dateKey)}`),
+    description: `**Zen Opening Digest · ${displayDate(payload.dateKey)}**\n\n${cleanText(lead || payload.article.preheader)}`,
     color: DISCORD_COLOR,
     fields,
     ...(sourceNotes.length ? { footer: { text: sourceNotes.join(' ').slice(0, 2048) } } : {}),
@@ -107,7 +109,9 @@ function marketSnapshotMessage(payload, coverImageUrl) {
 }
 
 function editorialMessages(payload) {
-  const chunks = splitMarkdown(payload.article.body, DISCORD_EMBED_DESCRIPTION_LIMIT);
+  const { sections } = openingDigestBodyParts(payload.article.body);
+  const sectionMarkdown = [...sections.entries()].map(([heading, content]) => `## ${heading}\n${content}`).join('\n\n');
+  const chunks = splitMarkdown(sectionMarkdown, DISCORD_EMBED_DESCRIPTION_LIMIT);
   return chunks.map((description, index) => ({
     embeds: [{
       title: chunks.length === 1 ? 'Opening notes' : `Opening notes · ${index + 1}/${chunks.length}`,
@@ -226,7 +230,7 @@ function discordRetryAfterMs(response, data) {
 }
 
 function assertOpeningPayload(payload) {
-  if (!payload || payload.schemaVersion !== 1 || !/^\d{4}-\d{2}-\d{2}$/.test(String(payload.dateKey || ''))) {
+  if (!payload || payload.schemaVersion !== 2 || !/^\d{4}-\d{2}-\d{2}$/.test(String(payload.dateKey || ''))) {
     throw new Error('Discord Opening Digest payload 无效');
   }
   if (!payload.article || !Array.isArray(payload.metrics) || payload.metrics.length !== 9) {

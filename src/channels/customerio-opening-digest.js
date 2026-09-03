@@ -10,6 +10,7 @@ import { captureTrendingOptionsTable, validateTrendingOptionsData } from '../lib
 import { collectOpeningMetrics, normalizeOpeningMetrics, renderMetricsHtml } from '../lib/opening-digest-metrics.js';
 import { easternDateKey } from '../lib/us-equity-calendar.js';
 import { auditOpeningDigestArticle } from '../lib/opening-digest-content.js';
+import { openingDigestBodyParts, parseOpeningDigestMetadata } from '../lib/opening-digest-editorial.js';
 import { translateOpeningDigestPayload } from '../lib/opening-digest-translation.js';
 import { makeWechatOpeningDigestChannel } from './wechat-opening-digest.js';
 import { renderDiscordOpeningDigest } from './discord-opening-digest.js';
@@ -49,8 +50,13 @@ export function makeChannel({
         const articleAudit = auditOpeningDigestArticle({ article: articleSource, asOf: current });
         diagnostics.push(...articleAudit.warnings);
         const parsed = parseNewsletterArticle(articleSource, dateKey);
+        const editorialMeta = parseOpeningDigestMetadata(articleSource);
         if (parsed.title !== 'Zen Opening Digest' || parsed.edition !== dateKey) {
           throw publishError(`Opening Digest 标题或 edition 与当前美东日期不一致:${parsed.title} / ${parsed.edition}`);
+        }
+        const headline = editorialMeta.headline || 'Opening signals stay mixed';
+        if (headline.length > 36) {
+          throw publishError(`Opening Digest 动态标题超过 36 字符:${headline}`);
         }
         const sanitized = sanitizeUnsubscribeTags(parsed.body);
         if (sanitized.removed) diagnostics.push(`Opening Digest 正文已移除 ${sanitized.removed} 个退订 Liquid 标签`);
@@ -133,21 +139,25 @@ export function makeChannel({
         }
 
         const openingPayload = deepFreeze({
-          schemaVersion: 1,
+          schemaVersion: 2,
           dateKey,
-          article: { title: article.title, preheader: article.preheader, body: article.body },
+          article: { title: article.title, headline, preheader: article.preheader, body: article.body },
+          editorial: {
+            stance: editorialMeta.stance,
+            confidence: editorialMeta.confidence,
+            changeSummary: openingChangeSummary(article.body),
+          },
           metrics: metricResult.metrics,
           options: options || null,
           cover: { label: 'Opening Digest', dateLabel: displayDate(dateKey) },
         });
-        const contentHtml = [
-          renderMetricsHtml(metricResult.metrics),
-          renderMarkdown(article.body),
-          options ? renderOptionsHtml(options) : '',
-          renderDiscordInviteHtml(),
-        ].filter(Boolean).join('\n');
+        const contentHtml = renderOpeningDigestContentHtml({
+          body: article.body, metrics: metricResult.metrics, options,
+        });
         const body = renderNewsletterEmail({ ...article, edition: dateKey }, {
           ...cio, headerImageUrl, contentHtml, includeUnsubscribe: false,
+          displayTitle: headline,
+          publicationSubtitle: `Zen Opening Digest · ${displayDate(dateKey)}`,
           templateId: CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID,
         });
         assertRenderedTemplateMarker(body, CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID);
@@ -161,7 +171,7 @@ export function makeChannel({
           name,
           type: 'email',
           recipients: { and: [{ or: [{ segment: { id: digest.segmentId } }] }] },
-          subject: openingDigestNewsletterSubject(dateKey, { acceptance }),
+          subject: openingDigestNewsletterSubject(headline, { acceptance }),
           preheader_text: article.preheader,
           body,
           from: cio.from,
@@ -268,6 +278,32 @@ export function makeChannel({
   };
 }
 
+export function renderOpeningDigestContentHtml({ body, metrics = [], options = null } = {}) {
+  return [
+    renderOpeningNarrativeStart(body),
+    '<h2 style="margin:24px 0 10px;font-size:17px;line-height:1.35;font-weight:500;color:#08272b">Market snapshot</h2>',
+    renderMetricsHtml(metrics),
+    renderOpeningNarrativeSections(body),
+    options ? renderOptionsHtml(options) : '',
+    renderDiscordInviteHtml(),
+  ].filter(Boolean).join('\n');
+}
+
+function renderOpeningNarrativeStart(body) {
+  const { lead } = openingDigestBodyParts(body);
+  return lead ? renderMarkdown(`## Opening call\n\n${lead}`) : '';
+}
+
+function renderOpeningNarrativeSections(body) {
+  const { sections } = openingDigestBodyParts(body);
+  return renderMarkdown([...sections.entries()].map(([heading, content]) => `## ${heading}\n\n${content}`).join('\n\n'));
+}
+
+function openingChangeSummary(body) {
+  const lead = openingDigestBodyParts(body).lead;
+  return lead.split(/(?<=[.!?])\s+/).find((sentence) => /(?:prior|previous|last edition|initial baseline|material change)/i.test(sentence)) || '';
+}
+
 function renderDiscordInviteHtml() {
   return `<p style="margin:24px 0 0;padding-top:18px;border-top:1px solid #dcd8d5;font-size:14px"><a href="${OPENING_DIGEST_DISCORD_INVITE_URL}" style="color:#0b6d75;font-weight:500">Join us on Discord</a></p>`;
 }
@@ -345,9 +381,10 @@ export async function publishHistoricalOpeningDigestWechat({
     kind: 'Opening',
   } : null;
   const openingPayload = deepFreeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     dateKey,
-    article: { title: article.title, preheader: article.preheader, body: sanitizeUnsubscribeTags(article.body).body },
+    article: { title: article.title, headline: article.headline || 'Opening data, read unavailable', preheader: article.preheader, body: sanitizeUnsubscribeTags(article.body).body },
+    editorial: { stance: article.stance || 'neutral', confidence: article.confidence || 'low', changeSummary: openingChangeSummary(article.body) },
     metrics,
     options,
     cover: { label: 'Opening Digest', dateLabel: displayDate(dateKey) },
@@ -394,8 +431,8 @@ function openingDigestNewsletterName(dateKey, { acceptance = false, acceptanceId
   return acceptance ? `[TEST] ${base} · ${acceptanceId}` : base;
 }
 
-function openingDigestNewsletterSubject(dateKey, { acceptance = false } = {}) {
-  const base = `${OPENING_DIGEST_NEWSLETTER_TITLE} · ${displayDate(dateKey)}`;
+function openingDigestNewsletterSubject(headline, { acceptance = false } = {}) {
+  const base = `${String(headline || 'Opening data, read unavailable').trim()} | ${OPENING_DIGEST_NEWSLETTER_TITLE}`;
   return acceptance ? `[TEST] ${base}` : base;
 }
 

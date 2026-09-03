@@ -16,7 +16,10 @@ const commit = deployedCommit(root);
 const timestamp = easternTimeKey(new Date());
 const acceptanceId = `${commit.slice(0, 12)}-${timestamp}`;
 const workflow = { ...openingDigest, workDir };
-const migration = parseHistoricalMigrationArgs(process.argv.slice(2));
+const cliArgs = process.argv.slice(2);
+const testOnly = cliArgs.includes('--test-only');
+const migration = parseHistoricalMigrationArgs(cliArgs.filter((arg) => arg !== '--test-only'));
+if (testOnly && migration) throw new Error('--test-only cannot be combined with historical migration arguments');
 
 const generated = await runWriter({
   workflow,
@@ -35,16 +38,18 @@ const testResult = await channel.publish({
   acceptanceId,
 });
 assertVerifiedWechat(testResult, 'TEST');
-const formalResult = migration
-  ? await publishHistoricalOpeningDigestWechat({ ...migration, config })
-  : await channel.publish({
-    articlePath: generated.articlePath,
-    config,
-    workflow,
-    source: 'cron',
-    contentMode: generated.contentMode || 'editorial',
-  });
-assertVerifiedWechat(formalResult, 'formal');
+const formalResult = testOnly
+  ? null
+  : migration
+    ? await publishHistoricalOpeningDigestWechat({ ...migration, config })
+    : await channel.publish({
+      articlePath: generated.articlePath,
+      config,
+      workflow,
+      source: 'cron',
+      contentMode: generated.contentMode || 'editorial',
+    });
+if (formalResult) assertVerifiedWechat(formalResult, 'formal');
 const trace = JSON.parse(fs.readFileSync(generated.researchTracePath, 'utf8'));
 const universe = trace.openingDigestUniverse || {};
 console.log(JSON.stringify({
@@ -55,9 +60,9 @@ console.log(JSON.stringify({
   contentMode: generated.contentMode || trace.contentMode || 'editorial',
   sourceCount: generated.sources?.length || 0,
   testMediaId: testResult.mediaId,
-  formalMediaId: formalResult.mediaId,
+  formalMediaId: formalResult?.mediaId || null,
   testWechat: testResult.deliveries?.find((item) => item.destination === 'wechat') || null,
-  formalWechat: formalResult.deliveries?.find((item) => item.destination === 'wechat') || null,
+  formalWechat: formalResult?.deliveries?.find((item) => item.destination === 'wechat') || null,
   universeSize: universe.universeSize || 0,
   quoteCoverage: universe.quoteCoverage || null,
   priceMoverCount: universe.priceMovers?.length || 0,

@@ -283,6 +283,7 @@ function normalizeQuote(member, payload, asOf) {
     ticker: member.ticker,
     company: member.company,
     issuerKey: member.issuerKey,
+    group: member.group,
     value,
     prior,
     changePct: ((value - prior) / prior) * 100,
@@ -341,7 +342,7 @@ function quoteSource(item) {
     title: `${item.ticker} market quote`,
     url: item.sourceUrl,
     publishedDate: item.asOf,
-    text: `${item.ticker} (${item.company}) was ${signed(item.changePct)}% at ${item.asOf}, versus the prior regular close.`,
+    text: `${item.ticker} (${item.company}; tracked group: ${item.group}) was ${signed(item.changePct)}% at ${easternQuoteTime(item.asOf)}, versus the prior regular close. This observation establishes no catalyst or causal explanation.`,
     openingDigestKind: 'universe-price',
     specialist: true,
   };
@@ -364,7 +365,8 @@ Universe size: ${OPENING_DIGEST_UNIVERSE.length}. Price coverage: ${quotes.cover
 Price movers at or above 5% versus prior regular close: ${JSON.stringify(quotes.movers)}
 OIC universe matches: ${JSON.stringify(options.matches)}
 OIC IV triggers (IVX30 >= 60% or derived one-day increase >= 5 volatility points): ${JSON.stringify(options.triggers)}
-IV limitation: this is not a full-universe IV scan; it only covers tracked tickers that appear in the OIC Top 20.
+IV limitation: this is not a full-universe IV scan; it only covers tracked tickers that appear in the OIC Top 20. OIC co-occurrence establishes neither investor direction nor the cause of a price move.
+Tracked-universe limitation: these 72 names are not a broad-market breadth sample; describe only their participation or dispersion.
 Earnings calendar status: ${earningsCalendar.status || 'unavailable'}. Verification shortlist: ${JSON.stringify(earningsCalendar.shortlist || [])}
 The Earnings ahead section is rendered deterministically after writing. Do not create that heading, repeat its schedule as a catalyst, or infer an exact conference-call time from Yahoo BMO/AMC timing.
 Selection rules: prioritize material tracked-universe events; a price-only mover may be used as a timestamped fact, without causal interpretation or commentary about the absence of one; combine standalone IV signals into at most one catalyst; allow at most one genuinely material macro catalyst; accept explicit upgrades/downgrades but not price-target-only notes or unconfirmed rumors.`;
@@ -377,6 +379,13 @@ function group(id, tuples) {
   });
 }
 
+function easternQuoteTime(value) {
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short',
+    }).format(new Date(value));
+  } catch { return String(value || ''); }
+}
 function numeric(value) { return Number(String(value ?? '').replace(/[%,$]/g, '').replaceAll(',', '').trim()); }
 function signed(value) { return `${value >= 0 ? '+' : ''}${Number(value).toFixed(2)}`; }
 function emptyHistory() { return { appearances: 0, successfulCaptures: 0, consecutiveAppearances: 0, firstAppearanceInWindow: false }; }

@@ -138,6 +138,20 @@ CREATE TABLE IF NOT EXISTS opening_digest_iv_history (
 );
 CREATE INDEX IF NOT EXISTS idx_opening_digest_iv_ticker_date
   ON opening_digest_iv_history(ticker, session_date DESC);
+
+CREATE TABLE IF NOT EXISTS opening_digest_editorial_history (
+  session_date TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  headline TEXT NOT NULL,
+  stance TEXT NOT NULL,
+  confidence TEXT NOT NULL,
+  thesis TEXT NOT NULL,
+  change_summary TEXT NOT NULL,
+  signposts_json TEXT NOT NULL DEFAULT '[]',
+  published_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_opening_digest_editorial_published
+  ON opening_digest_editorial_history(session_date DESC);
 `;
 
 export function openStore(dbPath) {
@@ -502,6 +516,51 @@ export function openStore(dbPath) {
       `).all(...sessions);
       return { sessions, rows };
     },
+    recordOpeningDigestEditorialEdition({ sessionDate, runId, headline, stance, confidence, thesis, changeSummary = '', signposts = [], publishedAt = Date.now() }) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(sessionDate || ''))) throw new Error('Opening Digest editorial session date 无效');
+      if (!String(runId || '').trim() || !String(headline || '').trim() || !['constructive', 'neutral', 'defensive'].includes(stance)
+        || !['high', 'medium', 'low'].includes(confidence) || !String(thesis || '').trim()) {
+        throw new Error('Opening Digest editorial history 字段无效');
+      }
+      const transaction = db.transaction(() => {
+        const inserted = db.prepare(`
+          INSERT OR IGNORE INTO opening_digest_editorial_history
+            (session_date, run_id, headline, stance, confidence, thesis, change_summary, signposts_json, published_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          sessionDate, String(runId), String(headline).slice(0, 200), stance, confidence,
+          String(thesis).slice(0, 2000), String(changeSummary).slice(0, 600),
+          JSON.stringify((Array.isArray(signposts) ? signposts : []).map(String).slice(0, 5)), Number(publishedAt) || Date.now(),
+        );
+        db.prepare(`
+          DELETE FROM opening_digest_editorial_history
+          WHERE session_date NOT IN (
+            SELECT session_date FROM opening_digest_editorial_history ORDER BY session_date DESC LIMIT 20
+          )
+        `).run();
+        return inserted.changes === 1;
+      });
+      return transaction();
+    },
+    listOpeningDigestEditorialHistory({ limitSessions = 20 } = {}) {
+      const limit = Math.max(1, Math.min(20, Math.floor(Number(limitSessions) || 20)));
+      return db.prepare(`
+        SELECT session_date, run_id, headline, stance, confidence, thesis, change_summary, signposts_json, published_at
+        FROM opening_digest_editorial_history
+        ORDER BY session_date DESC
+        LIMIT ?
+      `).all(limit).map((row) => ({
+        sessionDate: row.session_date,
+        runId: row.run_id,
+        headline: row.headline,
+        stance: row.stance,
+        confidence: row.confidence,
+        thesis: row.thesis,
+        changeSummary: row.change_summary,
+        signposts: safeJsonArray(row.signposts_json),
+        publishedAt: row.published_at,
+      }));
+    },
     listPrunableRuns(before) {
       if (!Number.isFinite(before)) return [];
       return db.prepare(`
@@ -600,6 +659,11 @@ export function openStore(dbPath) {
     },
     close() { db.close(); },
   };
+}
+
+function safeJsonArray(value) {
+  try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : []; }
+  catch { return []; }
 }
 
 function ensureColumn(db, table, column, definition) {

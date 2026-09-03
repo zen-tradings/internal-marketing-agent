@@ -27,7 +27,12 @@ export function parseNewsletterArticle(markdown, defaultEdition = 'Vol. 1') {
   const edition = normalizeEdition(meta.edition || defaultEdition);
   const subject = meta.subject || `Zen Research from Zen Trading · ${edition} | ${title}`;
   const preheader = (meta.preheader || plainText(body)).slice(0, 140);
-  return { title, edition, subject, preheader, body };
+  return {
+    title, edition, subject, preheader, body,
+    headline: meta.headline || '',
+    stance: String(meta.stance || '').toLowerCase(),
+    confidence: String(meta.confidence || '').toLowerCase(),
+  };
 }
 
 export function renderNewsletterEmail(article, options = {}) {
@@ -39,6 +44,11 @@ export function renderNewsletterEmail(article, options = {}) {
   const contactEmail = safeEmail(options.contactEmail);
   const address = escapeHtml(NEWSLETTER_COMPANY_ADDRESS);
   const content = options.contentHtml || renderMarkdown(article.body);
+  const displayTitle = String(options.displayTitle || article.title);
+  const publicationSubtitle = String(options.publicationSubtitle || '').trim();
+  const subtitle = publicationSubtitle
+    ? `<p data-zen-publication-subtitle style="margin:-10px 0 20px;font-size:12px;line-height:1.45;letter-spacing:.04em;font-weight:500;color:#66787a">${escapeHtml(publicationSubtitle)}</p>`
+    : '';
   const unsubscribe = options.includeUnsubscribe === false
     ? ''
     : '<p style="margin:0 0 8px"><a href="{% unsubscribe_url %}" class="untracked" style="color:#173f43">Unsubscribe</a></p>';
@@ -70,7 +80,8 @@ export function renderNewsletterEmail(article, options = {}) {
       ${headerImage}
       <tr><td class="zen-email-content" style="padding:24px 16px">
         <p style="margin:0 0 14px;font-size:11px;letter-spacing:.12em;font-weight:600;color:#66787a">ZEN RESEARCH FROM ZEN TRADING · ${escapeHtml(article.edition.toUpperCase())}</p>
-        <h1 style="margin:0 0 20px;font-size:24px;line-height:1.25;font-weight:500;color:#08272b">${escapeHtml(article.title)}</h1>
+        <h1 style="margin:0 0 20px;font-size:24px;line-height:1.25;font-weight:500;color:#08272b">${escapeHtml(displayTitle)}</h1>
+        ${subtitle}
         <div style="font-size:14px;line-height:1.6;font-weight:300;color:#173f43">${content}</div>
         ${feedback}
       </td></tr>

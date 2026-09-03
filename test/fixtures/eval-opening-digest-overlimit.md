@@ -1,10 +1,25 @@
 ---
 title: Zen Opening Digest
+headline: This dynamic headline is much too long for any useful mobile subject line
+stance: bullish
+confidence: certain
+preheader: A malformed edition.
+edition: 2026-08-10
 ---
-## Today's catalysts
+One sentence only.
 
-- [One lonely catalyst](https://example.com/only) — short.
+## What matters today
 
-## Market read
+Only one paragraph repeats facts without analysis.
 
-One. Two. Three. Four. Five. Six. Seven sentences is too many for this section and it also keeps rambling on and on well past the word budget that the production auditor enforces for the market read block, which means this fixture must trip both the sentence-count limit and stay flagged. Eight. Nine.
+## Evidence and cross-currents
+
+MARA rose because options activity drove the price at 14:15 UTC.
+
+## Scenario map
+
+- **Base case —** One side only.
+
+## What to watch
+
+- One item

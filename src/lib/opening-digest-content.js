@@ -1,6 +1,7 @@
 import { easternDateKey, isUsEquitySession } from './us-equity-calendar.js';
 import { OPENING_DIGEST_UNIVERSE_GROUPS } from './opening-digest-universe.js';
 import { openingDigestEarningsResearchQuery } from './opening-digest-earnings.js';
+import { auditOpeningDigestInsight, parseOpeningDigestMetadata } from './opening-digest-editorial.js';
 
 const FRONTMATTER_RE = /^---\n[\s\S]*?\n---\n?/;
 const REQUIRED_HEADINGS = ["Today's catalysts", 'Market read'];
@@ -133,10 +134,17 @@ export function auditOpeningDigestArticle({
   asOf = new Date(),
   requireFreshSources = false,
 } = {}) {
+  if (parseOpeningDigestMetadata(article).headline) {
+    return auditModernOpeningDigestArticle({ article, research, asOf, requireFreshSources });
+  }
   const warnings = [];
   const body = String(article || '').replace(FRONTMATTER_RE, '').trim();
   const headings = [...body.matchAll(/^##\s+(.+?)\s*$/gm)].map((match) => match[1]);
-  const expectedHeadings = headings[0] === EARNINGS_HEADING ? [EARNINGS_HEADING, ...REQUIRED_HEADINGS] : REQUIRED_HEADINGS;
+  const expectedHeadings = headings[0] === EARNINGS_HEADING
+    ? [EARNINGS_HEADING, ...REQUIRED_HEADINGS]
+    : headings.at(-1) === EARNINGS_HEADING
+      ? [...REQUIRED_HEADINGS, EARNINGS_HEADING]
+      : REQUIRED_HEADINGS;
   if (JSON.stringify(headings) !== JSON.stringify(expectedHeadings)) {
     warnings.push(`Opening Digest 正文应按顺序包含可选 ## ${EARNINGS_HEADING}、## ${REQUIRED_HEADINGS[0]}、## ${REQUIRED_HEADINGS[1]}`);
   }
@@ -151,9 +159,11 @@ export function auditOpeningDigestArticle({
     ? ''
     : body.slice(marketReadStart + `## ${REQUIRED_HEADINGS[1]}`.length).trim();
   const earningsStart = body.indexOf(`## ${EARNINGS_HEADING}`);
+  const nextHeadingAfterEarnings = earningsStart < 0 ? -1 : body.slice(earningsStart + 3).search(/^##\s+/m);
+  const earningsEnd = nextHeadingAfterEarnings < 0 ? body.length : earningsStart + 3 + nextHeadingAfterEarnings;
   const earningsSection = earningsStart < 0 ? '' : body.slice(
     earningsStart + `## ${EARNINGS_HEADING}`.length,
-    catalystsHeadingAt < 0 ? body.length : catalystsHeadingAt,
+    earningsEnd,
   ).trim();
   const earningsLines = earningsSection.split('\n').map((line) => line.trim()).filter(Boolean);
   const earningsLinks = [...earningsSection.matchAll(/\[[^\]]+]\((https?:\/\/[^\s)]+)\)/g)].map((match) => match[1]);
@@ -310,6 +320,46 @@ export function openingDigestResearchQueries(asOf = new Date(), earningsCalendar
 export function openingDigestSearchInput(asOf = new Date()) {
   const date = easternDateKey(asOf);
   return `US equity opening digest for ${date}: market-moving developments published since the previous regular close, including macro data, rates, earnings, guidance, and large-cap catalysts.`;
+}
+
+function auditModernOpeningDigestArticle({ article, research, asOf, requireFreshSources }) {
+  const insight = auditOpeningDigestInsight(article);
+  const warnings = [...insight.warnings];
+  const body = String(article || '').replace(FRONTMATTER_RE, '').trim();
+  const editorial = body.replace(/^## Earnings ahead[\s\S]*$/m, '').trim();
+  const links = [...editorial.matchAll(/\[[^\]]+]\((https?:\/\/[^\s)]+)\)/g)].map((match) => match[1]);
+  if (new Set(links.map(normalizedUrl)).size !== links.length) warnings.push('Opening Digest 分析正文来源链接存在重复');
+  if (requireFreshSources) {
+    const sources = new Map(research.filter((source) => source?.url).map((source) => [normalizedUrl(source.url), source]));
+    const cutoff = previousRegularClose(asOf);
+    for (const [index, link] of links.entries()) {
+      const source = sources.get(normalizedUrl(link));
+      if (!source) {
+        warnings.push(`Opening Digest 第 ${index + 1} 个分析链接未匹配到本次检索来源`);
+        continue;
+      }
+      const published = new Date(source.publishedDate || '');
+      if (!Number.isFinite(published.getTime())) warnings.push(`Opening Digest 第 ${index + 1} 个分析链接缺少可验证的发布日期`);
+      else if (published < cutoff || published.getTime() > asOf.getTime() + 5 * 60_000) warnings.push(`Opening Digest 第 ${index + 1} 个分析链接不在上一交易日收盘至当前的时间窗口内`);
+    }
+  }
+  const earnings = body.match(/^## Earnings ahead\s*\n([\s\S]*)$/m)?.[1] || '';
+  const earningsLinks = [...earnings.matchAll(/\[[^\]]+]\((https?:\/\/[^\s)]+)\)/g)].map((match) => match[1]);
+  return {
+    warnings,
+    stats: { ...insight.stats, links, earningsLinks, earningsPresent: /(^|\n)## Earnings ahead\s*$/m.test(body) },
+    links,
+    earningsLinks,
+    earningsPresent: /(^|\n)## Earnings ahead\s*$/m.test(body),
+    earningsCount: earningsLinks.length,
+    catalystCount: insight.stats.mattersCount,
+    catalystWordCounts: [],
+    marketReadLength: 0,
+    marketReadWordCount: insight.stats.narrativeWords,
+    marketReadSentenceCount: insight.stats.leadSentences,
+    marketReadParagraphCount: 1,
+    marketReadStructureValid: insight.stats.scenarioComplete,
+  };
 }
 
 function visibleMarkdownText(markdown) {

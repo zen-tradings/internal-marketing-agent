@@ -111,7 +111,7 @@ export function decorateOpeningDigestWithEarnings(article, { calendar, research 
   const paragraph = selection.events.length
     ? renderEarningsParagraph(selection.events)
     : 'No major U.S.-listed earnings events were selected for the remainder of this week.';
-  return prependBodySection(cleaned, `## Earnings ahead\n${paragraph}`);
+  return appendBodySection(cleaned, `## Earnings ahead\n${paragraph}`);
 }
 
 export function selectEarningsHighlights(calendar, research = [], asOf = new Date()) {
@@ -386,11 +386,8 @@ function formatEnglishDate(dateKey) {
   return new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(date);
 }
 
-function prependBodySection(article, section) {
-  const frontmatter = article.match(/^---\n[\s\S]*?\n---\n?/);
-  if (!frontmatter) return `${section}\n\n${article.trim()}\n`;
-  const body = article.slice(frontmatter[0].length).trim();
-  return `${frontmatter[0]}${section}\n\n${body}\n`;
+function appendBodySection(article, section) {
+  return `${String(article || '').trim()}\n\n${section}\n`;
 }
 
 function removeGeneratedEarningsSection(article) {

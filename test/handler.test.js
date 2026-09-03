@@ -210,6 +210,40 @@ test('macro 高风险推断保留时发 Slack 提醒但不阻断草稿', async (
   assert.equal(notifier.successCalls.length, 1);
 });
 
+test('Opening Digest 只在正式 cron 邮件成功后记录结构化编辑历史', async () => {
+  const store = makeStore({ created_at: Date.now() });
+  const recorded = [];
+  store.listOpeningDigestEditorialHistory = () => [];
+  store.recordOpeningDigestEditorialEdition = (entry) => { recorded.push(entry); return true; };
+  const workflow = {
+    id: 'opening-digest', mode: 'newsletter', channel: 'customerio-opening-digest', retries: 0,
+  };
+  const channel = {
+    templateId: FIXED_DRAFT_TEMPLATE_IDS['customerio-opening-digest'], templateLocked: true,
+    async publish() { return { mediaId: 'customerio-newsletter:history', title: 'Digest' }; },
+  };
+  const runWriter = async () => ({
+    ok: true, articlePath: '/tmp/opening-history.md', researchTracePath: '',
+    openingDigestEditorialState: {
+      sessionDate: '2026-08-10', headline: 'Rates test conviction', stance: 'neutral', confidence: 'medium',
+      thesis: 'Rates remain the binding constraint.', changeSummary: 'Initial baseline.', signposts: ['10Y UST'],
+    },
+  });
+  const notifier = makeNotifier();
+  const { deps } = baseDeps({
+    store, notifier, runWriter,
+    workflows: { 'opening-digest': workflow },
+    channels: { 'customerio-opening-digest': channel },
+  });
+  await makeHandler(deps)({ id: 'history-cron', workflowId: 'opening-digest', input: 'opening', source: 'cron' });
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].runId, 'history-cron');
+
+  store.setMediaId('reset', '', '');
+  await makeHandler(deps)({ id: 'history-slack-1234', workflowId: 'opening-digest', input: 'opening', source: 'slack' });
+  assert.equal(recorded.length, 1, '人工 TEST 不得污染正式编辑历史');
+});
+
 test('Opening Digest 可发送降级只写 trace，不发送 Slack warning', async () => {
   const workflows = {
     'opening-digest': {

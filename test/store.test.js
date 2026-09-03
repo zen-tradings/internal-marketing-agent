@@ -255,6 +255,29 @@ test('Opening Digest OIC 历史同日幂等并只保留最近 60 个成功交易
   assert.equal(store.listOpeningDigestIvHistory().rows.some((row) => row.session_date === latest && row.ticker === 'META'), true);
 });
 
+test('Opening Digest 正式编辑判断同日幂等并只保留最近 20 个交易日', () => {
+  const store = openStore(':memory:');
+  for (let index = 0; index < 21; index++) {
+    const sessionDate = `2026-08-${String(index + 1).padStart(2, '0')}`;
+    assert.equal(store.recordOpeningDigestEditorialEdition({
+      sessionDate, runId: `run-${index}`, headline: `Headline ${index}`,
+      stance: index % 2 ? 'constructive' : 'neutral', confidence: 'medium',
+      thesis: `Thesis ${index}.`, changeSummary: index ? 'Changed.' : 'Initial baseline.',
+      signposts: ['VIX', '10Y UST'], publishedAt: index + 1,
+    }), true);
+  }
+  const history = store.listOpeningDigestEditorialHistory({ limitSessions: 20 });
+  assert.equal(history.length, 20);
+  assert.equal(history[0].sessionDate, '2026-08-21');
+  assert.equal(history.some((item) => item.sessionDate === '2026-08-01'), false);
+  assert.deepEqual(history[0].signposts, ['VIX', '10Y UST']);
+  assert.equal(store.recordOpeningDigestEditorialEdition({
+    sessionDate: '2026-08-21', runId: 'other', headline: 'Do not overwrite',
+    stance: 'defensive', confidence: 'low', thesis: 'Other thesis.',
+  }), false);
+  assert.equal(store.listOpeningDigestEditorialHistory()[0].headline, 'Headline 20');
+});
+
 test('过期任务只选择终态记录并和数据库清理保持一致', () => {
   const store = openStore(':memory:');
   store.createRun({ id: 'done-old', workflowId: 'wechat', source: 'test', input: 'x', notify: {} });

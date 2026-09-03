@@ -136,7 +136,7 @@ test('official IR can confirm one exact call time; Yahoo-only rows stay expected
     calendar, research, asOf: new Date('2026-08-12T17:00:00Z'),
   });
   assert.match(decorated, /^## Earnings ahead$/m);
-  assert.ok(decorated.indexOf('## Earnings ahead') < decorated.indexOf("## Today's catalysts"));
+  assert.ok(decorated.indexOf('## Earnings ahead') > decorated.indexOf('## Market read'));
   assert.match(decorated, new RegExp(`\\[AAA]\\(${sourceUrl.replaceAll('.', '\\.') }\\) after close; call 4:30 p\\.m\\. ET`));
   assert.match(decorated, /\[NVDA]\([^)]*finance\.yahoo[^)]*\) after close \(expected\)/);
   assert.equal((decorated.match(/^## Earnings ahead$/gm) || []).length, 1);

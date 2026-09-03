@@ -726,6 +726,67 @@ function openingWorkflow(overrides = {}) {
   });
 }
 
+test('Opening Digest production planner selects evidence before the thesis-first writer', async () => {
+  const workflow = openingWorkflow({ editorialPlanning: true, factReview: false });
+  const config = baseConfig();
+  config.writer.plannerModel = 'planner/model';
+  const cleanDraft = `---
+title: Zen Opening Digest
+headline: Yields test tech conviction
+stance: neutral
+confidence: medium
+preheader: Cross-asset signals remain divided.
+edition: 2026-08-10
+---
+The opening tone is Neutral because signals conflict. Long yields constrain duration while lower oil offsets part of that pressure. Initial baseline.
+
+## What matters today
+
+**Rates remain the constraint.** [Source](https://example.com/a) reports firm yields, which keeps confirmation dependent on a retreat in long rates.
+
+**The counterweight is narrower.** Lower oil would help inflation sensitivity, but it does not establish a broad risk-on signal.
+
+## Evidence and cross-currents
+
+Firm yields constrain the read, while lower oil is a counter-current; the evidence therefore supports medium rather than high confidence.
+
+## Scenario map
+
+- **Base case —** Easing yields with stable volatility would improve the opening read.
+- **Counter-case —** Rising yields with firmer volatility would invalidate that improvement.
+
+## What to watch
+
+- Whether long yields ease
+- Whether volatility confirms index resilience
+- Whether participation broadens`;
+  const models = [];
+  const result = await runWriter({
+    workflow, input: 'opening', config,
+    fetchFn: async (url, options = {}) => {
+      if (String(url).endsWith('/search')) return jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/a', publishedDate: new Date().toISOString(), text: 'Firm yields constrain duration-sensitive equities.' }] });
+      const request = JSON.parse(options.body); models.push(request.model);
+      if (models.length === 1) return jsonResponse({ choices: [{ message: { content: JSON.stringify({
+        dominant_theme: 'firm yields constrain duration', stance: 'neutral', confidence: 'medium',
+        supporting_evidence: [{ point: 'Firm yields are a constraint.', source_ids: ['OD1'] }],
+        contrary_evidence: [{ point: 'Signals conflict.', source_ids: ['OD1'] }],
+        selected_source_ids: ['OD1'], change_from_prior: { changed: false, summary: 'Initial baseline.' },
+        base_case: { condition: 'Yields ease', expected_read: 'Tone improves', indicators: ['10Y'], source_ids: ['OD1'] },
+        counter_case: { condition: 'Yields rise', expected_read: 'Tone weakens', indicators: ['10Y'], source_ids: ['OD1'] },
+        signposts: [{ observable: '10Y yield', source_ids: ['OD1'] }], headline_candidates: ['Yields test tech conviction'],
+      }) } }] });
+      return jsonResponse({ choices: [{ message: { content: cleanDraft } }] });
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(models, ['planner/model', 'm']);
+  assert.match(fs.readFileSync(result.articlePath, 'utf8'), /headline: Yields test tech conviction/);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.openingDigestEditorialPlan.status, 'model');
+  assert.equal(trace.openingDigestResearchBudget.selectedSourceCount, 1);
+  assert.equal(result.openingDigestEditorialState.stance, 'neutral');
+});
+
 test('Opening Digest 零研究结果时写出确定性数据版并记录 trace', async () => {
   const workflow = openingWorkflow();
   const result = await runWriter({

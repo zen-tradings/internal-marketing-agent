@@ -32,8 +32,9 @@ NVIDIA Corporation remains the central condition; 2026 guidance is unchanged.`;
 
 function payload() {
   return {
-    schemaVersion: 1, dateKey: '2026-08-10',
-    article: { title: 'Zen Opening Digest', preheader: 'Morning market signals.', body: BODY },
+    schemaVersion: 2, dateKey: '2026-08-10',
+    article: { title: 'Zen Opening Digest', headline: 'Rates test market conviction', preheader: 'Morning market signals.', body: BODY },
+    editorial: { stance: 'neutral', confidence: 'medium', changeSummary: 'Initial baseline.' },
     metrics: ['SPY', 'QQQ', 'IWM', 'VIX', '2Y UST', '10Y UST', 'DXY', 'WTI', 'Gold'].map((label, index) => ({
       label, symbol: label, value: 100 + index, changePct: index % 2 ? -1.25 : 1.25,
       ...(label === '2Y UST' ? { sourceNote: '2Y UST is the latest available U.S. Treasury daily par yield.' } : {}),
@@ -59,6 +60,7 @@ function translated(source = payload()) {
     translations: translationUnits(source).map((unit) => ({
       id: unit.id, kind: unit.kind, source: unit.text,
       text: ({
+        headline: '利率考验市场信心',
         preheader: '早盘市场信号。',
         'body-1': '财报预告',
         'body-2': '**8月10日 周一：** [NVDA](https://finance.yahoo.com/calendar/earnings) 盘后（预计）',
@@ -306,7 +308,7 @@ test('OIC 时点与归属用确定性中文前缀保留原始数字、时区和�
   assert.equal(result.translations.find((unit) => unit.id === 'oic-attribution').text, '数据由 IVolatility 提供');
 });
 
-test('中文微信 HTML 锁定 @7、9 格行情、OIC 20×8 且低于官方大小限制', () => {
+test('中文微信 HTML 锁定新版模板、动态副标题、9 格行情与 OIC 20×8', () => {
   const source = payload(); const translation = translated(source);
   const html = renderWechatOpeningDigestHtml({ source, payload: source, translation, images: { header: 'https://img/h', survey: 'https://img/s', footer: 'https://img/f' } });
   assert.match(html, new RegExp(`data-zen-draft-template="${WECHAT_OPENING_DIGEST_TEMPLATE_ID.replace('/', '\\/')}"`));
@@ -326,8 +328,8 @@ test('中文微信 HTML 锁定 @7、9 格行情、OIC 20×8 且低于官方大�
   const survey = document.querySelector('[data-zen-role="survey"]');
   assert.ok(discord.compareDocumentPosition(survey) & 4, 'Discord 链接必须位于问卷图与二维码封底之前');
   assert.ok(discord.compareDocumentPosition(document.querySelector('[data-zen-oic]')) & 2, 'Discord 链接必须位于 OIC 区块之后');
-  const validation = validateWechatOpeningDigestDraft({ content: { news_item: [{ title: 'Zen Research日报 · 2026-08-10', digest: '早盘市场信号。', content: html }] } }, {
-    title: 'Zen Research日报 · 2026-08-10', payload: source, translation,
+  const validation = validateWechatOpeningDigestDraft({ content: { news_item: [{ title: '利率考验市场信心', digest: '早盘市场信号。', content: html }] } }, {
+    title: '利率考验市场信心', payload: source, translation,
   });
   assert.deepEqual(validation.errors, []);
 });
@@ -352,9 +354,9 @@ test('微信财报预告将同一天的每个 ticker 拆为独立视觉行，邮
   assert.match(rows[1].textContent, /AMD/);
   assert.equal(document.querySelector('[data-block-id="body-2"]').textContent, stripMarkdownForTest(entry.text));
   const readback = validateWechatOpeningDigestDraft({ content: { news_item: [{
-    title: 'Zen Research日报 · 2026-08-10', digest: '早盘市场信号。',
+    title: '利率考验市场信心', digest: '早盘市场信号。',
     content: html.replace(/<\/p> <p/g, '</p><p'),
-  }] } }, { title: 'Zen Research日报 · 2026-08-10', payload: source, translation });
+  }] } }, { title: '利率考验市场信心', payload: source, translation });
   assert.deepEqual(readback.errors, []);
 });
 
@@ -376,7 +378,7 @@ test('微信回读前两次坏稿删除重建，第三次合格稿保留', async
   assert.equal(result.status, 'verified');
   assert.equal(result.mediaId, 'm3');
   assert.deepEqual(deleted, ['m1', 'm2']);
-  assert.equal(result.title, '[测试] Zen 开市日报 · 08-10');
+  assert.equal(result.title, '[测试] 利率考验市场信心');
 });
 
 test('draft/get 暂不可用时保留唯一稿并标记 unverified', async () => {
@@ -393,7 +395,7 @@ test('draft/get 暂不可用时保留唯一稿并标记 unverified', async () =>
   });
   const result = await channel.publish({ payload: payload(), translation: translated(), config: config() });
   assert.equal(result.status, 'unverified');
-  assert.equal(result.title, 'Zen Research日报 · 2026-08-10');
+  assert.equal(result.title, '利率考验市场信心');
   assert.equal(created, 1);
   assert.equal(deleted, 0);
 });
@@ -441,7 +443,7 @@ test('第三次回读仍不一致时保留最新稿并返回精确字段差异',
 test('320/375/390/430px Chromium 无横向溢出、裁切，长公司名可换行', async (t) => {
   const executablePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   if (!fs.existsSync(executablePath)) { t.skip('Chrome unavailable'); return; }
-  const html = renderWechatOpeningDigestHtml({ payload: payload(), translation: translated(), images: { header: 'https://img/h', survey: 'https://img/s', footer: 'https://img/f' } });
+  const html = renderWechatOpeningDigestHtml({ payload: payload(), translation: translated(), images: {} });
   const browser = await chromium.launch({ executablePath, headless: true });
   t.after(() => browser.close());
   for (const width of [320, 375, 390, 430]) {

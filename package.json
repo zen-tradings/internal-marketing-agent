@@ -27,6 +27,7 @@
     "deploy:digitalocean": "node scripts/deploy-digitalocean.mjs",
     "accept:macro": "node scripts/run-macro-acceptance.mjs",
     "preview:newsletter": "node scripts/preview-newsletter.mjs",
+    "preview:opening-digest": "node scripts/preview-opening-digest.mjs",
     "eval:newsletter": "node scripts/eval-newsletter.mjs",
     "eval:run": "node scripts/eval-run.mjs",
     "eval:harvest": "node scripts/eval-harvest.mjs",

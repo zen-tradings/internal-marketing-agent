@@ -26,7 +26,8 @@ export function makeWechatOpeningDigestChannel({
     templateLocked: true,
     async publish({ payload, translation, config, acceptance = false }) {
       const activeApi = api || createWechatApi({ timeoutMs: config.wechat.timeoutMs });
-      const title = acceptance ? `[测试] Zen 开市日报 · ${payload.dateKey.slice(5)}` : `Zen Research日报 · ${payload.dateKey}`;
+      const translatedHeadline = translationMap(translation).get('headline')?.text || payload.article.headline || '开市数据可用，判断暂缺';
+      const title = acceptance ? `[测试] ${translatedHeadline}` : translatedHeadline;
       const cover = await renderCover({
         dateLabel: chineseDate(payload.dateKey), label: '开市日报',
         executablePath: config.openingDigest.browserExecutablePath,
@@ -82,7 +83,7 @@ export function makeWechatOpeningDigestChannel({
 
 export function renderWechatOpeningDigestHtml({ payload, translation, images = {} }) {
   const translated = translationMap(translation);
-  const bodyBlocks = renderNarrative(payload.article.body, translated);
+  const narrative = renderNarrative(payload.article.body, translated);
   const metrics = renderMetrics(payload.metrics || [], translated);
   const options = payload.options ? renderOptions(payload.options, translated) : '';
   // WeChat forbids off-site hrefs, so the fixed Discord invite is plain text.
@@ -90,7 +91,8 @@ export function renderWechatOpeningDigestHtml({ payload, translation, images = {
   // survey/QR tail images so the fixed tail images still close the article.
   const discord = `<p data-zen-section="discord" style="margin:20px 0 0;padding-top:16px;border-top:1px solid #e4e0dc;font-size:13px;color:#66787a">加入 Zen Discord 社区：${escapeHtml(OPENING_DIGEST_DISCORD_INVITE_URL)}</p>`;
   const image = (src, role) => src ? `<p data-zen-role="${role}" style="margin:0"><img src="${escapeAttr(src)}" style="display:block;width:100%;height:auto" alt=""></p>` : '';
-  return `<section data-zen-draft-template="${WECHAT_OPENING_DIGEST_TEMPLATE_ID}" style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;color:#173f43;font-size:15px;line-height:1.75;word-break:break-word">${image(images.header, 'header')}<h2 data-zen-section="market" style="margin:22px 0 9px;font-size:18px;color:#08272b">市场快照</h2>${metrics}${bodyBlocks}${options}${discord}${image(images.survey, 'survey')}${image(images.footer, 'footer')}</section>`;
+  const subtitle = `<p data-zen-section="subtitle" style="margin:18px 0 6px;font-size:12px;letter-spacing:.04em;font-weight:500;color:#66787a">Zen Research 日报 · ${escapeHtml(payload.dateKey)}</p>`;
+  return `<section data-zen-draft-template="${WECHAT_OPENING_DIGEST_TEMPLATE_ID}" style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;color:#173f43;font-size:15px;line-height:1.75;word-break:break-word">${image(images.header, 'header')}${subtitle}<h2 data-zen-section="call" style="margin:18px 0 9px;font-size:18px;color:#08272b">开市判断</h2>${narrative.lead}<h2 data-zen-section="market" style="margin:22px 0 9px;font-size:18px;color:#08272b">市场快照</h2>${metrics}${narrative.sections}${options}${discord}${image(images.survey, 'survey')}${image(images.footer, 'footer')}</section>`;
 }
 
 export function validateWechatOpeningDigestDraft(saved, { title, payload, translation }) {
@@ -102,7 +104,9 @@ export function validateWechatOpeningDigestDraft(saved, { title, payload, transl
   const expectedDigest = translationMap(translation).get('preheader')?.text || '';
   if (expectedDigest && String(article.digest || '') !== expectedDigest) errors.push(`摘要:期望“${expectedDigest}”，实际“${article.digest || ''}”`);
   const document = new JSDOM(`<body>${article.content || ''}</body>`).window.document;
-  const expectedSections = ['市场快照', ...translation.translations.filter((item) => item.kind === 'heading').map((item) => stripInlineMarkdown(item.text)), ...(payload.options ? ['期权成交量趋势'] : [])];
+  const subtitle = document.querySelector('[data-zen-section="subtitle"]')?.textContent || '';
+  if (!subtitle.includes(`Zen Research 日报 · ${payload.dateKey}`)) errors.push('固定中文副标题缺失或被改写');
+  const expectedSections = ['开市判断', '市场快照', ...translation.translations.filter((item) => item.kind === 'heading').map((item) => stripInlineMarkdown(item.text)), ...(payload.options ? ['期权成交量趋势'] : [])];
   const sectionOrder = [...document.querySelectorAll('h2')].map((node) => normalizeText(node.textContent));
   if (sectionOrder.join('|') !== expectedSections.join('|')) errors.push(`区块顺序:期望 ${expectedSections.join('→')}，实际 ${sectionOrder.join('→')}`);
   const marketTable = document.querySelector('[data-zen-market-grid]')
@@ -181,20 +185,27 @@ function renderMetrics(metrics, translated) {
 function renderNarrative(markdown, translated) {
   const lines = String(markdown || '').split(/\r?\n/).filter((line) => line.trim());
   let section = '';
-  const parts = [];
+  let seenHeading = false;
+  const lead = [];
+  const sections = [];
   lines.forEach((line, index) => {
     const id = `body-${index + 1}`; const unit = translated.get(id); if (!unit) return;
     const heading = /^#{1,6}\s+/.test(line); const list = /^\s*[-*+]\s+/.test(line);
+    let html;
     if (heading) {
+      seenHeading = true;
       section = unit.source === 'Earnings ahead' ? 'earnings'
-        : unit.source === "Today's catalysts" ? 'catalysts'
-          : unit.source === 'Market read' ? 'read' : `body-${index + 1}`;
-      parts.push(`<h2 data-zen-section="${section}" data-block-id="${id}" style="margin:22px 0 9px;font-size:18px;color:#08272b">${inlineMarkup(unit.text)}</h2>`);
-    } else if (list) parts.push(`<p data-block-id="${id}" style="margin:6px 0 6px 1em;text-indent:-1em">• ${inlineMarkup(unit.text)}</p>`);
-    else if (section === 'earnings') parts.push(renderEarningsPreviewLines(id, unit.text));
-    else parts.push(`<p data-block-id="${id}" style="margin:8px 0">${inlineMarkup(unit.text)}</p>`);
+        : unit.source === 'What matters today' ? 'matters'
+          : unit.source === 'Evidence and cross-currents' ? 'evidence'
+            : unit.source === 'Scenario map' ? 'scenario'
+              : unit.source === 'What to watch' ? 'watch' : `body-${index + 1}`;
+      html = `<h2 data-zen-section="${section}" data-block-id="${id}" style="margin:22px 0 9px;font-size:18px;color:#08272b">${inlineMarkup(unit.text)}</h2>`;
+    } else if (list) html = `<p data-block-id="${id}" style="margin:6px 0 6px 1em;text-indent:-1em">• ${inlineMarkup(unit.text)}</p>`;
+    else if (section === 'earnings') html = renderEarningsPreviewLines(id, unit.text);
+    else html = `<p data-block-id="${id}" style="margin:8px 0">${inlineMarkup(unit.text)}</p>`;
+    (seenHeading ? sections : lead).push(html);
   });
-  return parts.join('');
+  return { lead: lead.join(''), sections: sections.join('') };
 }
 
 function renderEarningsPreviewLines(id, text) {

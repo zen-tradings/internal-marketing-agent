@@ -30,6 +30,12 @@ import {
   OPENING_DIGEST_UNIVERSE_GROUPS,
 } from '../src/lib/opening-digest-universe.js';
 import {
+  auditOpeningDigestInsight,
+  buildOpeningDigestPlanningPrompt,
+  normalizeOpeningDigestPlan,
+  openingDigestSourceIds,
+} from '../src/lib/opening-digest-editorial.js';
+import {
   compactOpeningDigestArticle,
   openingDigestResearchQueries,
   openingDigestSearchInput,
@@ -52,6 +58,38 @@ edition: 2026-08-10
 
 ## Market read
 A restrained opening read depends on participation holding through the first hour. Breadth provides the main validation condition for that interpretation. A sharp reversal in participation would invalidate it.`;
+
+const INSIGHT_ARTICLE = `---
+title: Zen Opening Digest
+headline: Yields test tech conviction
+stance: neutral
+confidence: medium
+preheader: Falling oil offsets firm yields, leaving confirmation to equity participation.
+edition: 2026-08-10
+---
+The opening tone is Neutral because cross-asset signals do not point in one direction. Lower oil is supportive, while firm long yields still constrain duration-sensitive equities. Initial baseline.
+
+## What matters today
+
+**Rates remain the binding constraint.** The [Treasury move](https://example.com/a) matters because sustained long yields would keep valuation pressure concentrated in duration-sensitive shares; a retreat would weaken that reading.
+
+**Energy supplies the counterweight.** The [oil move](https://example.com/b) reduces one inflationary pressure, but it does not by itself establish a broad risk-on regime.
+
+## Evidence and cross-currents
+
+The rate and oil signals offset each other, while [tracked-universe participation](https://example.com/c) is too narrow to establish whole-market breadth. That tension keeps confidence medium rather than high.
+
+## Scenario map
+
+- **Base case —** A stable VIX and easing long yields would confirm a more constructive opening read.
+- **Counter-case —** Renewed yield pressure alongside a rising VIX would invalidate that improvement.
+
+## What to watch
+
+- Whether the 10Y yield holds its opening range
+- Whether VIX confirms or contradicts index resilience
+- Whether participation broadens beyond isolated tracked names
+`;
 
 const DATA_ONLY_ARTICLE = `---
 title: Zen Opening Digest
@@ -258,10 +296,41 @@ test('universe context emits prompt sources and a reusable OIC artifact without 
   assert.equal(context.artifact.quotes.coverage.available, 72);
   assert.equal(context.artifact.options.data.rows.length, 20);
   assert.deepEqual(context.sources.map((source) => source.openingDigestKind), ['universe-price', 'universe-iv']);
-  assert.equal(context.sources[0].text, 'META (Meta Platforms) was +6.00% at 2026-08-10T14:15:00.000Z, versus the prior regular close.');
-  assert.doesNotMatch(context.sources[0].text, /cause|reason|asserted/i);
+  assert.equal(context.sources[0].text, 'META (Meta Platforms; tracked group: cloud-data-centers-software) was +6.00% at 10:15:00 AM EDT, versus the prior regular close. This observation establishes no catalyst or causal explanation.');
+  assert.match(context.sources[0].text, /no catalyst or causal explanation/i);
   assert.match(context.promptText, /not a full-universe IV scan/);
   assert.equal(recorded[0].status, 'success');
+});
+
+test('opening editorial planner keeps only real source IDs and an honest no-expectation fallback', () => {
+  const research = openingDigestSourceIds([
+    { title: 'Macro', url: 'https://example.com/a', openingDigestKind: 'macro', text: 'Yields were firm.' },
+    { title: 'Quote', url: 'https://example.com/b', openingDigestKind: 'universe-price', text: 'A stock moved.' },
+  ]);
+  const prompt = buildOpeningDigestPlanningPrompt({ research, asOf: new Date('2026-08-10T14:15:00Z') });
+  assert.match(prompt, /after the U\.S\. cash open, not premarket/);
+  assert.match(prompt, /does not prove direction/);
+  const plan = normalizeOpeningDigestPlan({
+    stance: 'neutral', confidence: 'medium', selected_source_ids: ['OD1', 'BAD'],
+    priced_expectation: { status: 'supported', text: 'Observed expectation', source_ids: ['BAD'] },
+    contrary_evidence: [{ point: 'Firm yields are a counterweight.', source_ids: ['OD1'] }],
+  }, research, []);
+  assert.deepEqual(plan.selected_source_ids, ['OD1']);
+  assert.deepEqual(plan.priced_expectation.source_ids, []);
+  assert.equal(plan.change_from_prior.summary, 'Initial baseline.');
+});
+
+test('new Opening Digest contract is thesis-first and rejects sample failure modes', () => {
+  const clean = auditOpeningDigestInsight(INSIGHT_ARTICLE);
+  assert.deepEqual(clean.warnings, []);
+  assert.equal(clean.stats.scenarioComplete, true);
+  const bad = INSIGHT_ARTICLE
+    .replace('Yields test tech conviction', 'This headline is far too long to work on a mobile email subject line')
+    .replace('10Y yield holds its opening range', 'MARA rose because options activity drove the price at 14:15 UTC');
+  const audit = auditOpeningDigestInsight(bad);
+  assert.ok(audit.warnings.some((item) => /动态标题/.test(item)));
+  assert.ok(audit.warnings.some((item) => /UTC/.test(item)));
+  assert.ok(audit.warnings.some((item) => /OIC\/IV/.test(item)));
 });
 
 test('opening content rules are diagnostics rather than hard gates', () => {
@@ -428,6 +497,18 @@ test('opening cover locks the supplied artwork and overlays only digest name and
   assert.doesNotMatch(html, /radial-gradient|class="brand"|SUPPLY CHAINS/);
 });
 
+test('dynamic headline becomes recipient subject and H1 while fixed publication title is the subtitle', async () => {
+  const requests = [];
+  const { channel } = standardChannel({ requests, channel: { readArticle: async () => INSIGHT_ARTICLE } });
+  await channel.publish({ articlePath: '/tmp/article.md', config: config(), source: 'manual' });
+  const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
+  assert.equal(create.body.subject, 'Yields test tech conviction | Zen Opening Digest');
+  assert.match(create.body.body, />Yields test tech conviction<\/h1>/);
+  assert.match(create.body.body, /data-zen-publication-subtitle[^>]*>Zen Opening Digest · August 10, 2026<\/p>/);
+  assert.ok(create.body.body.indexOf('Opening call') < create.body.body.indexOf('Market snapshot'));
+  assert.ok(create.body.body.indexOf('Market snapshot') < create.body.body.indexOf('What matters today'));
+});
+
 test('complete digest renders template, address, options and schedules without contents readback', async () => {
   const requests = [];
   const uploads = [];
@@ -443,8 +524,8 @@ test('complete digest renders template, address, options and schedules without c
   assert.deepEqual(uploads, ['opening-digest-cover-2026-08-10.png']);
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
   assert.equal(create.body.name, 'Zen Opening Digest · 2026-08-10');
-  assert.equal(create.body.subject, 'Zen Opening Digest · August 10, 2026');
-  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@7"/);
+  assert.equal(create.body.subject, 'Opening signals stay mixed | Zen Opening Digest');
+  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@8"/);
   assert.match(create.body.body, /href="https:\/\/example\.com\/a"/, '英文邮件必须继续保留来源链接');
   assert.match(create.body.body, new RegExp(`href="${OPENING_DIGEST_DISCORD_INVITE_URL}"[^>]*>Join us on Discord</a>`));
   assert.equal(create.body.body.split(OPENING_DIGEST_DISCORD_INVITE_URL).length - 1, 1);
@@ -742,7 +823,7 @@ test('production acceptance uses an explicit TEST identity and sends immediately
   });
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
   assert.equal(create.body.name, '[TEST] Zen Opening Digest · 2026-08-10 · cc3fc06bb76a-1045et');
-  assert.equal(create.body.subject, '[TEST] Zen Opening Digest · August 10, 2026');
+  assert.equal(create.body.subject, '[TEST] Opening signals stay mixed | Zen Opening Digest');
   assert.doesNotMatch(create.body.subject, /cc3fc06bb76a-1045et/);
   assert.deepEqual(uploads, [{
     filename: 'opening-digest-cover-2026-08-10-cc3fc06bb76a-1045et.png',

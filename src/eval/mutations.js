@@ -41,6 +41,13 @@ export const MUTATORS = [
     kinds: ['opening-digest-limits'],
     apply: (input, baseDir) => {
       const article = resolveText(input, baseDir, 'article', 'articlePath');
+      if (/^headline:/m.test(article)) {
+        return {
+          ...input,
+          article: article.replace(/^headline:.*$/m, 'headline: This headline is deliberately far too long for the mobile Opening Digest subject'),
+          articlePath: undefined,
+        };
+      }
       const padding = ' Extra sentence padding the market read beyond its enforced budget.'.repeat(4);
       return { ...input, article: `${article.trimEnd()}${padding}\n`, articlePath: undefined };
     },
