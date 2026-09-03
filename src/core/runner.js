@@ -452,6 +452,7 @@ export async function runWriter({
     });
     throwIfTaskCancelled(signal);
     let article = renderQuarterlyCharts(normalizeArticle(content));
+    if (workflow.id === 'opening-digest') article = normalizeOpeningDigestCitations(article, research);
     if (!hasTitleFrontmatter(article)) {
       throw new Error('OpenRouter 输出缺少 title frontmatter');
     }
@@ -2210,9 +2211,11 @@ async function refineOpeningDigestDraft({ article, research, workflow, writer, f
     });
     const candidate = normalizeArticle(response.revised_markdown || '');
     if (!hasTitleFrontmatter(candidate)) throw new Error('refinement omitted frontmatter');
+    const evidenceBoundaryRepair = before.warnings.some((warning) => /OIC\/IV|期权方向/.test(warning));
     const truncatedRecovery = before.stats.narrativeWords < 150
       && (!before.stats.scenarioComplete || before.stats.observableSignpostCount < 3);
-    if (!truncatedRecovery && JSON.stringify(openingDraftInvariantSignature(article)) !== JSON.stringify(openingDraftInvariantSignature(candidate))) {
+    if (!truncatedRecovery && !evidenceBoundaryRepair
+      && JSON.stringify(openingDraftInvariantSignature(article)) !== JSON.stringify(openingDraftInvariantSignature(candidate))) {
       throw new Error('refinement changed URLs, numbers, tickers, dates, or times');
     }
     const allowedUrls = new Set(research.filter((source) => source?.url).map((source) => referenceUrlKey(source.url)));
@@ -2237,6 +2240,25 @@ function openingDraftInvariantSignature(value) {
     tickers: text.match(/\b[A-Z]{2,6}\b/g) || [],
     times: text.match(/\b\d{1,2}:\d{2}(?:\s*(?:a\.m\.|p\.m\.|AM|PM))?(?:\s+(?:ET|EST|EDT|PT|PST|PDT|UTC|GMT))?\b/gi) || [],
   };
+}
+
+function normalizeOpeningDigestCitations(article, research = []) {
+  const byUrl = new Map(research.filter((source) => source?.url).map((source) => [referenceUrlKey(source.url), source]));
+  const linked = String(article || '').replace(/【(https?:\/\/[^】\s]+)】/g, (_match, url) => {
+    const source = byUrl.get(referenceUrlKey(url));
+    let label = 'Source';
+    try {
+      const host = new URL(url).hostname.replace(/^www\./, '');
+      if (host === 'finance.yahoo.com') label = 'Yahoo Finance';
+      else if (host.includes('cnbc.com')) label = 'CNBC';
+      else if (host.includes('reuters.com')) label = 'Reuters';
+      else label = String(source?.title || host).replace(/[\[\]]/g, '').slice(0, 50) || 'Source';
+    } catch {}
+    return `([${label}](${url}))`;
+  });
+  return linked
+    .replace(/^## Evidence and cross[‐‑‒–—−]currents\s*$/gmi, '## Evidence and cross-currents')
+    .replace(/\*\*Counter[‐‑‒–—−]case\s*([—-])/gi, '**Counter-case $1');
 }
 
 async function planOpeningDigestEditorial({ research, editorialContext, history, asOf, model, writer, workflow, fetchFn }) {

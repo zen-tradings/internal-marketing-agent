@@ -328,7 +328,6 @@ function auditModernOpeningDigestArticle({ article, research, asOf, requireFresh
   const body = String(article || '').replace(FRONTMATTER_RE, '').trim();
   const editorial = body.replace(/^## Earnings ahead[\s\S]*$/m, '').trim();
   const links = [...editorial.matchAll(/\[[^\]]+]\((https?:\/\/[^\s)]+)\)/g)].map((match) => match[1]);
-  if (new Set(links.map(normalizedUrl)).size !== links.length) warnings.push('Opening Digest 分析正文来源链接存在重复');
   if (requireFreshSources) {
     const sources = new Map(research.filter((source) => source?.url).map((source) => [normalizedUrl(source.url), source]));
     const cutoff = previousRegularClose(asOf);

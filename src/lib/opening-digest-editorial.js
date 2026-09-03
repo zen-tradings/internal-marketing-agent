@@ -198,11 +198,12 @@ export function auditOpeningDigestInsight(markdown) {
   const matters = paragraphCount(parts.sections.get('What matters today'));
   if (matters < 2 || matters > 3) warnings.push(`What matters today 应为 2-3 个短段，当前 ${matters}`);
   const scenario = parts.sections.get('Scenario map') || '';
-  if (!/^[-*]\s+\*\*Base case\s*[—-]/mi.test(scenario) || !/^[-*]\s+\*\*Counter-case\s*[—-]/mi.test(scenario)) warnings.push('Scenario map 必须同时包含 Base case 与 Counter-case');
+  if (!/^[-*]\s+\*\*Base case\s*[—-]/mi.test(scenario) || !/^[-*]\s+\*\*Counter[‐‑‒–—−-]case\s*[—-]/mi.test(scenario)) warnings.push('Scenario map 必须同时包含 Base case 与 Counter-case');
   const watchCount = (parts.sections.get('What to watch')?.match(/^[-*]\s+/gm) || []).length;
   if (watchCount < 3 || watchCount > 5) warnings.push(`What to watch 应为 3-5 条，当前 ${watchCount}`);
   if (/\bUTC\b/i.test(parts.body)) warnings.push('Opening Digest 用户可见正文不得使用 UTC，应统一显示 ET');
   if (/\b(?:because|due to)\b[^.]{0,100}\b(?:option interest|options activity|IVX|implied volatility)\b|\b(?:option interest|options activity|IVX|implied volatility)\b[^.]{0,100}\b(?:drove|caused|pushed|lifted)\b/i.test(parts.body)) warnings.push('Opening Digest 不得用 OIC/IV 共现推断价格因果');
+  if (/\b(?:options? (?:market )?(?:skew|flow|volume)|call demand|put demand|IVX)\b[^.]{0,140}\b(?:bullish|bearish|direction|presage|predict|signal)\b/i.test(parts.body)) warnings.push('Opening Digest 不得用有限 OIC/期权数据推断方向、意图或后续涨跌');
   if (/\btracked(?:-universe)?\b[^.]{0,40}\bmarket breadth\b/i.test(parts.body)) warnings.push('固定跟踪池不得冒充全市场 breadth');
   const narrativeWords = visibleWords(parts.body.replace(/^## Earnings ahead[\s\S]*$/m, ''));
   if (narrativeWords > OPENING_DIGEST_NARRATIVE_MAX_WORDS) warnings.push(`Opening Digest 分析正文超过 ${OPENING_DIGEST_NARRATIVE_MAX_WORDS} 词:${narrativeWords}`);

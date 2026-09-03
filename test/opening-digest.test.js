@@ -326,11 +326,13 @@ test('new Opening Digest contract is thesis-first and rejects sample failure mod
   assert.equal(clean.stats.scenarioComplete, true);
   const bad = INSIGHT_ARTICLE
     .replace('Yields test tech conviction', 'This headline is far too long to work on a mobile email subject line')
-    .replace('10Y yield holds its opening range', 'MARA rose because options activity drove the price at 14:15 UTC');
+    .replace('10Y yield holds its opening range', 'MARA rose because options activity drove the price at 14:15 UTC')
+    .replace('Whether VIX confirms or contradicts index resilience', 'Options market skew may presage a bullish signal');
   const audit = auditOpeningDigestInsight(bad);
   assert.ok(audit.warnings.some((item) => /动态标题/.test(item)));
   assert.ok(audit.warnings.some((item) => /UTC/.test(item)));
   assert.ok(audit.warnings.some((item) => /OIC\/IV/.test(item)));
+  assert.ok(audit.warnings.some((item) => /期权数据推断方向/.test(item)));
 });
 
 test('opening content rules are diagnostics rather than hard gates', () => {

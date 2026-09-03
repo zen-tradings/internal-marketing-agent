@@ -742,7 +742,7 @@ The opening tone is Neutral because signals conflict. Long yields constrain dura
 
 ## What matters today
 
-**Rates remain the constraint.** [Source](https://example.com/a) reports firm yields, which keeps confirmation dependent on a retreat in long rates.
+**Rates remain the constraint.** Firm yields keep confirmation dependent on a retreat in long rates【https://example.com/a】.
 
 **The counterweight is narrower.** Lower oil would help inflation sensitivity, but it does not establish a broad risk-on signal.
 
@@ -780,7 +780,10 @@ Firm yields constrain the read, while lower oil is a counter-current; the eviden
   });
   assert.equal(result.ok, true);
   assert.deepEqual(models, ['planner/model', 'm']);
-  assert.match(fs.readFileSync(result.articlePath, 'utf8'), /headline: Yields test tech conviction/);
+  const written = fs.readFileSync(result.articlePath, 'utf8');
+  assert.match(written, /headline: Yields test tech conviction/);
+  assert.match(written, /\(\[Source\]\(https:\/\/example\.com\/a\)\)/);
+  assert.doesNotMatch(written, /【https:/);
   const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
   assert.equal(trace.openingDigestEditorialPlan.status, 'model');
   assert.equal(trace.openingDigestResearchBudget.selectedSourceCount, 1);
