@@ -247,7 +247,19 @@ sudo systemd-run --wait --pipe --collect \
 The command immediately sends one clearly named `[TEST]` newsletter to the
 configured `test1` segment, then ensures the formal newsletter for the current
 ET date exists and is scheduled for 10:30 ET or sent immediately when late. An
-existing matching formal newsletter is reused and never duplicated. The same
+existing matching formal newsletter is reused and never duplicated. When the
+acceptance goal is only the isolated test path, append `-- --test-only`: this
+creates the TEST Customer.io email and its derived TEST WeChat draft, but never
+creates the formal cron identity or queues Discord.
+
+```bash
+sudo systemd-run --wait --pipe --collect \
+  --unit=zen-content-hub-opening-acceptance \
+  --uid=zenbot \
+  --property=WorkingDirectory=/opt/zen-content-hub \
+  --property=EnvironmentFile=/etc/zen-content-hub/zen-content-hub.env \
+  /usr/bin/npm run acceptance:opening-digest -- --test-only
+``` The same
 run also exercises the 72-ticker universe quote scan, grouped Exa research and
 the reusable OIC artifact. The final JSON line reports the deployed commit,
 content mode, source count, quote coverage, price-mover/OIC/IV counts, both
