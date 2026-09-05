@@ -7,6 +7,7 @@ import { JSDOM } from 'jsdom';
 import { chromium } from 'playwright-core';
 import {
   makeWechatOpeningDigestChannel,
+  openingDigestWechatTitle,
   renderWechatOpeningDigestHtml,
   validateWechatOpeningDigestDraft,
   WECHAT_DRAFT_MAX_CHARS,
@@ -308,6 +309,13 @@ test('OIC 时点与归属用确定性中文前缀保留原始数字、时区和�
   assert.equal(result.translations.find((unit) => unit.id === 'oic-attribution').text, '数据由 IVolatility 提供');
 });
 
+test('微信草稿标题使用“标题（日报·日期）”且测试身份保持在 32 字内', () => {
+  assert.equal(openingDigestWechatTitle('AI硬件下滑，收益率回落', '2026-09-03'), 'AI硬件下滑，收益率回落（日报· 2026-09-03）');
+  assert.equal(openingDigestWechatTitle('利率考验市场信心', '2026-08-10', { acceptance: true }), '[测试] 利率考验市场信心（日报· 08-10）');
+  assert.equal([...openingDigestWechatTitle('1234567890123456', '2026-08-10', { acceptance: true })].length, 32);
+  assert.throws(() => openingDigestWechatTitle('12345678901234567', '2026-08-10'), /超过 16 字/);
+});
+
 test('中文微信 HTML 锁定新版模板、动态副标题、9 格行情与 OIC 20×8', () => {
   const source = payload(); const translation = translated(source);
   const html = renderWechatOpeningDigestHtml({ source, payload: source, translation, images: { header: 'https://img/h', survey: 'https://img/s', footer: 'https://img/f' } });
@@ -378,7 +386,7 @@ test('微信回读前两次坏稿删除重建，第三次合格稿保留', async
   assert.equal(result.status, 'verified');
   assert.equal(result.mediaId, 'm3');
   assert.deepEqual(deleted, ['m1', 'm2']);
-  assert.equal(result.title, '[测试] 利率考验市场信心');
+  assert.equal(result.title, '[测试] 利率考验市场信心（日报· 08-10）');
 });
 
 test('draft/get 暂不可用时保留唯一稿并标记 unverified', async () => {
@@ -395,7 +403,7 @@ test('draft/get 暂不可用时保留唯一稿并标记 unverified', async () =>
   });
   const result = await channel.publish({ payload: payload(), translation: translated(), config: config() });
   assert.equal(result.status, 'unverified');
-  assert.equal(result.title, '利率考验市场信心');
+  assert.equal(result.title, '利率考验市场信心（日报· 2026-08-10）');
   assert.equal(created, 1);
   assert.equal(deleted, 0);
 });

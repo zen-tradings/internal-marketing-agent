@@ -27,7 +27,7 @@ export function makeWechatOpeningDigestChannel({
     async publish({ payload, translation, config, acceptance = false }) {
       const activeApi = api || createWechatApi({ timeoutMs: config.wechat.timeoutMs });
       const translatedHeadline = translationMap(translation).get('headline')?.text || payload.article.headline || '开市数据可用，判断暂缺';
-      const title = acceptance ? `[测试] ${translatedHeadline}` : translatedHeadline;
+      const title = openingDigestWechatTitle(translatedHeadline, payload.dateKey, { acceptance });
       const cover = await renderCover({
         dateLabel: chineseDate(payload.dateKey), label: '开市日报',
         executablePath: config.openingDigest.browserExecutablePath,
@@ -79,6 +79,16 @@ export function makeWechatOpeningDigestChannel({
       });
     },
   };
+}
+
+export function openingDigestWechatTitle(headline, dateKey, { acceptance = false } = {}) {
+  const normalizedHeadline = String(headline || '').trim();
+  if (!normalizedHeadline || [...normalizedHeadline].length > 16) {
+    throw wechatError(`微信动态标题缺失或超过 16 字:${[...normalizedHeadline].length}`);
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey || ''))) throw wechatError('微信日报标题日期无效');
+  const dateLabel = acceptance ? dateKey.slice(5) : dateKey;
+  return `${acceptance ? '[测试] ' : ''}${normalizedHeadline}（日报· ${dateLabel}）`;
 }
 
 export function renderWechatOpeningDigestHtml({ payload, translation, images = {} }) {

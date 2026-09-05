@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 13;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 14;
 const MODEL_TRANSLATION_BATCH_SIZE = 1;
 
 const FIXED_TERMS = new Map([
@@ -170,8 +170,8 @@ function assessUnit(unit, text, afterRepair) {
     };
   }
   const invariant = assessTranslationUnit(unit, text, { afterRepair });
-  const titleError = unit.kind === 'headline' && [...String(text || '')].length > 24
-    ? `微信动态标题超过 24 字:${[...String(text || '')].length}`
+  const titleError = unit.kind === 'headline' && [...String(text || '')].length > 16
+    ? `微信动态标题超过 16 字:${[...String(text || '')].length}`
     : '';
   return { ...invariant, hardErrors: [...new Set([...invariant.hardErrors, ...(brandError ? [brandError] : []), ...(titleError ? [titleError] : [])])] };
 }
@@ -340,7 +340,7 @@ async function completeTranslation({ units, writer, fetchFn, round, timeoutMs })
   if (!writer?.openrouterApiKey) throw translationError('Opening Digest 中文直译缺少 OPENROUTER_API_KEY');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Number(timeoutMs) || 5 * 60 * 1000);
-  const prompt = `将下列 Opening Digest 文本块完整直译为简体中文。不得摘要、解释、增删或改写事实。kind=headline 的标题允许在不改变判断、方向、条件和因果强度的前提下紧凑本地化，并且不得超过 24 个中文字符。严格保留所有数字、百分比、Ticker、指数代码、型号、时间、URL、引文和机构品牌。每个形如 ⟦ZEN_KEEP_AAA⟧ 的占位符都代表一个不可变原文 token：必须逐字保留，而且每块中占位符的数量、拼写和顺序必须完全不变。公司品牌与无法可靠判断的专名保留原文；只翻译法律后缀和通用描述，例如 NVIDIA Corporation -> NVIDIA 公司。保留 Markdown 行内标记和链接 URL。返回与输入 ID 数量、顺序完全一致的 JSON。${round ? `这是第 ${round} 次局部修复，重点修复每块 issues。` : ''}\n\n${JSON.stringify(units)}`;
+  const prompt = `将下列 Opening Digest 文本块完整直译为简体中文。不得摘要、解释、增删或改写事实。kind=headline 的标题允许在不改变判断、方向、条件和因果强度的前提下紧凑本地化，并且不得超过 16 个中文字符。严格保留所有数字、百分比、Ticker、指数代码、型号、时间、URL、引文和机构品牌。每个形如 ⟦ZEN_KEEP_AAA⟧ 的占位符都代表一个不可变原文 token：必须逐字保留，而且每块中占位符的数量、拼写和顺序必须完全不变。公司品牌与无法可靠判断的专名保留原文；只翻译法律后缀和通用描述，例如 NVIDIA Corporation -> NVIDIA 公司。保留 Markdown 行内标记和链接 URL。返回与输入 ID 数量、顺序完全一致的 JSON。${round ? `这是第 ${round} 次局部修复，重点修复每块 issues。` : ''}\n\n${JSON.stringify(units)}`;
   try {
     const response = await fetchFn(`${String(writer.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')}/chat/completions`, {
       method: 'POST', signal: controller.signal,
