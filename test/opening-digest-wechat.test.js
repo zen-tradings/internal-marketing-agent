@@ -173,6 +173,46 @@ test('标准 Markdown 来源链接标签在模型翻译前被原样保护', asyn
   assert.match(restored, /\[Barron’s]\(https:\/\/example\.com\/cpi\)/);
 });
 
+test('证据引用整体保护，避免 URL token 吞入引用闭合符和句末标点', () => {
+  const firstCitation = `【${10}†${'https://example.com/oil'}】`;
+  const secondCitation = `【${3}†${'https://example.com/index'}】`;
+  const source = `**Oil risk** – WTI reached $94.60${firstCitation}, while the S&P 500 fell${secondCitation}.`;
+  const unit = { id: 'body-3', kind: 'paragraph', text: source };
+  const protectedUnit = protectTranslationUnit(unit);
+  assert.ok(protectedUnit.tokens.some((token) => token.value === firstCitation));
+  assert.ok(protectedUnit.tokens.some((token) => token.value === secondCitation));
+  assert.equal(protectedUnit.tokens.some((token) => /】[,．。.]?$/.test(token.value) && token.value.startsWith('https://')), false);
+  assert.doesNotMatch(protectedUnit.unit.text, /【⟦ZEN_KEEP_[A-Z]{3}⟧†/);
+  const translated = protectedUnit.unit.text
+    .replace('reached', '升至')
+    .replace('while the', '而')
+    .replace('fell', '下跌');
+  assert.equal(restoreTranslationUnit(translated, protectedUnit.tokens),
+    `**Oil risk** – WTI 升至 $94.60${firstCitation}, 而 S&P 500 下跌${secondCitation}.`);
+});
+
+test('证据引用后的中英文句末标点差异不误报 URL 不一致', async () => {
+  const firstCitation = `【${10}†${'https://example.com/oil'}】`;
+  const secondCitation = `【${3}†${'https://example.com/index'}】`;
+  const source = {
+    article: {
+      body: `WTI reached $94.60${firstCitation}, while the S&P 500 fell${secondCitation}.`,
+    },
+    metrics: [],
+  };
+  const result = await translateOpeningDigestPayload(source, {
+    writer: { model: 'test' },
+    complete: async ({ units }) => ({ translations: units.map((unit) => {
+      const markers = unit.text.match(/⟦ZEN_KEEP_[A-Z]{3}⟧/g) || [];
+      return {
+        id: unit.id,
+        text: `${markers[0]} 升至 $${markers[1]}${markers[2]}，而 S&P ${markers[3]} 下跌${markers[4]}。`,
+      };
+    }) }),
+  });
+  assert.match(result.translations[0].text, new RegExp(`94\\.60.*${10}.*S&P 500.*${3}`));
+});
+
 test('英文金额的数字与量级作为一个不可变 token 保护', () => {
   const unit = {
     id: 'body-2', kind: 'list_item',

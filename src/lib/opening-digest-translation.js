@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 14;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 15;
 const MODEL_TRANSLATION_BATCH_SIZE = 1;
 
 const FIXED_TERMS = new Map([
@@ -277,8 +277,9 @@ function mappingResponseError(expectedIds, returnedIds) {
 export function protectTranslationUnit(unit) {
   const source = String(unit.text || '');
   const candidates = [
+    ...evidenceCitations(source),
     ...institutionMarkdownLinks(source),
-    ...(source.match(/https?:\/\/[^\s)\]}>"']+/gi) || []),
+    ...bareUrlTokens(source),
     ...(source.match(/\b\d{1,2}:\d{2}(?:\s*(?:a\.m\.|p\.m\.|AM|PM))?(?:\s+(?:ET|EST|EDT|PT|PST|PDT|UTC|GMT))?/gi) || []),
     ...(source.match(/\b(?:ET|EST|EDT|PT|PST|PDT|UTC|GMT)\b/g) || []),
     ...(source.match(/\b(?:Q[1-4]|H[12]|FY\d{2,4}|[1-4]Q\d{2,4})\b/g) || []),
@@ -311,6 +312,16 @@ export function protectTranslationUnit(unit) {
   text += source.slice(cursor);
   const { markdown: _unprotectedMarkdown, ...safeUnit } = unit;
   return { unit: { ...safeUnit, text }, tokens };
+}
+
+function evidenceCitations(source) {
+  return String(source || '').match(/【[^【】\s]+†https?:\/\/[^\s】]+】/gi) || [];
+}
+
+function bareUrlTokens(source) {
+  return (String(source || '').match(/https?:\/\/[^\s)\]}>"'】。，；！？]+/gi) || [])
+    .map((token) => token.replace(/[】）.,;:!?。，；：！？]+$/gu, ''))
+    .filter(Boolean);
 }
 
 function institutionMarkdownLinks(source) {

@@ -1,0 +1,102 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { openStore } from '../src/core/store.js';
+import { runWorkDir } from '../src/lib/run-workdir.js';
+import { retryOpeningDigestWechat } from '../scripts/retry-opening-digest-wechat.mjs';
+
+function fixture({ wechatError = 'Opening Digest 中文直译硬校验失败:body-3(URL 不一致)' } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'retry-opening-wechat-'));
+  const dbPath = path.join(root, 'runs.db');
+  const workDir = path.join(root, 'work');
+  const runId = '1788876900013-umab4';
+  const store = openStore(dbPath);
+  store.createRun({
+    id: runId,
+    workflowId: 'opening-digest',
+    source: 'cron',
+    input: 'opening',
+    notify: {},
+    scheduleKey: '2026-09-08',
+  });
+  store.setRemoteId(runId, '66');
+  store.upsertDelivery(runId, {
+    destination: 'customerio', status: 'delivered',
+    mediaId: 'customerio-newsletter:66', title: 'Zen Opening Digest · 2026-09-08',
+  });
+  store.upsertDelivery(runId, {
+    destination: 'wechat', status: 'failed', error: wechatError,
+  });
+  store.setStatus(runId, 'done', {
+    mediaId: 'customerio-newsletter:66',
+    title: 'Zen Opening Digest · 2026-09-08',
+    finishedAt: Date.now(),
+  });
+  const sourceDir = runWorkDir(path.join(workDir, 'opening-digest'), runId);
+  fs.mkdirSync(sourceDir, { recursive: true });
+  for (const filename of [
+    'article.md',
+    'article.md.opening-digest-state.json',
+    'opening-digest-universe.json',
+    'research-trace.json',
+  ]) fs.writeFileSync(path.join(sourceDir, filename), filename.endsWith('.md') ? '# article' : '{}');
+  return {
+    root, dbPath, workDir, runId, store, sourceDir,
+    config: { openingDigest: { wechatEnabled: true }, discord: { openingDigestEnabled: true } },
+  };
+}
+
+test('受限命令只复用成功邮件和同源产物补建正式微信稿', async (t) => {
+  const value = fixture();
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  let input;
+  const result = await retryOpeningDigestWechat({
+    ...value,
+    publish: async (args) => {
+      input = args;
+      return { deliveries: [{
+        destination: 'wechat', status: 'verified', mediaId: 'wx-recovered',
+        title: '油价与 AI 拉锯（日报· 2026-09-08）', details: { attempts: [{ status: 'verified' }] },
+      }] };
+    },
+  });
+  assert.equal(result.mediaId, 'wx-recovered');
+  assert.equal(input.existingRemoteId, '66');
+  assert.equal(input.source, 'cron');
+  assert.equal(input.config.discord.openingDigestEnabled, false);
+  assert.equal(input.articlePath, path.join(value.sourceDir, 'article.md'));
+  const delivery = value.store.listDeliveries(value.runId).find((item) => item.destination === 'wechat');
+  assert.equal(delivery.status, 'verified');
+  assert.equal(delivery.media_id, 'wx-recovered');
+  assert.equal(value.store.getRun(value.runId).media_id, 'customerio-newsletter:66');
+});
+
+test('受限命令拒绝非翻译门禁失败、已有微信 media_id 和非空队列', async (t) => {
+  const wrongError = fixture({ wechatError: '微信 draft/add 网络失败' });
+  t.after(() => fs.rmSync(wrongError.root, { recursive: true, force: true }));
+  await assert.rejects(retryOpeningDigestWechat({
+    ...wrongError,
+    publish: async () => { throw new Error('不应调用'); },
+  }), /不是可安全恢复的翻译门禁失败/);
+
+  const existing = fixture();
+  t.after(() => fs.rmSync(existing.root, { recursive: true, force: true }));
+  existing.store.upsertDelivery(existing.runId, {
+    destination: 'wechat', status: 'failed', mediaId: 'wx-existing',
+    error: 'Opening Digest 中文直译硬校验失败:body-3',
+  });
+  await assert.rejects(retryOpeningDigestWechat({
+    ...existing,
+    publish: async () => { throw new Error('不应调用'); },
+  }), /不是可安全恢复的翻译门禁失败/);
+
+  const busy = fixture();
+  t.after(() => fs.rmSync(busy.root, { recursive: true, force: true }));
+  busy.store.createRun({ id: 'another-queued-run', workflowId: 'wechat', source: 'slack', input: 'x', notify: {} });
+  await assert.rejects(retryOpeningDigestWechat({
+    ...busy,
+    publish: async () => { throw new Error('不应调用'); },
+  }), /队列非空/);
+});

@@ -378,6 +378,22 @@ single systemd service, verify `/ready`, and stop the rollout. Preserve the
 failed release directory, acceptance output, journal logs and trace for
 diagnosis; do not retry against production or send a Slack test message.
 
+## Recovering a failed Opening Digest WeChat derivative
+
+When a formal cron email succeeded but its Chinese WeChat derivative failed at the immutable-token translation gate before receiving any WeChat `media_id`, deploy and verify the fix first. Confirm `/ready` reports `active=0` and `pending=0`, then run the restricted recovery against the SQLite `runs.id`:
+
+```bash
+run_id=replace-with-database-run-id
+sudo systemd-run --wait --pipe --collect \
+  --unit=zen-content-hub-opening-wechat-recovery \
+  --uid=zenbot \
+  --property=WorkingDirectory=/opt/zen-content-hub \
+  --property=EnvironmentFile=/etc/zen-content-hub/zen-content-hub.env \
+  /usr/bin/npm run retry:opening-digest-wechat -- "$run_id"
+```
+
+The command refuses a non-idle queue, non-cron or non-`done` runs, a missing/successful Customer.io delivery, any WeChat `media_id`, non-translation failures, and missing isolated artifacts. It reuses the existing sent newsletter and same-run article, quote, earnings, and OIC artifacts; Discord is disabled for this recovery call. Success prints one verified WeChat `mediaId`, updates only that run's `run_deliveries.wechat` record, and does not resend the email or Discord posts. Do not hand-edit SQLite or rerun the full Opening Digest acceptance to recover one derivative.
+
 ## Recovering a failed translation
 
 Use the restricted recovery command only after the target release has passed

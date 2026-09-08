@@ -2451,13 +2451,19 @@ function exactInvariantTokens(value) {
   const text = String(value || '');
   const tokens = [
     ...(text.match(/⟦ZEN_INLINE_\d{3}⟧/g) || []),
-    ...(text.match(/https?:\/\/[^\s)\]}>"']+/gi) || []),
+    ...exactInvariantUrls(text),
     ...(text.match(/\\[A-Za-z]+/g) || []),
     ...(text.match(/\$[A-Z]{1,6}\b|\b(?:NASDAQ|NYSE|AMEX|OTC)\s*:\s*[A-Z]{1,6}\b/g) || []),
     ...(text.match(/\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+\b/g) || []),
     ...(text.match(/\b(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z][A-Za-z0-9]{2,}\b/g) || []),
   ];
   return tokens.sort();
+}
+
+function exactInvariantUrls(value) {
+  return (String(value || '').match(/https?:\/\/[^\s)\]}>"'】。，；！？]+/gi) || [])
+    .map((token) => token.replace(/[】）.,;:!?。，；：！？]+$/gu, ''))
+    .filter(Boolean);
 }
 
 function compareExactInvariantTokens(source, translated) {
