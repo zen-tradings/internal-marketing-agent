@@ -365,7 +365,7 @@ test('中文微信 HTML 锁定新版模板、动态副标题、9 格行情与 OI
   assert.ok(html.length < WECHAT_DRAFT_MAX_CHARS, `${html.length} chars`);
   assert.ok(Buffer.byteLength(html) < 1024 * 1024);
   assert.doesNotMatch(html, /href=/i, '微信正文不得保留站外 href');
-  assert.doesNotMatch(html, /CNBC|example\.com|finance\.yahoo\.com/i, '微信正文不得保留原文来源引用或 URL');
+  assert.doesNotMatch(html, /【|\u2020|CNBC|example\.com|finance\.yahoo\.com/i, '微信正文不得保留原文来源引用或 URL');
   assert.match(html, /NVIDIA 公司动态/, '承担正文语义的链接文字应保留为纯文本');
   assert.match(html, /NVDA/, '财报预告中的 Ticker 应保留为纯文本');
   const document = new JSDOM(`<body>${html}</body>`).window.document;
@@ -376,6 +376,23 @@ test('中文微信 HTML 锁定新版模板、动态副标题、9 格行情与 OI
   const survey = document.querySelector('[data-zen-role="survey"]');
   assert.ok(discord.compareDocumentPosition(survey) & 4, 'Discord 链接必须位于问卷图与二维码封底之前');
   assert.ok(discord.compareDocumentPosition(document.querySelector('[data-zen-oic]')) & 2, 'Discord 链接必须位于 OIC 区块之后');
+  const validation = validateWechatOpeningDigestDraft({ content: { news_item: [{ title: '利率考验市场信心', digest: '早盘市场信号。', content: html }] } }, {
+    title: '利率考验市场信心', payload: source, translation,
+  });
+  assert.deepEqual(validation.errors, []);
+});
+
+test('中文微信剥离证据引用和所有正文链接但保留有语义 label', () => {
+  const citation = `【${10}†${'https://example.com/oil'}】`;
+  const source = payload();
+  source.article.body = `The market opened neutral as WTI reached $94.60${citation}.\n\n## Earnings ahead\n**Mon, Aug 10:** [NVDA](https://finance.yahoo.com/calendar/earnings) after close (expected)\n\n## What matters today\n[NVIDIA Corporation update](https://example.com/a) moved SPY 10.25% at 10:15 EDT.`;
+  const translation = translated(source);
+  translation.translations.find((unit) => unit.id === 'body-1').text = `市场开盘中性，WTI 达到 $94.60${citation}。`;
+  const html = renderWechatOpeningDigestHtml({ payload: source, translation, images: { header: 'https://img/h', survey: 'https://img/s', footer: 'https://img/f' } });
+  assert.doesNotMatch(html, /【|†|example\.com|finance\.yahoo\.com/i);
+  assert.doesNotMatch(html, /href=/i);
+  assert.match(html, /NVDA/);
+  assert.match(html, /NVIDIA 公司动态/);
   const validation = validateWechatOpeningDigestDraft({ content: { news_item: [{ title: '利率考验市场信心', digest: '早盘市场信号。', content: html }] } }, {
     title: '利率考验市场信心', payload: source, translation,
   });

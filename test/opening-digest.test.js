@@ -67,7 +67,7 @@ confidence: medium
 preheader: Falling oil offsets firm yields, leaving confirmation to equity participation.
 edition: 2026-08-10
 ---
-The opening tone is Neutral because cross-asset signals do not point in one direction. Lower oil is supportive, while firm long yields still constrain duration-sensitive equities. Initial baseline.
+The market opened neutral as firm long yields constrain duration-sensitive equities. Lower oil supplies support, but participation is too narrow to change the overall tone.
 
 ## What matters today
 
@@ -78,11 +78,6 @@ The opening tone is Neutral because cross-asset signals do not point in one dire
 ## Evidence and cross-currents
 
 The rate and oil signals offset each other, while [tracked-universe participation](https://example.com/c) is too narrow to establish whole-market breadth. That tension keeps confidence medium rather than high.
-
-## Scenario map
-
-- **Base case —** A stable VIX and easing long yields would confirm a more constructive opening read.
-- **Counter-case —** Renewed yield pressure alongside a rising VIX would invalidate that improvement.
 
 ## What to watch
 
@@ -323,7 +318,7 @@ test('opening editorial planner keeps only real source IDs and an honest no-expe
 test('new Opening Digest contract is thesis-first and rejects sample failure modes', () => {
   const clean = auditOpeningDigestInsight(INSIGHT_ARTICLE);
   assert.deepEqual(clean.warnings, []);
-  assert.equal(clean.stats.scenarioComplete, true);
+  assert.equal(clean.stats.leadSentences, 2);
   const bad = INSIGHT_ARTICLE
     .replace('Yields test tech conviction', 'This headline is far too long to work on a mobile email subject line')
     .replace('10Y yield holds its opening range', 'MARA rose because options activity drove the price at 14:15 UTC')

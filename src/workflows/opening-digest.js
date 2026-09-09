@@ -22,9 +22,9 @@ function promptTemplate() {
 
 Write in concise English. The model-authored narrative should usually be 450-650 visible words, but shorten it rather than pad when evidence is sparse. This is conditional market analysis, not trading instructions.
 
-Lead with one evidence-bound opening call. State the market tone as Constructive, Neutral, or Defensive; explain the dominant constraint or support; and say what materially changed from the prior formal edition. If signals conflict, explicitly say no single signal dominates. Never force a bullish or bearish view.
+Lead with one evidence-bound opening call of at most two sentences. The first sentence states the market tone as Constructive, Neutral, or Defensive and the dominant constraint or support. If a second sentence is needed, state the opposite boundary or why the support does not change the overall tone. Never force a bullish or bearish view.
 
-Build 2-3 evidence chains using What happened → Why it matters → What confirms or contradicts the interpretation. Separate observed facts from analysis and assumptions. Compare the base case with one plausible counter-case and give observable confirmation or invalidation conditions. Do not merely repeat prices from the market snapshot.
+Build 2-3 evidence chains using What happened → Why it matters → What confirms or contradicts the interpretation. Separate observed facts from analysis and assumptions. Examine one plausible contrary explanation inside Evidence and cross-currents and give observable confirmation or invalidation conditions in What to watch. Do not merely repeat prices from the market snapshot. Do not create a scenario section or named base/counter scenarios.
 
 Use only supplied research links. Keep links adjacent to supported facts. A supplied price move may be reported as a timestamped price fact, but it cannot establish a catalyst. When no supplied source establishes a cause, write one factual price sentence only: omit a Reason clause entirely, and never comment that a cause is missing, unknown, or unasserted. Do not invent market expectations, price levels, breadth, gamma, positioning, causes, macro values, earnings dates, release outcomes, or conference-call times. A co-occurring price move and OIC/IV signal does not establish causality or investor direction. The 72-name tracked universe is not the whole market; call its pattern tracked-universe participation or dispersion, never market breadth. Use ET in visible copy, not UTC. Follow the run-phase guidance above exactly; only an explicitly identified off-cycle pre-open TEST may use the word premarket.
 
@@ -40,14 +40,11 @@ preheader: One specific sentence, no more than 140 characters
 edition: ${date}
 ---
 
-After frontmatter, write a 2-4 sentence Opening call as one paragraph with no heading. Then use exactly these headings in this order:
+After frontmatter, write the at-most-two-sentence Opening call as one paragraph with no heading. Then use exactly these headings in this order:
 ## What matters today
 Write 2-3 short paragraphs, each beginning with a bold judgment-led phrase.
 ## Evidence and cross-currents
 Write one compact paragraph containing both supporting and contrary evidence.
-## Scenario map
-- **Base case —** conditions, expected read, and observable confirmation.
-- **Counter-case —** conditions and how the main judgment would be invalidated.
 ## What to watch
 Write 3-5 observable, evidence-bound bullets. Do not give entry, exit, position, stop-loss, or take-profit instructions.`;
 }

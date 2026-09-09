@@ -207,8 +207,7 @@ function renderNarrative(markdown, translated) {
       section = unit.source === 'Earnings ahead' ? 'earnings'
         : unit.source === 'What matters today' ? 'matters'
           : unit.source === 'Evidence and cross-currents' ? 'evidence'
-            : unit.source === 'Scenario map' ? 'scenario'
-              : unit.source === 'What to watch' ? 'watch' : `body-${index + 1}`;
+            : unit.source === 'What to watch' ? 'watch' : `body-${index + 1}`;
       html = `<h2 data-zen-section="${section}" data-block-id="${id}" style="margin:22px 0 9px;font-size:18px;color:#08272b">${inlineMarkup(unit.text)}</h2>`;
     } else if (list) html = `<p data-block-id="${id}" style="margin:6px 0 6px 1em;text-indent:-1em">• ${inlineMarkup(unit.text)}</p>`;
     else if (section === 'earnings') html = renderEarningsPreviewLines(id, unit.text);
@@ -294,11 +293,11 @@ function metricStrings(metric) {
 function inlineMarkup(value) { return escapeHtml(stripOpeningDigestSourceLinks(value)).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>'); }
 function stripOpeningDigestSourceLinks(value) {
   return String(value || '')
-    // Parenthetical links are source citations rather than sentence content in
-    // the Opening Digest contract. Remove both the publisher label and URL.
+    // Evidence citations and all body source links are hidden in the Chinese
+    // WeChat derivative. Parenthetical citations remove the whole citation;
+    // semantically meaningful linked tickers/companies keep only their label.
+    .replace(/【[^【】\s]+†https?:\/\/[^\s】]+】/gi, '')
     .replace(/[\uff08(]\s*\[([^\]]+)]\(((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+)\)\s*[)\uff09]/gi, '')
-    // A linked headline, company, or ticker can carry sentence meaning. Keep its
-    // visible label as plain text while removing the off-site destination.
     .replace(/\[([^\]]+)]\(((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+)\)/gi, '$1')
     .replace(/<(?:https?:\/\/|mailto:)[^>\s]+>/gi, '')
     .replace(/(?:https?:\/\/|mailto:)[^\s<>"'\uff0c\u3002\uff1b\uff01\uff1f)\uff09]+/gi, '')

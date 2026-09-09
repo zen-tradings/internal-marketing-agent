@@ -16,7 +16,7 @@ confidence: medium
 preheader: Falling oil offsets firm yields, leaving confirmation to equity participation.
 edition: ${dateKey}
 ---
-The opening tone is Neutral because cross-asset signals do not point in one direction. Lower oil is supportive, while firm long yields constrain duration-sensitive equities. Initial baseline.
+The market opened neutral as firm long yields constrain duration-sensitive equities. Lower oil supplies support, but participation is too narrow to change the overall tone.
 
 ## What matters today
 
@@ -27,11 +27,6 @@ The opening tone is Neutral because cross-asset signals do not point in one dire
 ## Evidence and cross-currents
 
 Rate and oil signals offset each other, while tracked-universe participation is too narrow to establish whole-market breadth.
-
-## Scenario map
-
-- **Base case —** Stable VIX and easing long yields would confirm a more constructive opening read.
-- **Counter-case —** Renewed yield pressure with a rising VIX would invalidate that improvement.
 
 ## What to watch
 
@@ -69,7 +64,7 @@ const email = renderNewsletterEmail(article, {
 const fixed = new Map([
   ['headline', '利率考验科技股信心'], ['preheader', '油价回落与长端利率坚挺相互抵消。'],
   ['What matters today', '今日主线'], ['Evidence and cross-currents', '证据与分歧'],
-  ['Scenario map', '情景地图'], ['What to watch', '今日观察'], ['Earnings ahead', '财报预告'],
+  ['What to watch', '今日观察'], ['Earnings ahead', '财报预告'],
 ]);
 const translation = {
   translations: translationUnits(payload).map((unit) => ({

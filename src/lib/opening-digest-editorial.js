@@ -4,7 +4,6 @@ export const OPENING_DIGEST_CONFIDENCE = Object.freeze(['high', 'medium', 'low']
 export const OPENING_DIGEST_REQUIRED_HEADINGS = Object.freeze([
   'What matters today',
   'Evidence and cross-currents',
-  'Scenario map',
   'What to watch',
 ]);
 export const OPENING_DIGEST_HEADLINE_MAX_CHARS = 36;
@@ -57,8 +56,6 @@ Return strict JSON only:
   "supporting_evidence":[{"point":"","source_ids":[]}],
   "contrary_evidence":[{"point":"","source_ids":[]}],
   "transmission_chain":[{"from":"","to":"","mechanism":"","source_ids":[]}],
-  "base_case":{"condition":"","expected_read":"","indicators":[],"source_ids":[]},
-  "counter_case":{"condition":"","expected_read":"","indicators":[],"source_ids":[]},
   "signposts":[{"observable":"","source_ids":[]}],
   "selected_source_ids":[],
   "change_from_prior":{"changed":false,"summary":""},
@@ -69,7 +66,7 @@ Rules:
 - Rank materiality by broad-market reach, genuine surprise/increment, likely persistence, source strength, and freshness. A routine 5% tracked-stock move is not automatically the theme.
 - Broad U.S. market drivers outrank sector drivers; sector drivers outrank isolated company moves.
 - Check at least one plausible contrary explanation. If evidence conflicts, choose neutral and say there is no dominant signal.
-- Facts, causal mechanisms, expectations, scenarios, and signposts must cite existing source_ids. Never invent a number, ticker, date, time, level, cause, market expectation, or data release result.
+- Facts, causal mechanisms, expectations, contrary explanations, and signposts must cite existing source_ids. Never invent a number, ticker, date, time, level, cause, market expectation, or data release result. Do not create a scenario section or named base/counter scenarios.
 - If the supplied material does not observe what was priced, use priced_expectation.status=not_observed and leave text empty.
 - OIC Top 20 data shows only observed option volume/IVX for names appearing in that table. It does not prove direction, investor intent, market breadth, or the cause of a price move.
 - The fixed 72-name universe is not the whole market. Describe it only as tracked-universe participation or dispersion.
@@ -93,12 +90,6 @@ export function normalizeOpeningDigestPlan(raw, research = [], history = []) {
   const evidence = (value, limit) => (Array.isArray(value) ? value : []).map((item) => ({
     point: clean(item?.point, 500), source_ids: sourceIds(item?.source_ids),
   })).filter((item) => item.point && item.source_ids.length).slice(0, limit);
-  const scenario = (value) => ({
-    condition: clean(value?.condition, 400),
-    expected_read: clean(value?.expected_read, 400),
-    indicators: cleanArray(value?.indicators, 5, 180),
-    source_ids: sourceIds(value?.source_ids),
-  });
   const selected = sourceIds(raw?.selected_source_ids, 10);
   const fallbackSelected = research
     .filter((source) => source?.url)
@@ -127,8 +118,6 @@ export function normalizeOpeningDigestPlan(raw, research = [], history = []) {
     transmission_chain: (Array.isArray(raw?.transmission_chain) ? raw.transmission_chain : []).map((item) => ({
       from: clean(item?.from, 120), to: clean(item?.to, 120), mechanism: clean(item?.mechanism, 300), source_ids: sourceIds(item?.source_ids),
     })).filter((item) => item.from && item.to && item.mechanism && item.source_ids.length).slice(0, 4),
-    base_case: scenario(raw?.base_case),
-    counter_case: scenario(raw?.counter_case),
     signposts: (Array.isArray(raw?.signposts) ? raw.signposts : []).map((item) => ({
       observable: clean(item?.observable, 240), source_ids: sourceIds(item?.source_ids),
     })).filter((item) => item.observable && item.source_ids.length).slice(0, 5),
@@ -194,11 +183,9 @@ export function auditOpeningDigestInsight(markdown) {
   if (!OPENING_DIGEST_CONFIDENCE.includes(meta.confidence)) warnings.push('Opening Digest confidence 必须为 high、medium 或 low');
   if (JSON.stringify(headings) !== JSON.stringify(expected)) warnings.push(`Opening Digest 栏目顺序应为 ${expected.join(' → ')}`);
   const leadSentences = sentenceCount(parts.lead);
-  if (leadSentences < 2 || leadSentences > 4) warnings.push(`Opening call 应为 2-4 句，当前 ${leadSentences} 句`);
+  if (leadSentences < 1 || leadSentences > 2) warnings.push(`Opening call 应为 1-2 句，当前 ${leadSentences} 句`);
   const matters = paragraphCount(parts.sections.get('What matters today'));
   if (matters < 2 || matters > 3) warnings.push(`What matters today 应为 2-3 个短段，当前 ${matters}`);
-  const scenario = parts.sections.get('Scenario map') || '';
-  if (!/^[-*]\s+\*\*Base case\s*[—-]/mi.test(scenario) || !/^[-*]\s+\*\*Counter[‐‑‒–—−-]case\s*[—-]/mi.test(scenario)) warnings.push('Scenario map 必须同时包含 Base case 与 Counter-case');
   const watchCount = (parts.sections.get('What to watch')?.match(/^[-*]\s+/gm) || []).length;
   if (watchCount < 3 || watchCount > 5) warnings.push(`What to watch 应为 3-5 条，当前 ${watchCount}`);
   if (/\bUTC\b/i.test(parts.body)) warnings.push('Opening Digest 用户可见正文不得使用 UTC，应统一显示 ET');
@@ -209,7 +196,7 @@ export function auditOpeningDigestInsight(markdown) {
   if (narrativeWords > OPENING_DIGEST_NARRATIVE_MAX_WORDS) warnings.push(`Opening Digest 分析正文超过 ${OPENING_DIGEST_NARRATIVE_MAX_WORDS} 词:${narrativeWords}`);
   return {
     warnings,
-    stats: { headlineSpecific: !warnings.some((item) => item.includes('动态标题')), stance: meta.stance, confidence: meta.confidence, leadSentences, mattersCount: matters, scenarioComplete: !warnings.some((item) => item.includes('Scenario map')), observableSignpostCount: watchCount, narrativeWords },
+    stats: { headlineSpecific: !warnings.some((item) => item.includes('动态标题')), stance: meta.stance, confidence: meta.confidence, leadSentences, mattersCount: matters, observableSignpostCount: watchCount, narrativeWords },
   };
 }
 

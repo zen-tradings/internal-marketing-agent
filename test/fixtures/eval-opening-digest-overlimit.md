@@ -16,10 +16,6 @@ Only one paragraph repeats facts without analysis.
 
 MARA rose because options activity drove the price at 14:15 UTC.
 
-## Scenario map
-
-- **Base case —** One side only.
-
 ## What to watch
 
 - One item

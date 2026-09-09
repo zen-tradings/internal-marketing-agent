@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 15;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 16;
 const MODEL_TRANSLATION_BATCH_SIZE = 1;
 
 const FIXED_TERMS = new Map([
@@ -12,7 +12,6 @@ const FIXED_TERMS = new Map([
   ['Earnings ahead', '财报预告'],
   ['What matters today', '今日主线'],
   ['Evidence and cross-currents', '证据与分歧'],
-  ['Scenario map', '情景地图'],
   ['What to watch', '今日观察'],
   ["Today's catalysts", '今日催化'],
   ['Market read', '市场解读'],

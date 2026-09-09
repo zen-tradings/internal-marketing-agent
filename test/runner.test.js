@@ -738,7 +738,7 @@ confidence: medium
 preheader: Cross-asset signals remain divided.
 edition: 2026-08-10
 ---
-The opening tone is Neutral because signals conflict. Long yields constrain duration while lower oil offsets part of that pressure. Initial baseline.
+The market opened neutral as firm long yields constrain duration-sensitive equities. Lower oil offsets part of that pressure without changing the overall tone.
 
 ## What matters today
 
@@ -749,11 +749,6 @@ The opening tone is Neutral because signals conflict. Long yields constrain dura
 ## Evidence and cross-currents
 
 Firm yields constrain the read, while lower oil is a counter-current; the evidence therefore supports medium rather than high confidence.
-
-## Scenario map
-
-- **Base case —** Easing yields with stable volatility would improve the opening read.
-- **Counter-case —** Rising yields with firmer volatility would invalidate that improvement.
 
 ## What to watch
 
@@ -771,8 +766,6 @@ Firm yields constrain the read, while lower oil is a counter-current; the eviden
         supporting_evidence: [{ point: 'Firm yields are a constraint.', source_ids: ['OD1'] }],
         contrary_evidence: [{ point: 'Signals conflict.', source_ids: ['OD1'] }],
         selected_source_ids: ['OD1'], change_from_prior: { changed: false, summary: 'Initial baseline.' },
-        base_case: { condition: 'Yields ease', expected_read: 'Tone improves', indicators: ['10Y'], source_ids: ['OD1'] },
-        counter_case: { condition: 'Yields rise', expected_read: 'Tone weakens', indicators: ['10Y'], source_ids: ['OD1'] },
         signposts: [{ observable: '10Y yield', source_ids: ['OD1'] }], headline_candidates: ['Yields test tech conviction'],
       }) } }] });
       return jsonResponse({ choices: [{ message: { content: cleanDraft } }] });
