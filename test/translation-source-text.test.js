@@ -294,6 +294,38 @@ test('Datalab 分页 HTML 绕过 Readability，按顺序保留全部页面、图
   }), /缺少分页容器/);
 });
 
+test('Datalab ComplexRegion 无类嵌套 div 不丢文本且不重复表格内容', async () => {
+  // Production regression: Datalab emits per-record experience sections as
+  // classless nested divs inside div[data-block-id], some containing a table.
+  // The extractor must keep residual region text while the table stays its own
+  // block, otherwise page-level coverage drops below the hard gate.
+  const html = `<!doctype html><html><body>
+    <div class="page" data-page-id="0"><h1>Report</h1><p>Summary intro with enough text to matter.</p>
+      <div data-block-id="/page/0/ComplexRegion/0"><div><div>#1 · Jane Doe</div><div>Chicago, Illinois, United States</div></div>
+        <div><div>Strong evidence</div>
+          <table><tr><td>CURRENT ROLE<br/>Senior Trader at Example Co</td></tr></table>
+          <div>STRATEGY EVIDENCE<br/>Twenty years in volatility trading and team leadership.</div>
+          <div>LINKEDIN<br/><a href="https://example.com/in/jane">https://example.com/in/jane</a></div>
+        </div></div></div>
+  </body></html>`;
+  const document = await sourceDocumentFromHtml({
+    html,
+    sourceUrl: 'https://example.com/report.pdf',
+    extractor: 'datalab-marker-html',
+    scope: { kind: 'all' },
+  });
+  const region = document.blocks.find((block) => block.type === 'paragraph' && /Jane Doe/.test(block.text || ''));
+  assert.ok(region, 'ComplexRegion 残差文本必须保留为段落块');
+  assert.match(region.text, /STRATEGY EVIDENCE\nTwenty years/);
+  assert.match(region.text, /Twenty years in volatility trading/);
+  assert.doesNotMatch(region.text, /CURRENT ROLE|Senior Trader at Example Co/, '已被表格块覆盖的文本不得重复');
+  const table = document.blocks.find((block) => block.type === 'table');
+  assert.ok(table);
+  assert.equal(table.rows[0][0].text, 'CURRENT ROLE\nSenior Trader at Example Co');
+  assert.equal(table.rows.length, 1);
+  assert.equal(document.blocks.filter((block) => /Jane Doe/.test(block.text || '')).length, 1);
+});
+
 test('PDF 页级完整性门禁拒绝单页正文冒充多页，完整覆盖时记录页码和文本基线', () => {
   const partial = {
     sourceType: 'pdf',

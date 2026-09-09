@@ -2873,9 +2873,32 @@ function blocksFromDom(root, documentUrl) {
     'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'blockquote', 'li',
     'figure', 'table', 'pre', 'img', '.ltx_equationgroup', '.ltx_equation',
     'math[display="block"]', '.ltx_bibitem',
+    // Datalab emits ComplexRegion and similar content as classless nested divs
+    // carrying only data-block-id. Without this leaf-level branch, text-heavy
+    // regions (e.g. per-record experience details) vanish from the structured
+    // document while the raw page text remains, tripping the coverage gate.
+    'div[data-block-id]',
   ].join(',');
   for (const node of root.querySelectorAll(selector)) {
     if (node.closest(EXCLUDED_CONTENT_SELECTOR)) continue;
+    if (node.tagName === 'DIV') {
+      if (node.closest('p,li,blockquote,h1,h2,h3,h4,h5,h6,table,figure,pre')) continue;
+      // Keep residual text of Datalab regions: children matching the semantic
+      // or data-block-id selector are captured by their own iteration, so the
+      // region block must retain only the text they do not already cover.
+      const residual = node.cloneNode(true);
+      for (const child of [...residual.querySelectorAll(selector)]) child.remove();
+      const region = datalabRegionRichText(residual, documentUrl);
+      if (!region.text) continue;
+      blocks.push({
+        id: `b${String(++blockIndex).padStart(6, '0')}`,
+        order: blocks.length,
+        type: 'paragraph',
+        text: region.text,
+        fragments: region.fragments,
+      });
+      continue;
+    }
     if (node.matches('img') && node.closest('figure')) continue;
     if (node.matches('.ltx_equation,math') && node.parentElement?.closest('.ltx_equation,.ltx_equationgroup')) continue;
     if (node.matches('.ltx_bibitem') && node.parentElement?.closest('.ltx_bibitem')) continue;
@@ -2990,6 +3013,16 @@ function richTextFromNode(node, documentUrl) {
   }
   for (const br of [...clone.querySelectorAll('br')]) br.replaceWith(clone.ownerDocument.createTextNode('\n'));
   return { text: cleanTextPreservingLines(clone.textContent), fragments };
+}
+
+function datalabRegionRichText(node, documentUrl) {
+  const clone = node.cloneNode(true);
+  // Nested classless divs in Datalab ComplexRegion blocks act as line
+  // containers; textContent alone would concatenate neighboring fields.
+  for (const div of [...clone.querySelectorAll('div')]) {
+    if (!div.querySelector('div')) div.append(clone.ownerDocument.createTextNode('\n'));
+  }
+  return richTextFromNode(clone, documentUrl);
 }
 
 function figureFromNode(node, documentUrl) {
