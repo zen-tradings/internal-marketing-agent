@@ -246,7 +246,7 @@ sudo systemd-run --wait --pipe --collect \
 
 The command immediately sends one clearly named `[TEST]` newsletter to the
 configured `test1` segment, then ensures the formal newsletter for the current
-ET date exists and is scheduled for 10:30 ET or sent immediately when late. An
+ET date exists and is scheduled for 10:15 ET or sent immediately when late. An
 existing matching formal newsletter is reused and never duplicated. When the
 acceptance goal is only the isolated test path, append `-- --test-only`: this
 creates the TEST Customer.io email and its derived TEST WeChat draft, but never

@@ -42,7 +42,7 @@ test('cron 补跑只发生在允许窗口并携带稳定 schedule key', async ()
   const tasks = [];
   const workflow = {
     id: 'opening-digest',
-    triggers: ['cron:15 10 * * 1-5'],
+    triggers: ['cron:0 10 * * 1-5'],
     cronTimezone: 'America/New_York',
     cronCatchUpWindowMinutes: 120,
     cronRunKey: () => '2026-08-14',

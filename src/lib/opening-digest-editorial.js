@@ -27,7 +27,7 @@ export function openingDigestMarketPhase(asOf = new Date()) {
 
 export function openingDigestPhaseGuidance(asOf = new Date()) {
   const phase = openingDigestMarketPhase(asOf);
-  if (phase === 'cash-session') return 'This run is during the U.S. cash session. The formal edition is normally produced around 10:15 a.m. ET; describe it as the opening hour, not premarket.';
+  if (phase === 'cash-session') return 'This run is during the U.S. cash session. The formal edition is normally produced around 10:00 a.m. ET; describe it as the opening hour, not premarket.';
   if (phase === 'premarket-test') return 'This is an off-cycle TEST before the U.S. cash open. Use premarket only for timestamped source observations, do not claim that the cash market has opened, and do not infer an opening-hour trend.';
   if (phase === 'after-hours-test') return 'This is an off-cycle TEST after the U.S. cash close. Label observations latest available and do not present them as a live opening-hour read.';
   return 'This is an off-session TEST. Label observations latest available and do not present them as a live opening-hour read.';

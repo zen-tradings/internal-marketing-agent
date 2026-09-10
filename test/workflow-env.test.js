@@ -287,6 +287,10 @@ test('Opening Digest 保留价格事实，但禁止解释没有催化原因', as
   process.env.OPENROUTER_MODEL = 'global/writer';
   try {
     const { default: openingDigest } = await import('../src/workflows/opening-digest.js');
+    const { openingDigestPhaseGuidance } = await import('../src/lib/opening-digest-editorial.js');
+    assert.deepEqual(openingDigest.triggers, ['slack', 'cron:0 10 * * 1-5']);
+    assert.equal(openingDigest.cronTimezone, 'America/New_York');
+    assert.equal(openingDigest.cronCatchUpWindowMinutes, 120);
     assert.equal(openingDigest.model, 'global/writer');
     process.env.OPENING_DIGEST_MODEL = 'openai/gpt-oss-120b';
     assert.equal(openingDigest.model, 'openai/gpt-oss-120b');
@@ -296,6 +300,10 @@ test('Opening Digest 保留价格事实，但禁止解释没有催化原因', as
     assert.match(prompt, /write one factual price sentence only: omit a Reason clause entirely/i);
     assert.match(prompt, /never comment that a cause is missing, unknown, or unasserted/i);
     assert.doesNotMatch(prompt, /without asserting a cause/i);
+    assert.match(
+      openingDigestPhaseGuidance(new Date('2026-08-10T14:00:00.000Z')),
+      /normally produced around 10:00 a\.m\. ET/i,
+    );
   } finally {
     if (originalGlobalModel) process.env.OPENROUTER_MODEL = originalGlobalModel; else delete process.env.OPENROUTER_MODEL;
     if (originalOpeningModel) process.env.OPENING_DIGEST_MODEL = originalOpeningModel; else delete process.env.OPENING_DIGEST_MODEL;

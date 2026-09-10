@@ -535,7 +535,18 @@ test('complete digest renders template, address, options and schedules without c
   assert.doesNotMatch(create.body.body, /unsubscribe_url/);
   assert.equal(requests.some((item) => item.path.endsWith('/contents')), false);
   const schedule = requests.find((item) => item.path.endsWith('/schedule'));
-  assert.equal(schedule.body.scheduled_at, Date.parse('2026-08-10T14:30:00.000Z') / 1000);
+  assert.equal(schedule.body.scheduled_at, Date.parse('2026-08-10T14:15:00.000Z') / 1000);
+});
+
+test('cron digest sends immediately when the 10:15 ET target is less than five minutes away', async () => {
+  const requests = [];
+  const { channel } = standardChannel({
+    requests,
+    channel: { now: () => new Date('2026-08-10T14:11:00.000Z') },
+  });
+  await channel.publish({ articlePath: '/tmp/article.md', config: config(), source: 'cron' });
+  assert.equal(requests.some((item) => item.path.endsWith('/schedule')), false);
+  assert.equal(requests.some((item) => item.path.endsWith('/send')), true);
 });
 
 test('prepared universe artifact is reused for acceptance and formal rendering without another OIC capture', async (t) => {

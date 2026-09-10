@@ -706,7 +706,7 @@ function customerIoError(message, details = {}) {
 }
 function openingSendTarget(now, timezone) {
   const date = easternDateKey(now);
-  const rough = new Date(`${date}T10:30:00Z`);
+  const rough = new Date(`${date}T10:15:00Z`);
   const offset = new Intl.DateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'shortOffset' }).formatToParts(rough).find((part) => part.type === 'timeZoneName')?.value || 'GMT-5';
   const match = offset.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/);
   const minutes = match ? (Number(match[2]) * 60 + Number(match[3] || 0)) * (match[1] === '+' ? 1 : -1) : -300;

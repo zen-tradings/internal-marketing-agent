@@ -56,7 +56,7 @@ export default {
   factReview: true,
   factReviewPolicy: 'severe-only',
   editorialPlanning: true,
-  triggers: ['slack', 'cron:15 10 * * 1-5'],
+  triggers: ['slack', 'cron:0 10 * * 1-5'],
   get cronTimezone() { return runtimeConfig()?.openingDigest?.timezone || process.env.OPENING_DIGEST_TIMEZONE || 'America/New_York'; },
   cronCatchUpWindowMinutes: 120,
   cronRunKey: (date) => easternDateKey(date),
