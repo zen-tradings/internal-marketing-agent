@@ -241,6 +241,8 @@ npm run check:translation -- "翻译前 11 页 https://example.com/paper.pdf"
 
 An operator may resume a failed translation using the original SQLite `runs.id`; do not use the hashed run-directory name:
 
+Candidate-roster deliverables such as `quant_expert_search/output/options_*.json` may instead be anonymized and 1:1 translated into a publishable Chinese reading article. `scripts/translate-evidence-local.mjs <options.json>` caches the OpenRouter evidence translation next to the source; `scripts/build-anon-options-article.mjs <options.json>` builds `*_anon_zh.md` with deterministic `从业者 NN` and industry-category company placeholders; and `scripts/publish-local-article.mjs <article.md>` publishes the finished article to the WeChat draft box using the current runtime credentials. These scripts are local/maintenance entry points and do not start the Slack consumer.
+
 ```bash
 npm run requeue:translation -- <run-id>
 ```
