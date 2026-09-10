@@ -257,6 +257,20 @@ test('模型输入不泄露未保护原文且重叠缩写 token 可无损还原'
   assert.equal(restoreTranslationUnit(protectedUnit.unit.text, protectedUnit.tokens), unit.text);
 });
 
+test('超过 26 个不可变 token 时占位符仍唯一且可无损还原', () => {
+  const unit = {
+    id: 'body-1', kind: 'paragraph',
+    text: Array.from({ length: 30 }, (_, index) => `${index + 1}.1%`).join(', '),
+  };
+  const protectedUnit = protectTranslationUnit(unit);
+  const markers = protectedUnit.unit.text.match(/⟦ZEN_KEEP_[A-Z]{3}⟧/g) || [];
+  assert.equal(markers.length, 30);
+  assert.equal(new Set(markers).size, 30);
+  assert.ok(markers.includes('⟦ZEN_KEEP_AAZ⟧'));
+  assert.ok(markers.includes('⟦ZEN_KEEP_ABA⟧'));
+  assert.equal(restoreTranslationUnit(protectedUnit.unit.text, protectedUnit.tokens), unit.text);
+});
+
 test('财务季度与机构 Markdown 来源链接作为完整 token 保护', () => {
   const unit = {
     id: 'body-2', kind: 'paragraph',

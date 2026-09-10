@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 16;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 17;
 const MODEL_TRANSLATION_BATCH_SIZE = 1;
 
 const FIXED_TERMS = new Map([
@@ -330,13 +330,12 @@ function institutionMarkdownLinks(source) {
 }
 
 function alphaMarker(index) {
-  let value = Number(index) + 1;
+  let value = Number(index);
   let output = '';
-  while (value > 0) {
-    value -= 1;
+  do {
     output = String.fromCharCode(65 + (value % 26)) + output;
     value = Math.floor(value / 26);
-  }
+  } while (value > 0);
   return output.padStart(3, 'A');
 }
 
