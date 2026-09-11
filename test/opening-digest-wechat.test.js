@@ -363,6 +363,23 @@ test('OIC 时点与归属用确定性中文前缀保留原始数字、时区和�
   assert.equal(result.translations.find((unit) => unit.id === 'oic-attribution').text, '数据由 IVolatility 提供');
 });
 
+test('17 字模型标题只移除必要分隔符，不截断判断或不可变 token', async () => {
+  const source = {
+    article: { headline: 'Core CPI Hotter, Hike Odds Jump to 88%', body: '' },
+    metrics: [],
+  };
+  const result = await translateOpeningDigestPayload(source, {
+    writer: { model: 'test' },
+    complete: async ({ units }) => ({
+      translations: units.map((unit) => ({ id: unit.id, text: '核心CPI偏热，加息概率升至88%' })),
+    }),
+  });
+  const headline = result.translations.find((unit) => unit.id === 'headline').text;
+  assert.equal(headline, '核心CPI偏热加息概率升至88%');
+  assert.equal([...headline].length, 16);
+  assert.match(headline, /CPI.*88%/);
+});
+
 test('微信草稿标题使用“标题（日报·日期）”且测试身份保持在 32 字内', () => {
   assert.equal(openingDigestWechatTitle('AI硬件下滑，收益率回落', '2026-09-03'), 'AI硬件下滑，收益率回落（日报· 2026-09-03）');
   assert.equal(openingDigestWechatTitle('利率考验市场信心', '2026-08-10', { acceptance: true }), '[测试] 利率考验市场信心（日报· 08-10）');
