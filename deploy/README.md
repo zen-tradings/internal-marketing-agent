@@ -45,6 +45,9 @@ Digest segment ID when it is supplied). The versioned backup helper is installed
 transactionally before the backup and restored with the prior application on failure;
 the deployment verifies the database-and-artifact manifest before switching. It then
 switches the single systemd service and verifies the marker, main PID and `/ready`.
+The long-running remote validation is detached from the SSH output stream and
+polled through a small status file, so a transient SSH disconnect cannot stall
+the test runner or leave a half-finished interactive deployment session.
 A failed activation restores
 the previous release and protected environment file. The DigitalOcean metadata
 check is a deployment-target guard only; it is not an application startup,

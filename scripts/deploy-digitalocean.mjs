@@ -17,6 +17,8 @@ const DEFAULT_OPTIONS_STRATEGY_MODEL = 'anthropic/claude-fable-5';
 const DEFAULT_OPTIONS_STRATEGY_REASONING = 'high';
 const DEFAULT_OPTIONS_STRATEGY_MAX_TOKENS = 32000;
 const DEFAULT_OPTIONS_STRATEGY_TIMEOUT_MS = 900000;
+const REMOTE_DEPLOY_TIMEOUT_MS = 30 * 60 * 1000;
+const REMOTE_DEPLOY_POLL_MS = 5 * 1000;
 
 export const DEPLOY_MANAGED_ENV_KEYS = Object.freeze([
   'MAX_CONCURRENCY',
@@ -570,6 +572,25 @@ export function runCommand(command, args, { input, cwd = REPO_ROOT, quiet = fals
   return String(result.stdout || '');
 }
 
+function pause(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+export function parseRemoteDeployStatus(output) {
+  const entries = Object.fromEntries(String(output || '').trim().split('\n').filter(Boolean).map((line) => {
+    const splitAt = line.indexOf('=');
+    if (splitAt < 1) throw new Error(`Invalid remote deployment status line: ${line}`);
+    return [line.slice(0, splitAt), line.slice(splitAt + 1)];
+  }));
+  if (!['running', 'complete'].includes(entries.state)) {
+    throw new Error(`Invalid remote deployment state: ${entries.state || 'missing'}`);
+  }
+  if (entries.state === 'complete' && !/^\d+$/.test(entries.exit_code || '')) {
+    throw new Error('Completed remote deployment is missing an exit code');
+  }
+  return entries;
+}
+
 export function preflightRemote(target, run = runCommand) {
   const output = run('ssh', [...SSH_OPTIONS, target, 'bash -s'], { input: PREFLIGHT_SCRIPT, quiet: true });
   return parsePreflight(output);
@@ -589,9 +610,29 @@ export function activateRemote({ target, commit, model, reasoning, plannerModel,
   const short = commit.slice(0, 12);
   const archive = path.join(temporaryDir, `zen-content-hub-${short}.tar.gz`);
   const remoteScript = `/tmp/zen-content-hub-activate-${short}.sh`;
+  const remoteRunner = `/tmp/zen-content-hub-runner-${short}-${process.pid}.sh`;
+  const remoteStatus = `/tmp/zen-content-hub-activate-${short}-${process.pid}.status`;
+  const remoteLog = `/tmp/zen-content-hub-activate-${short}-${process.pid}.log`;
+  const remoteUnit = `zen-content-hub-deploy-${short}-${process.pid}`;
   const discordConfigFile = path.join(temporaryDir, `discord-config-${short}.json`);
   const remoteDiscordConfig = discordConfig ? `/tmp/zen-content-hub-discord-${short}.json` : '-';
   const encodedScript = Buffer.from(ACTIVATE_SCRIPT, 'utf8').toString('base64');
+  const runnerScript = String.raw`#!/bin/bash
+set +e
+status_file=$1
+log_file=$2
+activation_script=$3
+shift 3
+printf 'state=running\n' > "$status_file"
+bash "$activation_script" "$@" > "$log_file" 2>&1
+code=$?
+temporary_status="$status_file.tmp.$$"
+printf 'state=complete\nexit_code=%s\n' "$code" > "$temporary_status"
+mv "$temporary_status" "$status_file"
+rm -f "$activation_script"
+exit "$code"
+`;
+  const encodedRunner = Buffer.from(runnerScript, 'utf8').toString('base64');
   try {
     run('git', ['archive', '--format=tar.gz', `--output=${archive}`, commit]);
     run('scp', [...SSH_OPTIONS, archive, `${target}:/tmp/zen-content-hub-${short}.tar.gz`]);
@@ -599,11 +640,38 @@ export function activateRemote({ target, commit, model, reasoning, plannerModel,
       fs.writeFileSync(discordConfigFile, JSON.stringify(discordConfig), { mode: 0o600 });
       run('scp', [...SSH_OPTIONS, discordConfigFile, `${target}:${remoteDiscordConfig}`]);
     }
-    return run('ssh', [
+    run('ssh', [
       ...SSH_OPTIONS,
       target,
-      `printf '%s' '${encodedScript}' | base64 -d > ${remoteScript} && bash ${remoteScript} ${commit} ${model} ${reasoning} ${plannerModel} ${plannerReasoning} ${openingDigestModel} ${openingDigestWechatEnabled} ${openingDigestSegmentId} ${maxConcurrency} ${optionsStrategyModel} ${optionsStrategyReasoning} ${optionsStrategyMaxTokens} ${optionsStrategyTimeoutMs} ${remoteDiscordConfig}; status=$?; rm -f ${remoteScript} ${remoteDiscordConfig === '-' ? '' : remoteDiscordConfig}; exit $status`,
+      `set -e; printf '%s' '${encodedScript}' | base64 -d > ${remoteScript}; printf '%s' '${encodedRunner}' | base64 -d > ${remoteRunner}; chmod 0700 ${remoteRunner}; rm -f ${remoteStatus} ${remoteLog}; systemd-run --quiet --no-block --unit=${remoteUnit} /bin/bash ${remoteRunner} ${remoteStatus} ${remoteLog} ${remoteScript} ${commit} ${model} ${reasoning} ${plannerModel} ${plannerReasoning} ${openingDigestModel} ${openingDigestWechatEnabled} ${openingDigestSegmentId} ${maxConcurrency} ${optionsStrategyModel} ${optionsStrategyReasoning} ${optionsStrategyMaxTokens} ${optionsStrategyTimeoutMs} ${remoteDiscordConfig}`,
     ], { quiet: true });
+
+    const startedAt = Date.now();
+    let lastConnectionError = null;
+    while (Date.now() - startedAt < REMOTE_DEPLOY_TIMEOUT_MS) {
+      pause(REMOTE_DEPLOY_POLL_MS);
+      try {
+        const output = run('ssh', [...SSH_OPTIONS, target, `cat ${remoteStatus}`], { quiet: true });
+        const status = parseRemoteDeployStatus(output);
+        lastConnectionError = null;
+        if (status.state !== 'complete') continue;
+        const log = run('ssh', [...SSH_OPTIONS, target, `tail -n 120 ${remoteLog}`], { quiet: true });
+        if (Number(status.exit_code) !== 0) {
+          throw new Error(`Remote activation failed with exit ${status.exit_code}:\n${log.trim()}`);
+        }
+        try {
+          run('ssh', [...SSH_OPTIONS, target, `rm -f ${remoteRunner} ${remoteStatus} ${remoteLog}; systemctl reset-failed ${remoteUnit} >/dev/null 2>&1 || true`], { quiet: true });
+        } catch {
+          // The deployment is already verified complete. Cleanup is best-effort
+          // so a final transient SSH error cannot turn success into ambiguity.
+        }
+        return log;
+      } catch (error) {
+        if (/Remote activation failed/.test(String(error?.message || error))) throw error;
+        lastConnectionError = error;
+      }
+    }
+    throw new Error(`Remote activation is still running after 30 minutes. Inspect ${remoteStatus} and ${remoteLog}.${lastConnectionError ? ` Last poll error: ${lastConnectionError.message}` : ''}`);
   } finally {
     fs.rmSync(temporaryDir, { recursive: true, force: true });
   }

@@ -12,6 +12,7 @@ import {
   loadDiscordDeployConfig,
   parseDeployArgs,
   parsePreflight,
+  parseRemoteDeployStatus,
   resolveMaxConcurrency,
   validateDeployInputs,
   unmanagedEnvironmentText,
@@ -96,6 +97,16 @@ test('embedded remote preflight and activation scripts are valid Bash', () => {
   assert.match(ACTIVATE_SCRIPT, /\[ "\$switch_started" -eq 0 \] && \[ -d "\$stage" \]/);
   assert.match(ACTIVATE_SCRIPT, /find \/var\/lib\/zen-content-hub\/backups[^\n]+backup-\*\.sha256/);
   assert.match(ACTIVATE_SCRIPT, /sha256sum -c "\$latest_backup_manifest"/);
+});
+
+test('detached remote deployment status is strict and explicit', () => {
+  assert.deepEqual(parseRemoteDeployStatus('state=running\n'), { state: 'running' });
+  assert.deepEqual(parseRemoteDeployStatus('state=complete\nexit_code=0\n'), {
+    state: 'complete',
+    exit_code: '0',
+  });
+  assert.throws(() => parseRemoteDeployStatus('state=unknown\n'), /Invalid remote deployment state/);
+  assert.throws(() => parseRemoteDeployStatus('state=complete\n'), /missing an exit code/);
 });
 
 test('Discord deployment config is loaded from a gitignored env file without a CLI secret', () => {
