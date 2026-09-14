@@ -1,5 +1,5 @@
 export const FIXED_DRAFT_TEMPLATE_IDS = Object.freeze({
-  'wechat-draft': 'zen-wechat/zen-trading@8',
+  'wechat-draft': 'zen-wechat/zen-trading@10',
   'wechat-opening-digest': 'zen-wechat/zen-trading@9',
   'customerio-draft': 'zen-customerio/zen-research@5',
   'customerio-opening-digest': 'zen-customerio/zen-research@8',

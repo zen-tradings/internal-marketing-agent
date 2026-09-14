@@ -713,9 +713,14 @@ export async function sourceDocumentFromMarkdown({
     const list = /^(\s*)([-*+]|\d+[.)])\s+(.+)$/.exec(raw);
     if (list) {
       flushParagraph();
+      const ordered = /^\d/.test(list[2]);
       push({
         type: referencesStarted ? 'reference' : 'list_item',
-        ordered: /^\d/.test(list[2]),
+        ordered,
+        ...(ordered ? {
+          ordinal: Number.parseInt(list[2], 10),
+          delimiter: list[2].endsWith(')') ? ')' : '.',
+        } : {}),
         depth: Math.floor(list[1].length / 2),
         text: cleanMarkdownText(list[3]),
       });
@@ -1204,7 +1209,8 @@ export function renderTranslatedDocument(document) {
     else if (block.type === 'paragraph') lines.push(text, '');
     else if (block.type === 'quote') lines.push(...String(text).split('\n').map((line) => `> ${line}`), '');
     else if (block.type === 'list_item') {
-      const marker = block.ordered ? '1.' : '-';
+      const ordinal = Number.isInteger(block.ordinal) ? block.ordinal : 1;
+      const marker = block.ordered ? `${ordinal}${block.delimiter === ')' ? ')' : '.'}` : '-';
       lines.push(`${'  '.repeat(block.depth || 0)}${marker} ${text}`, '');
     } else if (block.type === 'figure') {
       figureNumber += 1;
@@ -2972,6 +2978,10 @@ function blocksFromDom(root, documentUrl) {
     else if (node.tagName === 'LI') {
       type = 'list_item';
       block.ordered = node.parentElement?.tagName === 'OL';
+      if (block.ordered) {
+        block.ordinal = orderedListItemOrdinal(node);
+        block.delimiter = '.';
+      }
       let depth = 0;
       for (let parent = node.parentElement?.closest('li'); parent; parent = parent.parentElement?.closest('li')) depth += 1;
       block.depth = depth;
@@ -2986,6 +2996,22 @@ function blocksFromDom(root, documentUrl) {
     });
   }
   return blocks;
+}
+
+function orderedListItemOrdinal(node) {
+  const list = node.parentElement;
+  if (list?.tagName !== 'OL') return undefined;
+  const items = [...list.children].filter((child) => child.tagName === 'LI');
+  const reversed = list.hasAttribute('reversed');
+  const parsedStart = Number.parseInt(list.getAttribute('start') || '', 10);
+  let ordinal = Number.isInteger(parsedStart) ? parsedStart : (reversed ? items.length : 1);
+  for (const item of items) {
+    const explicitValue = Number.parseInt(item.getAttribute('value') || '', 10);
+    if (Number.isInteger(explicitValue)) ordinal = explicitValue;
+    if (item === node) return ordinal;
+    ordinal += reversed ? -1 : 1;
+  }
+  return undefined;
 }
 
 function richTextFromNode(node, documentUrl) {

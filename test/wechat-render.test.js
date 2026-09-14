@@ -10,6 +10,7 @@ import {
   appendFinalTailImages,
   normalizeBodyTypography,
   normalizeCodeBreaks,
+  normalizeListMarkers,
   removeDuplicateReferenceSections,
   styleKeyHighlights,
   validatePreparedWechatHtml,
@@ -87,17 +88,44 @@ test('微信最终 HTML:Markdown 粗体渲染为克制的关键词高亮', () =>
   assert.equal(strong.style.color, 'rgb(41, 74, 99)');
 });
 
-test('微信最终 HTML:引用和原文信息字号归一为正文字号', () => {
+test('微信最终 HTML:引用、列表和原文信息字号归一为正文字号', () => {
   const output = normalizeBodyTypography(
-    '<section><blockquote style="font-size:1.5em"><p style="font-size:1.2em">原文信息</p></blockquote></section>',
+    '<section><blockquote style="font-size:1.5em"><p style="font-size:1.2em">原文信息</p></blockquote><ol><li style="font-size:.88em"><section><p style="font-size:.88em">列表正文</p><ol><li style="font-size:.88em"><p style="font-size:.88em">嵌套正文</p></li></ol></section></li></ol></section>',
   );
   const document = new JSDOM(`<body>${output}</body>`).window.document;
   assert.equal(document.querySelector('blockquote').style.fontSize, '0.88em');
   assert.equal(document.querySelector('blockquote p').style.fontSize, '1em');
+  assert.equal(document.querySelector('ol > li').style.fontSize, '0.88em');
+  assert.equal(document.querySelector('ol > li p').style.fontSize, '1em');
+  assert.equal(document.querySelector('ol ol > li').style.fontSize, '1em');
+  assert.equal(document.querySelector('ol ol > li p').style.fontSize, '1em');
   assert.doesNotThrow(() => validatePreparedWechatHtml(output));
   assert.throws(
     () => validatePreparedWechatHtml('<blockquote style="font-size:1.05em">过大文字</blockquote>'),
     /大于正文字号/,
+  );
+});
+
+test('微信最终 HTML:将伪元素列表符号实体化并保留原文有序序号', () => {
+  const output = normalizeListMarkers([
+    '<section>',
+    '<ol start="3"><li><section><p>第三项</p></section></li><li value="7"><p>第七项</p></li><li><p>第八项</p></li></ol>',
+    '<ul><li><section><p>项目 A</p></section></li><li>项目 B</li></ul>',
+    '</section>',
+  ].join(''));
+  const document = new JSDOM(`<body>${output}</body>`).window.document;
+  const ordered = [...document.querySelectorAll('ol > li')]
+    .map((item) => item.querySelector('[data-zen-list-marker="true"]').textContent);
+  const unordered = [...document.querySelectorAll('ul > li')]
+    .map((item) => item.querySelector('[data-zen-list-marker="true"]').textContent);
+  assert.deepEqual(ordered, ['3.', '7.', '8.']);
+  assert.deepEqual(unordered, ['▪', '▪']);
+  assert.equal(document.querySelector('ol > li p').firstChild.getAttribute('data-zen-list-marker'), 'true');
+  assert.equal(document.querySelectorAll('[data-zen-list-marker="true"]').length, 5);
+  assert.equal(
+    new JSDOM(`<body>${normalizeListMarkers(output)}</body>`).window.document
+      .querySelectorAll('[data-zen-list-marker="true"]').length,
+    5,
   );
 });
 

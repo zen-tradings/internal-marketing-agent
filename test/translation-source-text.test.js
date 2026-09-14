@@ -655,6 +655,41 @@ test('章节范围先裁剪结构再下载该范围内的图片', async () => {
   assert.equal(document.scope.appliedStartHeading, 'Results');
 });
 
+test('Markdown/HTML 直译保留有序列表的原始起始值、显式序号和分隔符', async () => {
+  const markdown = await sourceDocumentFromMarkdown({
+    sourceUrl: 'https://example.com/list.md',
+    markdown: '3) Third\n4) Fourth\n',
+  });
+  assert.deepEqual(
+    markdown.blocks.map(({ type, ordered, ordinal, delimiter }) => ({ type, ordered, ordinal, delimiter })),
+    [
+      { type: 'list_item', ordered: true, ordinal: 3, delimiter: ')' },
+      { type: 'list_item', ordered: true, ordinal: 4, delimiter: ')' },
+    ],
+  );
+  markdown.blocks[0].translatedText = '第三项';
+  markdown.blocks[1].translatedText = '第四项';
+  assert.match(renderTranslatedDocument(markdown), /^3\) 第三项\n\n4\) 第四项$/m);
+
+  const html = await sourceDocumentFromHtml({
+    sourceUrl: 'https://example.com/list',
+    html: `<main><h1>Ordered configurations</h1><ol start="3">
+      <li>Third configuration contains enough explanatory source prose for complete article extraction.</li>
+      <li value="7">Seventh configuration contains enough explanatory source prose for complete article extraction.</li>
+      <li>Eighth configuration contains enough explanatory source prose for complete article extraction.</li>
+    </ol></main>`,
+  });
+  assert.deepEqual(
+    html.blocks.filter((block) => block.type === 'list_item')
+      .map(({ ordered, ordinal, delimiter }) => ({ ordered, ordinal, delimiter })),
+    [
+      { ordered: true, ordinal: 3, delimiter: '.' },
+      { ordered: true, ordinal: 7, delimiter: '.' },
+      { ordered: true, ordinal: 8, delimiter: '.' },
+    ],
+  );
+});
+
 test('Markdown/Notion 保留图片、表格、代码和参考文献', async () => {
   const document = await sourceDocumentFromMarkdown({
     sourceUrl: 'https://workspace.notion.site/Report-0123456789abcdef0123456789abcdef',

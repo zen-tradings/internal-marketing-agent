@@ -33,7 +33,7 @@ wechatPublisher._updateDraftFn = boundedWechatClient.updateDraft;
 export async function renderAndPublishWithFinalFooter(inputContent, options, getInputContent) {
   const { gzhContent, absoluteDirPath } = await prepareRenderContext(inputContent, options, getInputContent);
   if (!gzhContent?.title) throw new Error('未能找到文章标题');
-  gzhContent.content = normalizeCodeBreaks(normalizeBodyTypography(
+  gzhContent.content = normalizeCodeBreaks(normalizeBodyTypography(normalizeListMarkers(
     await restyleSectionHeadings(
       styleKeyHighlights(alignTerminalReferences(removeDuplicateReferenceSections(gzhContent.content))),
       {
@@ -44,7 +44,7 @@ export async function renderAndPublishWithFinalFooter(inputContent, options, get
         renderCards: options.renderHeadingCards,
       },
     ),
-  ));
+  )));
   if (options.finalSurveyPath || options.finalFooterPath) {
     gzhContent.content = appendFinalTailImages(gzhContent.content, {
       surveyPath: options.finalSurveyPath,
@@ -176,16 +176,68 @@ export function normalizeBodyTypography(html) {
   const dom = new JSDOM(`<body>${String(html || '')}</body>`);
   const document = dom.window.document;
   const bodyFont = '"PingFang SC","PingFang TC",-apple-system,BlinkMacSystemFont,"Hiragino Sans GB","Microsoft YaHei",sans-serif';
-  for (const quote of document.querySelectorAll('blockquote')) {
-    quote.style.fontFamily = bodyFont;
-    quote.style.fontSize = '.88em';
-    quote.style.fontWeight = '300';
-    quote.style.lineHeight = '1.6';
-    for (const paragraph of quote.querySelectorAll('p')) {
-      paragraph.style.fontFamily = bodyFont;
-      paragraph.style.fontSize = '1em';
-      paragraph.style.fontWeight = '300';
-      paragraph.style.lineHeight = '1.6';
+  const bodyNodes = [...document.querySelectorAll('blockquote,li')];
+  for (const node of bodyNodes) {
+    const nested = Boolean(node.parentElement?.closest('blockquote,li'));
+    node.style.fontFamily = bodyFont;
+    node.style.fontSize = nested ? '1em' : '.88em';
+    node.style.fontWeight = '300';
+    node.style.lineHeight = '1.6';
+  }
+  // Wenyan wraps loose-list content in a paragraph. Its inline `.88em` would otherwise
+  // compound with the list item's `.88em`, making list copy visibly smaller than body copy.
+  for (const paragraph of document.querySelectorAll('blockquote p,li p')) {
+    paragraph.style.fontFamily = bodyFont;
+    paragraph.style.fontSize = '1em';
+    paragraph.style.fontWeight = '300';
+    paragraph.style.lineHeight = '1.6';
+  }
+  return document.body.innerHTML;
+}
+
+// WeChat does not retain CSS pseudo-elements from the custom theme. The theme's
+// `li::before` markers therefore disappear unless they are materialized into the
+// final HTML. Derive ordered values from HTML list semantics so start/value/reversed
+// numbering remains faithful instead of inventing or resetting item numbers.
+export function normalizeListMarkers(html) {
+  const dom = new JSDOM(`<body>${String(html || '')}</body>`);
+  const document = dom.window.document;
+  for (const list of document.querySelectorAll('ol,ul')) {
+    const items = [...list.children].filter((child) => child.tagName === 'LI');
+    const ordered = list.tagName === 'OL';
+    const reversed = ordered && list.hasAttribute('reversed');
+    const parsedStart = Number.parseInt(list.getAttribute('start') || '', 10);
+    let ordinal = Number.isInteger(parsedStart)
+      ? parsedStart
+      : (reversed ? items.length : 1);
+
+    for (const item of items) {
+      if (item.querySelector(':scope > [data-zen-list-marker="true"],:scope > section > [data-zen-list-marker="true"],:scope > section > p > [data-zen-list-marker="true"],:scope > p > [data-zen-list-marker="true"]')) {
+        if (ordered) ordinal += reversed ? -1 : 1;
+        continue;
+      }
+      const explicitValue = Number.parseInt(item.getAttribute('value') || '', 10);
+      if (ordered && Number.isInteger(explicitValue)) ordinal = explicitValue;
+
+      const marker = document.createElement('span');
+      marker.setAttribute('data-zen-list-marker', 'true');
+      marker.setAttribute('aria-hidden', 'true');
+      marker.setAttribute(
+        'style',
+        `font-family:inherit;font-size:1em;font-weight:700;color:${ordered ? '#2F7D54' : '#0E2138'};margin-right:.45em;`,
+      );
+      marker.textContent = ordered ? `${ordinal}.` : '▪';
+
+      const paragraph = [...item.querySelectorAll('p')]
+        .find((candidate) => candidate.closest('li') === item);
+      if (paragraph) {
+        paragraph.prepend(marker);
+      } else {
+        const section = [...item.children]
+          .find((child) => child.tagName === 'SECTION');
+        (section || item).prepend(marker);
+      }
+      if (ordered) ordinal += reversed ? -1 : 1;
     }
   }
   return document.body.innerHTML;
