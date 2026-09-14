@@ -638,6 +638,51 @@ test('双渠道严格先完成 Customer.io，再用同一冻结 payload 创建�
   assert.equal(result.deliveries.find((item) => item.destination === 'wechat').mediaId, 'wx-media-1');
 });
 
+test('微信纠错只更新同一个 verified 草稿，不重发邮件或 Discord', async () => {
+  const requests = [];
+  let existingWechatId = '';
+  const sentNewsletter = {
+    id: 99,
+    name: 'Zen Opening Digest · 2026-08-10',
+    sent_at: 1,
+    recipient_segment_ids: [42],
+    subscription_topic_id: 19,
+  };
+  const { channel } = standardChannel({
+    requests,
+    cio: { newsletterId: 99, list: [sentNewsletter] },
+    channel: {
+      translatePayload: async () => ({
+        model: 'test', payloadHash: 'repair-hash', blockCount: 1, repairs: [],
+        translations: [{ id: 'preheader', text: '修正版早盘信号' }],
+      }),
+      wechatChannel: {
+        async publish({ existingRemoteId }) {
+          existingWechatId = existingRemoteId;
+          return { mediaId: existingRemoteId, title: '修正版（日报· 2026-08-10）', status: 'verified', errors: [], attempts: [{ status: 'verified', updated: true }] };
+        },
+      },
+    },
+  });
+  const enabled = config();
+  enabled.openingDigest.wechatEnabled = true;
+  enabled.discord = { openingDigestEnabled: true };
+  const result = await channel.publish({
+    articlePath: '/tmp/article.md',
+    config: enabled,
+    source: 'wechat-repair',
+    contentMode: 'editorial',
+    existingRemoteId: '99',
+    existingDeliveries: [
+      { destination: 'customerio', status: 'delivered', media_id: 'customerio-newsletter:99' },
+      { destination: 'wechat', status: 'verified', media_id: 'wx-existing', title: '旧标题' },
+    ],
+  });
+  assert.equal(existingWechatId, 'wx-existing');
+  assert.equal(result.deliveries.find((item) => item.destination === 'wechat').mediaId, 'wx-existing');
+  assert.equal(requests.some((item) => /\/(?:send|schedule)$/.test(item.path)), false);
+});
+
 test('Discord 只在正式 cron 邮件成功后把同一冻结英文 payload 加入持久队列', async () => {
   const { channel } = standardChannel();
   const enabled = config();

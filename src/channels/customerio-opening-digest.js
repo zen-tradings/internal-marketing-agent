@@ -71,6 +71,10 @@ export function makeChannel({
           throw publishError(`Opening Digest 测试版只能发送到 Customer.io segment test1，当前为 ${audience.name}`);
         }
         const acceptance = source === 'acceptance';
+        const wechatRepair = source === 'wechat-repair';
+        if (wechatRepair && (contentMode !== 'editorial' || !existingRemoteId)) {
+          throw publishError('Opening Digest 微信纠错只允许使用已发送邮件对应的完整 editorial 稿');
+        }
         if (acceptance && !/^[a-z0-9-]{8,80}$/i.test(acceptanceId)) {
           throw publishError('Opening Digest 验收邮件缺少安全的 acceptance ID');
         }
@@ -92,6 +96,9 @@ export function makeChannel({
           if (newsletterId) await onCreated?.({ remoteId: String(newsletterId), title: name });
         }
         const emailAlreadySent = remote?.sent_at != null;
+        if (wechatRepair && !emailAlreadySent) {
+          throw publishError('Opening Digest 微信纠错要求 Customer.io 邮件已经发送');
+        }
 
         let headerImageUrl = '';
         try {
@@ -282,9 +289,18 @@ export function makeChannel({
               invariants: { blockIdsAndOrder: true, numbersTickersTimesAndBrands: true, sourceLinksRemoved: true },
             };
             const prior = existingDeliveries.find((item) => item.destination === 'wechat' && item.media_id);
-            const wechat = prior
+            if (wechatRepair && (!prior || prior.status !== 'verified')) {
+              throw publishError('Opening Digest 微信纠错要求已有 verified 草稿和 media_id');
+            }
+            const wechat = prior && !wechatRepair
               ? { mediaId: prior.media_id, title: prior.title, status: prior.status || 'existing', errors: [], attempts: [] }
-              : await wechatChannel.publish({ payload: wechatPayload, translation: translated, config, acceptance });
+              : await wechatChannel.publish({
+                payload: wechatPayload,
+                translation: translated,
+                config,
+                acceptance,
+                existingRemoteId: wechatRepair ? prior.media_id : '',
+              });
             const delivery = { destination: 'wechat', status: wechat.status, mediaId: wechat.mediaId, title: wechat.title, details: { errors: wechat.errors, attempts: wechat.attempts } };
             deliveries.push(delivery);
             await onDelivery?.(delivery);

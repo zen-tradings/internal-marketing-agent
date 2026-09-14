@@ -542,6 +542,10 @@ export async function runWriter({
     if (workflow.id === 'opening-digest' && e?.openingDigestFactReview) {
       trace.factReview = e.openingDigestFactReview;
     }
+    if (workflow.id === 'opening-digest' && isOpeningDigestEditorialModelFailure(e)) {
+      e.openingDigestHardFailure = true;
+      e.stage ||= 'generate';
+    }
     if (workflow.id === 'opening-digest' && !e?.openingDigestHardFailure) {
       const fallbackAsOf = new Date();
       let fallback = openingDigestFallbackArticle(fallbackAsOf);
@@ -601,6 +605,11 @@ export async function runWriter({
 function openingDigestFallbackArticle(asOf) {
   const date = easternDateKey(asOf);
   return `---\ntitle: Zen Opening Digest\nheadline: Opening data, read unavailable\nstance: neutral\nconfidence: low\npreheader: Opening data are available; the evidence-bound editorial read could not be completed.\nedition: ${date}\n---\nEditorial update unavailable for this edition. Opening data are available, but the evidence-bound synthesis could not be completed, so no directional conclusion is presented.\n\n## What matters today\n\nNo evidence-ranked narrative is available.\n\nNo additional market implication is asserted.\n\n## Evidence and cross-currents\n\nThe available data are shown without a causal interpretation.\n\n## What to watch\n\n- Current index levels and volatility\n- Available Treasury yield observations\n- Scheduled earnings shown below\n`;
+}
+
+function isOpeningDigestEditorialModelFailure(error) {
+  return /(?:OpenRouter completion failed|OpenRouter returned empty content|OpenRouter returned malformed JSON response|OpenRouter completion timed out)/i
+    .test(String(error?.message || error || ''));
 }
 
 async function runAnalysisV2({
@@ -3037,7 +3046,8 @@ function summarizeInferenceTelemetry(requests) {
 
 function modelRequiresReasoning(model) {
   return /^qwen\/qwen3\.8-max(?:$|[-:])/i.test(String(model || ''))
-    || /^anthropic\/claude-fable-5(?:$|[-:])/i.test(String(model || ''));
+    || /^anthropic\/claude-fable-5(?:$|[-:])/i.test(String(model || ''))
+    || /^openai\/gpt-oss-(?:20b|120b)(?:$|[-:])/i.test(String(model || ''));
 }
 
 function extractMessageContent(content) {

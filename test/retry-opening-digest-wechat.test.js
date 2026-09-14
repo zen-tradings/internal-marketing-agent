@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { openStore } from '../src/core/store.js';
 import { runWorkDir } from '../src/lib/run-workdir.js';
-import { retryOpeningDigestWechat } from '../scripts/retry-opening-digest-wechat.mjs';
+import { repairOpeningDigestWechat, retryOpeningDigestWechat } from '../scripts/retry-opening-digest-wechat.mjs';
 
 function fixture({ wechatError = 'Opening Digest 中文直译硬校验失败:body-3(URL 不一致)' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'retry-opening-wechat-'));
@@ -99,4 +99,50 @@ test('受限命令拒绝非翻译门禁失败、已有微信 media_id 和非空�
     ...busy,
     publish: async () => { throw new Error('不应调用'); },
   }), /队列非空/);
+});
+
+test('正文模型技术失败可重新生成并只更新同一个 verified 微信草稿', async (t) => {
+  const value = fixture();
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  value.store.upsertDelivery(value.runId, {
+    destination: 'wechat',
+    status: 'verified',
+    mediaId: 'wx-existing',
+    title: '开盘数据，读取不可用（日报· 2026-09-08）',
+    details: { attempts: [{ status: 'verified' }] },
+  });
+  fs.writeFileSync(path.join(value.sourceDir, 'research-trace.json'), JSON.stringify({
+    contentMode: 'data-only',
+    fallbackReason: 'OpenRouter completion failed: 400 Reasoning is mandatory and cannot be disabled',
+    openingDigestDelivery: {},
+  }));
+  let publishInput;
+  const result = await repairOpeningDigestWechat({
+    ...value,
+    now: () => new Date('2026-09-08T15:00:00.000Z'),
+    generate: async ({ workflow }) => {
+      const articlePath = path.join(workflow.workDir, 'article.md');
+      const tracePath = path.join(workflow.workDir, 'research-trace.json');
+      fs.writeFileSync(articlePath, '---\ntitle: Zen Opening Digest\nheadline: AI pressure meets rates\npreheader: Corrected read.\nedition: 2026-09-08\n---\nA complete evidence-bound editorial read.');
+      fs.writeFileSync(tracePath, JSON.stringify({ contentMode: 'editorial' }));
+      return { ok: true, contentMode: 'editorial', articlePath, researchTracePath: tracePath };
+    },
+    publish: async (input) => {
+      publishInput = input;
+      return { deliveries: [{
+        destination: 'wechat', status: 'verified', mediaId: 'wx-existing',
+        title: 'AI承压叠加利率（日报· 2026-09-08）', details: { attempts: [{ status: 'verified', updated: true }] },
+      }] };
+    },
+  });
+  assert.equal(result.mediaId, 'wx-existing');
+  assert.equal(publishInput.source, 'wechat-repair');
+  assert.equal(publishInput.existingRemoteId, '66');
+  assert.equal(publishInput.config.discord.openingDigestEnabled, false);
+  const delivery = value.store.listDeliveries(value.runId).find((item) => item.destination === 'wechat');
+  assert.equal(delivery.status, 'verified');
+  assert.equal(delivery.media_id, 'wx-existing');
+  assert.equal(JSON.parse(delivery.details_json).correctedFromTechnicalFallback, true);
+  const sourceTrace = JSON.parse(fs.readFileSync(path.join(value.sourceDir, 'research-trace.json'), 'utf8'));
+  assert.equal(sourceTrace.openingDigestDelivery.wechatRepair.mediaId, 'wx-existing');
 });

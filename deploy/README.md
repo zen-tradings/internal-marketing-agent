@@ -399,6 +399,27 @@ sudo systemd-run --wait --pipe --collect \
 
 The command refuses a non-idle queue, non-cron or non-`done` runs, a missing/successful Customer.io delivery, any WeChat `media_id`, non-translation failures, and missing isolated artifacts. It reuses the existing sent newsletter and same-run article, quote, earnings, and OIC artifacts; Discord is disabled for this recovery call. Success prints one verified WeChat `mediaId`, updates only that run's `run_deliveries.wechat` record, and does not resend the email or Discord posts. Do not hand-edit SQLite or rerun the full Opening Digest acceptance to recover one derivative.
 
+If the current-day formal draft was already verified but contains the explicit
+technical `data-only` placeholder caused by an OpenRouter completion failure,
+regenerate the editorial copy and update that same WeChat `media_id` with:
+
+```bash
+run_id=replace-with-current-day-database-run-id
+sudo systemd-run --wait --pipe --collect \
+  --unit=zen-content-hub-opening-wechat-repair \
+  --uid=zenbot \
+  --property=WorkingDirectory=/opt/zen-content-hub \
+  --property=EnvironmentFile=/etc/zen-content-hub/zen-content-hub.env \
+  /usr/bin/npm run retry:opening-digest-wechat -- --repair-verified "$run_id"
+```
+
+This narrower correction requires an idle queue and delivery outbox, the same
+current ET date, a successful Customer.io delivery, an existing verified WeChat
+draft, and a trace proving the original body came from a technical model
+failure. It disables Discord, never sends or schedules Customer.io, regenerates
+into a run-scoped repair directory, and updates then verifies the existing
+WeChat draft instead of creating a duplicate.
+
 ## Recovering a failed translation
 
 Use the restricted recovery command only after the target release has passed

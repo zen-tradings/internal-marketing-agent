@@ -521,6 +521,27 @@ test('Qwen3.8-Max 首次空正文时从 high 降到 low 重试并成功', async 
   assert.equal(completionBodies[1].max_tokens, 16000);
 });
 
+test('GPT-OSS 首次空正文时保持 mandatory reasoning 并用 low 重试', async () => {
+  const workflow = tempWorkflow({ model: 'openai/gpt-oss-120b' });
+  const config = baseConfig();
+  config.writer.reasoningEffort = 'high';
+  const completionBodies = [];
+  const fetchFn = async (url, opts) => {
+    if (String(url).endsWith('/search')) return jsonResponse({ results: [] });
+    completionBodies.push(JSON.parse(opts.body));
+    if (completionBodies.length === 1) {
+      return jsonResponse({
+        choices: [{ finish_reason: 'length', message: { content: null, reasoning: 'thinking' } }],
+        usage: { completion_tokens: 12000, completion_tokens_details: { reasoning_tokens: 12000 } },
+      });
+    }
+    return jsonResponse({ choices: [{ message: { content: '---\ntitle: GPT-OSS retry\n---\n正文。' } }] });
+  };
+  const result = await runWriter({ workflow, input: 'opening', config, fetchFn });
+  assert.equal(result.ok, true);
+  assert.deepEqual(completionBodies.map((body) => body.reasoning.effort), ['high', 'low']);
+});
+
 test('Fable profile 空正文重试保持同一模型且 adaptive thinking 不降为 none', async () => {
   const workflow = tempWorkflow({ id: 'email', mode: 'newsletter', factReview: false });
   const config = baseConfig();
@@ -802,7 +823,7 @@ test('Opening Digest 零研究结果时写出确定性数据版并记录 trace',
   assert.match(trace.fallbackReason, /未检索到可用研究来源/);
 });
 
-test('Opening Digest OpenRouter 失败时降级为数据版而不返回 generate 失败', async () => {
+test('Opening Digest 正文模型失败时硬停，不发布技术占位稿', async () => {
   const workflow = openingWorkflow();
   const result = await runWriter({
     workflow,
@@ -812,9 +833,12 @@ test('Opening Digest OpenRouter 失败时降级为数据版而不返回 generate
       ? jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/a', text: 'Supported market fact.' }] })
       : jsonResponse({ error: 'down' }, { ok: false, status: 503, statusText: 'Unavailable' }),
   });
-  assert.equal(result.ok, true);
-  assert.equal(result.contentMode, 'data-only');
-  assert.match(fs.readFileSync(result.articlePath, 'utf8'), /title: Zen Opening Digest/);
+  assert.equal(result.ok, false);
+  assert.match(result.stderr, /OpenRouter completion failed: 503/);
+  assert.equal(fs.existsSync(result.articlePath), false);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.match(trace.error, /OpenRouter completion failed: 503/);
+  assert.equal(trace.contentMode, undefined);
 });
 
 test('Opening Digest 普通审查问题只记录 trace，不修改或阻断稿件', async () => {
