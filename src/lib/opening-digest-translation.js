@@ -180,6 +180,7 @@ export function prepareOpeningDigestWechatPayload(payload) {
 export function stripOpeningDigestReferences(value) {
   return String(value || '')
     .replace(/【[^【】\s]+†https?:\/\/[^\s】]+】/gi, '')
+    .replace(/[\uff08(]\s*(?:sources?|source links?|来源|资料来源)\s*[:：]\s*(?:\[[^\]]+]\((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+\)(?:\s*[;,；，]\s*)?)+\s*[)\uff09]/gi, '')
     .replace(/[\uff08(]\s*\[([^\]]+)]\(((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+)\)\s*[)\uff09]/gi, '')
     .replace(/\[([^\]]+)]\(((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+)\)/gi, '$1')
     .replace(/<(?:https?:\/\/|mailto:)[^>\s]+>/gi, '')

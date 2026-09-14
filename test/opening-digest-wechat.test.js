@@ -219,6 +219,14 @@ test('9 月故障型证据引用在模型调用前已删除，不再参与 token
   assert.match(result.translations[0].text, /94\.60.*S&P 500/);
 });
 
+test('带 source 前缀和多个链接的括号来源整体删除', () => {
+  const prepared = prepareOpeningDigestWechatPayload({
+    article: { body: 'Demand held (source: [TradingKey](https://example.com/a); [Citi/Dell](https://example.com/b)).' },
+    metrics: [],
+  });
+  assert.equal(prepared.article.body, 'Demand held.');
+});
+
 test('英文金额的数字与量级作为一个不可变 token 保护', () => {
   const unit = {
     id: 'body-2', kind: 'list_item',
