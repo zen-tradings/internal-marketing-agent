@@ -6,6 +6,7 @@ import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 export const OPENING_DIGEST_TRANSLATION_VERSION = 19;
 export const OPENING_DIGEST_SAFE_HEADLINE = '今日开市要点';
 const MODEL_TRANSLATION_BATCH_SIZE = 1;
+const MODEL_TRANSLATION_MAX_TOKENS = 4096;
 
 const FIXED_TERMS = new Map([
   ['Market snapshot', '市场快照'],
@@ -454,7 +455,11 @@ async function completeTranslation({ units, writer, fetchFn, round, timeoutMs })
         model: writer.model,
         messages: [{ role: 'system', content: 'You are a rigorous financial translator. Output JSON only.' }, { role: 'user', content: prompt }],
         temperature: 0,
-        max_tokens: Math.min(Number(writer.maxTokens) || 12000, 12000),
+        // Opening Digest translates one already-split block per request. Reserving the
+        // writer-wide 12k output budget for every small block needlessly raises the
+        // provider's credit pre-authorization and can reject otherwise affordable
+        // translations before generation starts.
+        max_tokens: Math.min(Number(writer.maxTokens) || MODEL_TRANSLATION_MAX_TOKENS, MODEL_TRANSLATION_MAX_TOKENS),
         reasoning: { effort: 'low', exclude: true },
         response_format: {
           type: 'json_schema',

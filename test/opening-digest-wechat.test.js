@@ -136,6 +136,30 @@ test('OpenRouter 返回损坏 JSON 时按局部修复预算重试而不立即放
   assert.ok(result.repairs.every((repair) => repair.issues.some((issue) => /JSON 无效/.test(issue))));
 });
 
+test('Opening Digest 逐块翻译使用有界输出预算，避免余额预授权误拒绝', async () => {
+  let requestBody;
+  const result = await translateOpeningDigestPayload({
+    article: { preheader: 'Market signals.', body: '' }, metrics: [],
+  }, {
+    writer: {
+      model: 'test', openrouterApiKey: 'test-key', baseUrl: 'https://openrouter.test', maxTokens: 12000,
+    },
+    fetchFn: async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return {
+        ok: true, status: 200,
+        async text() {
+          return JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+            translations: [{ id: 'preheader', text: '市场信号。' }],
+          }) } }] });
+        },
+      };
+    },
+  });
+  assert.equal(requestBody.max_tokens, 4096);
+  assert.equal(result.translations[0].text, '市场信号。');
+});
+
 test('Opening Digest 品牌门禁不把英文标题短语误判为机构名', async () => {
   const source = {
     article: {
