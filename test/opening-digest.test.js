@@ -665,6 +665,38 @@ test('Discord 只在正式 cron 邮件成功后把同一冻结英文 payload 加
   assert.equal(queued.length, 1);
 });
 
+test('正式 cron 仅在 Customer.io 成功后持久排队微信，且队列保存原始冻结英文 payload', async () => {
+  const events = [];
+  const { channel } = standardChannel({
+    cio: { send: async () => { events.push('email'); return response({}); } },
+  });
+  const enabled = config(); enabled.openingDigest.wechatEnabled = true;
+  const queued = [];
+  const result = await channel.publish({
+    articlePath: '/tmp/article.md', config: enabled, source: 'cron',
+    onDeferredDelivery: async (delivery) => { events.push(`queue:${delivery.destination}`); queued.push(delivery); return { state: 'pending', payload_sha256: 'same-hash' }; },
+  });
+  assert.deepEqual(events, ['email', 'queue:wechat']);
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].destination, 'wechat');
+  assert.match(queued[0].payload.article.body, /https:\/\/example\.com\/a/);
+  assert.equal(Object.isFrozen(queued[0].payload), true);
+  assert.equal(result.deliveries.find((item) => item.destination === 'wechat').status, 'pending');
+});
+
+test('Customer.io 客观发送失败时绝不排队微信', async () => {
+  const queued = [];
+  const { channel } = standardChannel({
+    cio: { send: async () => response({ message: 'send failed' }, { status: 401 }) },
+  });
+  const enabled = config(); enabled.openingDigest.wechatEnabled = true;
+  await assert.rejects(channel.publish({
+    articlePath: '/tmp/article.md', config: enabled, source: 'cron',
+    onDeferredDelivery: async (delivery) => { queued.push(delivery); return { state: 'pending' }; },
+  }));
+  assert.deepEqual(queued, []);
+});
+
 test('zero audience and failed audience preflight do not block configured test1 delivery', async () => {
   for (const fetchMode of ['zero', 'failed']) {
     const requests = [];
@@ -886,7 +918,8 @@ test('历史迁移验收仅从同源隔离 payload 创建正式微信稿', async
   });
   assert.equal(translatedPayload, wechatPayload);
   assert.equal(Object.isFrozen(wechatPayload), true);
-  assert.equal(wechatPayload.article.body, parseArticleBody(ARTICLE));
+  assert.doesNotMatch(wechatPayload.article.body, /https?:\/\//);
+  assert.equal(wechatPayload.article.body, parseArticleBody(ARTICLE).replace(/\[([^\]]+)]\(https?:\/\/[^)]+\)/g, '$1'));
   assert.deepEqual(wechatPayload.metrics, normalizeOpeningMetrics(openingMetrics()).metrics);
   assert.deepEqual(wechatPayload.options.data, OPTIONS_DATA);
   assert.equal(result.mediaId, 'customerio-newsletter:88');

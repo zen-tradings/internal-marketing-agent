@@ -7,7 +7,12 @@ import { defaultHttpAdapter } from '@wenyan-md/core/http';
 import { FIXED_DRAFT_TEMPLATE_IDS, OPENING_DIGEST_DISCORD_INVITE_URL } from '../lib/draft-template.js';
 import { fetchWithTimeout } from '../lib/http-timeout.js';
 import { renderOpeningDigestCover } from '../lib/opening-digest-cover.js';
-import { translationMap } from '../lib/opening-digest-translation.js';
+import {
+  OPENING_DIGEST_SAFE_HEADLINE,
+  assertOpeningDigestWechatPayloadClean,
+  stripOpeningDigestReferences,
+  translationMap,
+} from '../lib/opening-digest-translation.js';
 import { withRuntimeResource } from '../config/runtime.js';
 
 export const WECHAT_OPENING_DIGEST_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['wechat-opening-digest'];
@@ -17,6 +22,7 @@ export const WECHAT_DRAFT_MAX_BYTES = 1024 * 1024;
 export function makeWechatOpeningDigestChannel({
   renderCover = renderOpeningDigestCover,
   api,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 } = {}) {
   const coverCache = new Map();
   const bodyImageCache = new Map();
@@ -24,7 +30,11 @@ export function makeWechatOpeningDigestChannel({
     id: 'wechat-opening-digest',
     templateId: WECHAT_OPENING_DIGEST_TEMPLATE_ID,
     templateLocked: true,
-    async publish({ payload, translation, config, acceptance = false }) {
+    async publish({
+      payload, translation, config, acceptance = false, runId = '', existingRemoteId = '',
+      onCreated, remoteOperations,
+    }) {
+      assertOpeningDigestWechatPayloadClean(payload);
       const activeApi = api || createWechatApi({ timeoutMs: config.wechat.timeoutMs });
       const translatedHeadline = translationMap(translation).get('headline')?.text || payload.article.headline || '开市数据可用，判断暂缺';
       const title = openingDigestWechatTitle(translatedHeadline, payload.dateKey, { acceptance });
@@ -45,33 +55,41 @@ export function makeWechatOpeningDigestChannel({
       const html = renderWechatOpeningDigestHtml({ payload, translation, images });
       const digest = translationMap(translation).get('preheader')?.text || '';
       assertWechatLimits(html, { title, digest });
+      const input = { title, digest, content: html, thumbMediaId: coverAsset.media_id };
+      const payloadSha256 = crypto.createHash('sha256').update(stableJson({
+        templateId: WECHAT_OPENING_DIGEST_TEMPLATE_ID,
+        title,
+        digest,
+        payload,
+        translations: translation?.translations || [],
+      })).digest('hex');
+      const mediaId = String(existingRemoteId || await createDraftIdempotently({
+        api: activeApi, token, input, payloadSha256, runId, remoteOperations, onCreated, sleep,
+      }));
+      if (existingRemoteId) await onCreated?.({ remoteId: mediaId, title });
       const attempts = [];
-      let final;
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        const created = await activeApi.addDraft(token, { title, digest, content: html, thumbMediaId: coverAsset.media_id });
-        const mediaId = String(created?.media_id || '');
-        if (!mediaId) throw wechatError(`微信 draft/add 未返回 media_id:${JSON.stringify(created)}`);
+      let final = { mediaId, title, status: 'unverified', errors: [] };
+      for (let read = 1; read <= 3; read++) {
         let saved;
         try {
           saved = await activeApi.getDraft(token, mediaId);
         } catch (error) {
-          attempts.push({ attempt, mediaId, status: 'unverified', errors: [error.message] });
-          final = { mediaId, title, status: 'unverified', errors: [`微信 draft/get 暂不可用:${error.message}`] };
-          break;
+          const wrapped = wechatError(`微信 draft/get 暂不可用:${error.message}`, { retryable: true });
+          wrapped.remoteId = mediaId;
+          throw wrapped;
         }
         const validation = validateWechatOpeningDigestDraft(saved, { title, payload, translation });
-        attempts.push({ attempt, mediaId, status: validation.ok ? 'verified' : 'invalid', errors: validation.errors });
+        attempts.push({ attempt: read, mediaId, operation: 'read', status: validation.ok ? 'verified' : 'invalid', errors: validation.errors });
         final = { mediaId, title, status: validation.ok ? 'verified' : 'invalid', errors: validation.errors };
         if (validation.ok) break;
-        if (attempt < 3) {
+        if (read < 3) {
           try {
-            await activeApi.deleteDraft(token, mediaId);
-            attempts.at(-1).deleted = true;
+            await activeApi.updateDraft(token, mediaId, input);
+            attempts.at(-1).updated = true;
           } catch (error) {
-            attempts.at(-1).status = 'unverified';
-            attempts.at(-1).errors.push(`微信 draft/delete 失败:${error.message}`);
-            final = { mediaId, title, status: 'unverified', errors: attempts.at(-1).errors };
-            break;
+            const wrapped = wechatError(`微信 draft/update 暂不可用:${error.message}`, { retryable: true });
+            wrapped.remoteId = mediaId;
+            throw wrapped;
           }
         }
       }
@@ -82,13 +100,98 @@ export function makeWechatOpeningDigestChannel({
 }
 
 export function openingDigestWechatTitle(headline, dateKey, { acceptance = false } = {}) {
-  const normalizedHeadline = String(headline || '').trim();
-  if (!normalizedHeadline || [...normalizedHeadline].length > 16) {
-    throw wechatError(`微信动态标题缺失或超过 16 字:${[...normalizedHeadline].length}`);
-  }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey || ''))) throw wechatError('微信日报标题日期无效');
+  const candidate = String(headline || '').trim();
+  const normalizedHeadline = candidate && [...candidate].length <= 16 ? candidate : OPENING_DIGEST_SAFE_HEADLINE;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey || ''))) throw wechatError('微信日报标题日期无效', { retryable: false });
   const dateLabel = acceptance ? dateKey.slice(5) : dateKey;
   return `${acceptance ? '[测试] ' : ''}${normalizedHeadline}（日报· ${dateLabel}）`;
+}
+
+async function createDraftIdempotently({ api, token, input, payloadSha256, runId, remoteOperations, onCreated, sleep }) {
+  if (!runId || !remoteOperations) {
+    const created = await api.addDraft(token, input);
+    const mediaId = requireMediaId(created);
+    await onCreated?.({ remoteId: mediaId, title: input.title });
+    return mediaId;
+  }
+  const operation = 'create-opening-digest-wechat';
+  let record = remoteOperations.get(operation);
+  if (!record) {
+    const before = await listDraftCandidates(api, token);
+    record = remoteOperations.prepare({
+      operation,
+      operationKey: `wechat:opening-digest:create:v1:${runId}`,
+      payloadSha256,
+      beforeIds: before.map((item) => item.mediaId),
+    });
+  }
+  if (record.payload_sha256 !== payloadSha256) {
+    throw wechatError('微信后台操作请求哈希与当前日报不一致，拒绝复用旧操作', { retryable: false });
+  }
+  if (record.remote_id) {
+    const mediaId = String(record.remote_id);
+    await onCreated?.({ remoteId: mediaId, title: input.title });
+    return mediaId;
+  }
+  const beforeIds = new Set(parseIdSnapshot(record.before_ids_json));
+  if (Number(record.attempt_count || 0) > 0) {
+    const recovered = await recoverCreatedDraft({ api, token, title: input.title, beforeIds, sleep });
+    if (recovered) return confirmCreatedDraft({ recovered, remoteOperations, operation, onCreated, title: input.title });
+  }
+  while (Number(record.attempt_count || 0) < 2) {
+    record = remoteOperations.increment(operation);
+    if (!record || Number(record.attempt_count || 0) > 2) break;
+    try {
+      const created = await api.addDraft(token, input);
+      const mediaId = requireMediaId(created);
+      remoteOperations.update(operation, { state: 'confirmed', remoteId: mediaId, lastError: '' });
+      await onCreated?.({ remoteId: mediaId, title: input.title });
+      return mediaId;
+    } catch (error) {
+      record = remoteOperations.update(operation, { state: 'ambiguous', lastError: error.message });
+      const recovered = await recoverCreatedDraft({ api, token, title: input.title, beforeIds, sleep });
+      if (recovered) return confirmCreatedDraft({ recovered, remoteOperations, operation, onCreated, title: input.title });
+    }
+  }
+  remoteOperations.update(operation, {
+    state: 'needs_review',
+    lastError: '两次创建请求后仍无法唯一确认 media_id',
+  });
+  throw wechatError(`微信两次创建请求后仍无法唯一确认草稿，已停止继续创建；请人工检查同日同标题草稿。任务:${runId}`, { retryable: false });
+}
+
+async function recoverCreatedDraft({ api, token, title, beforeIds, sleep }) {
+  for (const delay of [2000, 5000, 10000]) {
+    await sleep(delay);
+    let candidates;
+    try { candidates = await listDraftCandidates(api, token); } catch { continue; }
+    const matches = candidates.filter((item) => !beforeIds.has(item.mediaId) && item.title === title);
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) {
+      throw wechatError(`微信创建响应不明且发现 ${matches.length} 个同日同标题新草稿，无法唯一恢复`, { retryable: false });
+    }
+  }
+  return undefined;
+}
+
+async function listDraftCandidates(api, token) {
+  const result = await api.listDrafts(token, 0, 20, 0);
+  return (result?.item || result?.items || []).map((item) => ({
+    mediaId: String(item?.media_id || item?.mediaId || ''),
+    title: String(item?.content?.news_item?.[0]?.title || item?.news_item?.[0]?.title || item?.title || ''),
+  })).filter((item) => item.mediaId);
+}
+
+async function confirmCreatedDraft({ recovered, remoteOperations, operation, onCreated, title }) {
+  remoteOperations.update(operation, { state: 'confirmed', remoteId: recovered.mediaId, lastError: '' });
+  await onCreated?.({ remoteId: recovered.mediaId, title });
+  return recovered.mediaId;
+}
+
+function requireMediaId(created) {
+  const mediaId = String(created?.media_id || '');
+  if (!mediaId) throw wechatError(`微信 draft/add 未返回 media_id:${JSON.stringify(created)}`, { retryable: true });
+  return mediaId;
 }
 
 export function renderWechatOpeningDigestHtml({ payload, translation, images = {} }) {
@@ -114,6 +217,11 @@ export function validateWechatOpeningDigestDraft(saved, { title, payload, transl
   const expectedDigest = translationMap(translation).get('preheader')?.text || '';
   if (expectedDigest && String(article.digest || '') !== expectedDigest) errors.push(`摘要:期望“${expectedDigest}”，实际“${article.digest || ''}”`);
   const document = new JSDOM(`<body>${article.content || ''}</body>`).window.document;
+  if (document.querySelector('a[href]')) errors.push('正文不得包含可点击链接');
+  const visibleWithoutCommunity = String(document.body.textContent || '').replaceAll(OPENING_DIGEST_DISCORD_INVITE_URL, '');
+  if (/(?:https?:\/\/|mailto:|【[^【】\s]+†|\[[^\]]+]\([^)]*\))/i.test(visibleWithoutCommunity)) {
+    errors.push('正文仍含来源链接、脚注或引用标记');
+  }
   const subtitle = document.querySelector('[data-zen-section="subtitle"]')?.textContent || '';
   if (!subtitle.includes(`Zen Research 日报 · ${payload.dateKey}`)) errors.push('固定中文副标题缺失或被改写');
   const expectedSections = ['开市判断', '市场快照', ...translation.translations.filter((item) => item.kind === 'heading').map((item) => stripInlineMarkdown(item.text)), ...(payload.options ? ['期权成交量趋势'] : [])];
@@ -221,7 +329,7 @@ function renderEarningsPreviewLines(id, text) {
   // The schedule remains one deterministic translation unit, but each linked
   // ticker starts its own visual row in the WeChat draft. Keep the separator
   // with the preceding row so readback validation still sees the exact text.
-  const rows = String(text || '').split(/(?<=[;；])(?=\s*\[[A-Z0-9.-]+\]\(https?:\/\/)/);
+  const rows = String(text || '').split(/(?<=[;；])(?=\s*(?:\[[A-Z0-9.-]+\]\(https?:\/\/|[A-Z][A-Z0-9.-]{0,9}\b))/);
   if (rows.length === 1) return `<p data-block-id="${id}" style="margin:8px 0">${inlineMarkup(text)}</p>`;
   return `<div data-block-id="${id}" data-zen-earnings-rows="${rows.length}">${rows.map((row) => `<p style="margin:6px 0">${inlineMarkup(row)}</p>`).join(' ')}</div>`;
 }
@@ -253,10 +361,14 @@ export function createWechatApi({ fetchFn = globalThis.fetch, timeoutMs = 30000 
       const data = await response.json(); if (!response.ok || data.errcode || !data.url) throw wechatError(`微信正文图片上传失败:${JSON.stringify(data)}`); return data.url;
     },
     async addDraft(token, input) { return client.publishArticle(token, { title: input.title, digest: input.digest, content: input.content, thumb_media_id: input.thumbMediaId, show_cover_pic: 0, need_open_comment: 0, only_fans_can_comment: 0 }); },
+    async listDrafts(token, offset = 0, count = 20, noContent = 0) { return client.listDrafts(token, offset, count, noContent); },
     async getDraft(token, mediaId) { return client.getDraft(token, mediaId); },
-    async deleteDraft(token, mediaId) {
-      const response = await boundedFetch(`https://api.weixin.qq.com/cgi-bin/draft/delete?access_token=${token}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ media_id: mediaId }) });
-      const data = await response.json(); if (!response.ok || data.errcode) throw wechatError(`微信 draft/delete 失败:${JSON.stringify(data)}`); return data;
+    async updateDraft(token, mediaId, input) {
+      return client.updateDraft(token, mediaId, 0, {
+        title: input.title, digest: input.digest, content: input.content,
+        thumb_media_id: input.thumbMediaId, show_cover_pic: 0,
+        need_open_comment: 0, only_fans_can_comment: 0,
+      });
     },
   };
 }
@@ -278,10 +390,10 @@ async function uploadBodyImages(api, token, assets, cache = new Map()) {
 }
 
 function assertWechatLimits(html, { title = '', digest = '' } = {}) {
-  if ([...title].length > 32) throw wechatError(`微信标题超过 32 字:${[...title].length}`);
-  if ([...digest].length > 120) throw wechatError(`微信摘要超过 120 字:${[...digest].length}`);
-  if (html.length >= WECHAT_DRAFT_MAX_CHARS) throw wechatError(`微信正文超过 20,000 字符:${html.length}`);
-  if (Buffer.byteLength(html) >= WECHAT_DRAFT_MAX_BYTES) throw wechatError(`微信正文超过 1MB:${Buffer.byteLength(html)}`);
+  if ([...title].length > 32) throw wechatError(`微信标题超过 32 字:${[...title].length}`, { retryable: false });
+  if ([...digest].length > 120) throw wechatError(`微信摘要超过 120 字:${[...digest].length}`, { retryable: false });
+  if (html.length >= WECHAT_DRAFT_MAX_CHARS) throw wechatError(`微信正文超过 20,000 字符:${html.length}`, { retryable: false });
+  if (Buffer.byteLength(html) >= WECHAT_DRAFT_MAX_BYTES) throw wechatError(`微信正文超过 1MB:${Buffer.byteLength(html)}`, { retryable: false });
 }
 function metricStrings(metric) {
   if (metric.unavailable || !Number.isFinite(metric.value)) return ['—', ''];
@@ -290,22 +402,8 @@ function metricStrings(metric) {
   const change = Number.isFinite(metric.changePct) ? `${metric.changePct >= 0 ? '+' : ''}${metric.changePct.toFixed(2)}%` : '';
   return [value, change];
 }
-function inlineMarkup(value) { return escapeHtml(stripOpeningDigestSourceLinks(value)).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>'); }
-function stripOpeningDigestSourceLinks(value) {
-  return String(value || '')
-    // Evidence citations and all body source links are hidden in the Chinese
-    // WeChat derivative. Parenthetical citations remove the whole citation;
-    // semantically meaningful linked tickers/companies keep only their label.
-    .replace(/【[^【】\s]+†https?:\/\/[^\s】]+】/gi, '')
-    .replace(/[\uff08(]\s*\[([^\]]+)]\(((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+)\)\s*[)\uff09]/gi, '')
-    .replace(/\[([^\]]+)]\(((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+)\)/gi, '$1')
-    .replace(/<(?:https?:\/\/|mailto:)[^>\s]+>/gi, '')
-    .replace(/(?:https?:\/\/|mailto:)[^\s<>"'\uff0c\u3002\uff1b\uff01\uff1f)\uff09]+/gi, '')
-    .replace(/[ \t]+([,.;:!?\uff0c\u3002\uff1b\uff1a\uff01\uff1f])/g, '$1')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
-}
-function stripInlineMarkdown(value) { return stripOpeningDigestSourceLinks(value).replace(/\*\*([^*]+)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1'); }
+function inlineMarkup(value) { return escapeHtml(stripOpeningDigestReferences(value)).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>'); }
+function stripInlineMarkdown(value) { return stripOpeningDigestReferences(value).replace(/\*\*([^*]+)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1'); }
 function normalizeText(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
 function normalizedBodyText(unit, value = unit.text) {
   const text = normalizeText(stripInlineMarkdown(value));
@@ -321,4 +419,19 @@ function chineseDate(dateKey) { const [year, month, day] = dateKey.split('-'); r
 function cssEscape(value) { return String(value).replace(/["\\]/g, '\\$&'); }
 function escapeAttr(value) { return escapeHtml(value); }
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char])); }
-function wechatError(message) { const error = new Error(message); error.stage = 'publish'; return error; }
+function wechatError(message, { retryable = true } = {}) { const error = new Error(message); error.stage = 'publish'; error.retryable = retryable; return error; }
+
+function parseIdSnapshot(value) {
+  try {
+    const parsed = JSON.parse(value || '[]');
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch { return []; }
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}

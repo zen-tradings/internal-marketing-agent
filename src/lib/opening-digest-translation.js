@@ -3,7 +3,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 18;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 19;
+export const OPENING_DIGEST_SAFE_HEADLINE = '今日开市要点';
 const MODEL_TRANSLATION_BATCH_SIZE = 1;
 
 const FIXED_TERMS = new Map([
@@ -31,8 +32,9 @@ const FIXED_TERMS = new Map([
 export async function translateOpeningDigestPayload(payload, {
   writer, fetchFn = globalThis.fetch, cacheDir, timeoutMs = 5 * 60 * 1000, complete = completeTranslation,
 } = {}) {
-  const units = translationUnits(payload);
-  const payloadHash = hashPayload(payload, writer?.model || '');
+  const wechatPayload = prepareOpeningDigestWechatPayload(payload);
+  const units = translationUnits(wechatPayload);
+  const payloadHash = hashPayload(wechatPayload, writer?.model || '');
   const cachePath = cacheDir ? path.join(cacheDir, 'opening-digest-zh-CN.json') : '';
   if (cachePath) {
     try {
@@ -58,6 +60,7 @@ export async function translateOpeningDigestPayload(payload, {
     else modelUnits.push(unit);
   }
   const repairs = [];
+  const fallbacks = [];
   if (modelUnits.length) {
     for (let offset = 0; offset < modelUnits.length; offset += MODEL_TRANSLATION_BATCH_SIZE) {
       let pending = modelUnits.slice(offset, offset + MODEL_TRANSLATION_BATCH_SIZE);
@@ -104,6 +107,16 @@ export async function translateOpeningDigestPayload(payload, {
         }
         pending = next;
       }
+      const headline = pending.find((unit) => unit.id === 'headline');
+      if (headline) {
+        translations.set('headline', OPENING_DIGEST_SAFE_HEADLINE);
+        fallbacks.push({
+          id: 'headline',
+          reason: headline.issues?.join('、') || '中文动态标题不可用',
+          text: OPENING_DIGEST_SAFE_HEADLINE,
+        });
+        pending = pending.filter((unit) => unit.id !== 'headline');
+      }
       if (pending.length) {
         throw translationError(`Opening Digest 中文直译硬校验失败:${pending.map((unit) => `${unit.id}(${unit.issues.join('、')})`).join('; ')}`);
       }
@@ -117,6 +130,7 @@ export async function translateOpeningDigestPayload(payload, {
     model: writer?.model || '',
     blockCount: ordered.length,
     repairs,
+    fallbacks,
     translations: ordered,
     createdAt: new Date().toISOString(),
   };
@@ -126,6 +140,67 @@ export async function translateOpeningDigestPayload(payload, {
     await fs.rename(temporary, cachePath);
   }
   return output;
+}
+
+export function prepareOpeningDigestWechatPayload(payload) {
+  const source = payload && typeof payload === 'object' ? payload : {};
+  const article = source.article && typeof source.article === 'object' ? source.article : {};
+  const prepared = {
+    ...source,
+    article: {
+      ...article,
+      headline: stripOpeningDigestReferences(article.headline),
+      preheader: stripOpeningDigestReferences(article.preheader),
+      body: stripOpeningDigestReferences(article.body),
+    },
+    metrics: Array.isArray(source.metrics) ? source.metrics.map((metric) => ({
+      ...metric,
+      ...(metric?.sourceNote ? { sourceNote: stripOpeningDigestReferences(metric.sourceNote) } : {}),
+    })) : [],
+    ...(source.options ? {
+      options: {
+        ...source.options,
+        data: {
+          ...(source.options.data || {}),
+          asOf: stripOpeningDigestReferences(source.options.data?.asOf),
+          attribution: stripOpeningDigestReferences(source.options.data?.attribution),
+          rows: Array.isArray(source.options.data?.rows)
+            ? source.options.data.rows.map((row) => row.map((value, index) => (
+              index === 2 ? stripOpeningDigestReferences(value) : value
+            )))
+            : [],
+        },
+      },
+    } : {}),
+  };
+  assertOpeningDigestWechatPayloadClean(prepared);
+  return deepFreeze(prepared);
+}
+
+export function stripOpeningDigestReferences(value) {
+  return String(value || '')
+    .replace(/【[^【】\s]+†https?:\/\/[^\s】]+】/gi, '')
+    .replace(/[\uff08(]\s*\[([^\]]+)]\(((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+)\)\s*[)\uff09]/gi, '')
+    .replace(/\[([^\]]+)]\(((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+)\)/gi, '$1')
+    .replace(/<(?:https?:\/\/|mailto:)[^>\s]+>/gi, '')
+    .replace(/https?:\/\/[^\s<>"'】，。；！？)\uff09]+/gi, '')
+    .replace(/mailto:[^\s<>"'】，。；！？)\uff09]+/gi, '')
+    .replace(/[\uff08(]\s*[)\uff09]/g, '')
+    .replace(/[ \t]+([,.;:!?，。；：！？])/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+$/gm, '')
+    .trim();
+}
+
+export function assertOpeningDigestWechatPayloadClean(payload) {
+  const units = translationUnits(payload);
+  const dirty = units.filter((unit) => /(?:https?:\/\/|mailto:|【[^【】\s]+†)/i.test(unit.text));
+  if (dirty.length) {
+    const error = translationError(`Opening Digest 中文 payload 仍含来源链接或引用:${dirty.map((unit) => unit.id).join(',')}`);
+    error.retryable = false;
+    throw error;
+  }
+  return payload;
 }
 
 export function translationUnits(payload) {
@@ -250,7 +325,7 @@ function deterministicNoteTranslation(unit) {
 
 function deterministicEarningsTranslation(unit) {
   const source = String(unit.text || '').trim();
-  if (unit.kind !== 'paragraph' || !/\[[A-Z0-9.\-]+]\(https?:\/\//.test(source)
+  if (unit.kind !== 'paragraph' || !/(?:\[[A-Z0-9.\-]+]\(https?:\/\/|\b[A-Z][A-Z0-9.\-]{0,9}\b)/.test(source)
     || !/(?:before open|after close|timing not supplied)/.test(source)) return '';
   const links = [];
   let text = source.replace(/\[[^\]]+]\(https?:\/\/[^\s)]+\)/g, (link) => {
@@ -364,7 +439,7 @@ async function completeTranslation({ units, writer, fetchFn, round, timeoutMs })
   if (!writer?.openrouterApiKey) throw translationError('Opening Digest 中文直译缺少 OPENROUTER_API_KEY');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Number(timeoutMs) || 5 * 60 * 1000);
-  const prompt = `将下列 Opening Digest 文本块完整直译为简体中文。不得摘要、解释、增删或改写事实。kind=headline 的标题允许在不改变判断、方向、条件和因果强度的前提下紧凑本地化；标题标点也计入长度，目标不超过 15 个字符，硬上限为 16 个字符。严格保留所有数字、百分比、Ticker、指数代码、型号、时间、URL、引文和机构品牌。每个形如 ⟦ZEN_KEEP_AAA⟧ 的占位符都代表一个不可变原文 token：必须逐字保留，而且每块中占位符的数量、拼写和顺序必须完全不变。公司品牌与无法可靠判断的专名保留原文；只翻译法律后缀和通用描述，例如 NVIDIA Corporation -> NVIDIA 公司。保留 Markdown 行内标记和链接 URL。返回与输入 ID 数量、顺序完全一致的 JSON。${round ? `这是第 ${round} 次局部修复，重点修复每块 issues。` : ''}\n\n${JSON.stringify(units)}`;
+  const prompt = `将下列 Opening Digest 文本块完整直译为简体中文。不得摘要、解释、增删或改写事实。输入已专门为微信净化，不含来源 URL 或引用标记，不得自行补充链接、脚注或出处。kind=headline 的标题允许在不改变判断、方向、条件和因果强度的前提下紧凑本地化；标题标点也计入长度，目标不超过 15 个字符，硬上限为 16 个字符。严格保留所有数字、百分比、Ticker、指数代码、型号、时间和机构品牌。每个形如 ⟦ZEN_KEEP_AAA⟧ 的占位符都代表一个不可变原文 token：必须逐字保留，而且每块中占位符的数量、拼写和顺序必须完全不变。公司品牌与无法可靠判断的专名保留原文；只翻译法律后缀和通用描述，例如 NVIDIA Corporation -> NVIDIA 公司。保留 Markdown 行内标记。返回与输入 ID 数量、顺序完全一致的 JSON。${round ? `这是第 ${round} 次局部修复，重点修复每块 issues。` : ''}\n\n${JSON.stringify(units)}`;
   try {
     const response = await fetchFn(`${String(writer.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')}/chat/completions`, {
       method: 'POST', signal: controller.signal,
@@ -391,15 +466,19 @@ async function completeTranslation({ units, writer, fetchFn, round, timeoutMs })
       }),
     });
     const raw = await response.text();
-    if (!response.ok) throw translationError(`OpenRouter 中文直译失败:${response.status} ${raw.slice(0, 300)}`);
+    if (!response.ok) {
+      const retryable = [408, 425, 429].includes(response.status) || response.status >= 500;
+      const retryAfterMs = parseRetryAfterMs(response.headers?.get?.('retry-after'));
+      throw translationError(`OpenRouter 中文直译失败:${response.status} ${raw.slice(0, 300)}`, { retryable, retryAfterMs });
+    }
     let data;
     try { data = JSON.parse(raw); }
     catch (error) { throw translationResponseError(`OpenRouter 响应外壳不是有效 JSON:${error.message}`); }
     return parseJson(data?.choices?.[0]?.message?.content);
   } catch (error) {
-    if (error?.name === 'AbortError') throw translationError('Opening Digest 中文直译超时');
+    if (error?.name === 'AbortError') throw translationError('Opening Digest 中文直译超时', { retryable: true });
     if (error?.stage === 'translation') throw error;
-    throw translationError(`Opening Digest 中文直译失败:${error.message}`);
+    throw translationError(`Opening Digest 中文直译失败:${error.message}`, { retryable: true });
   } finally { clearTimeout(timer); }
 }
 
@@ -424,9 +503,32 @@ function hashPayload(payload, model) {
   return crypto.createHash('sha256').update(JSON.stringify({ version: OPENING_DIGEST_TRANSLATION_VERSION, model, payload })).digest('hex');
 }
 
-function translationError(message) { const error = new Error(message); error.stage = 'translation'; return error; }
+function translationError(message, { retryable = false, retryAfterMs } = {}) {
+  const error = new Error(message);
+  error.stage = 'translation';
+  error.retryable = retryable;
+  if (Number.isFinite(retryAfterMs)) error.retryAfterMs = retryAfterMs;
+  return error;
+}
 function translationResponseError(message) {
   const error = translationError(message);
   error.retryableTranslationResponse = true;
+  error.retryable = true;
   return error;
+}
+
+function deepFreeze(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  Object.values(value).forEach(deepFreeze);
+  return value;
+}
+
+function parseRetryAfterMs(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const timestamp = Date.parse(raw);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : undefined;
 }

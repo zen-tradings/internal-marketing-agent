@@ -209,5 +209,5 @@ test('controlled earnings copy translates deterministically without sending date
   assert.match(paragraph.text, /8月13日 周四/);
   assert.match(paragraph.text, /AAA.*盘后披露；电话会 4:30 p\.m\. ET/);
   assert.match(paragraph.text, /NVDA.*盘后（预计）/);
-  assert.match(paragraph.text, /https:\/\/investors\.alpha\.example\/release/);
+  assert.doesNotMatch(paragraph.text, /https?:\/\//);
 });

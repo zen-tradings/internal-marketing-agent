@@ -11,6 +11,10 @@ import { runWriter } from './core/runner.js';
 import { createNotifier } from './core/notifier.js';
 import { deliverOrQueueNotification, flushNotificationOutbox } from './core/notification-outbox.js';
 import { flushDiscordDeliveryOutbox, queueDiscordDelivery } from './core/delivery-outbox.js';
+import {
+  flushOpeningDigestWechatOutbox,
+  queueOpeningDigestWechatDelivery,
+} from './core/opening-digest-wechat-outbox.js';
 import { formatQdiiSlackMessages, qdiiSourcesForWriter, runQdiiQuery } from './core/qdii.js';
 import { registerSlack } from './triggers/slack.js';
 import { reconcileCronWorkflows, registerCron, validateCronConfiguration } from './triggers/cron.js';
@@ -289,9 +293,9 @@ export function makeHandler(deps) {
           },
           onDelivery: (delivery) => store.upsertDelivery?.(run.id, delivery),
           onDeferredDelivery: (delivery) => {
-            const row = queueDiscordDelivery({ store, runId: run.id, ...delivery });
-            deps.kickDeliveryOutbox?.();
-            return row;
+            if (delivery.destination === 'discord') return queueDiscordDelivery({ store, runId: run.id, ...delivery });
+            if (delivery.destination === 'wechat') return queueOpeningDigestWechatDelivery({ store, runId: run.id, ...delivery });
+            throw new Error(`未知持久投递 destination:${delivery.destination}`);
           },
           resumeFromCheckpoint,
           contentPolicy: res.contentPolicy || {},
@@ -328,6 +332,9 @@ export function makeHandler(deps) {
       });
       for (const warning of deliveryWarnings) {
         if (deps.notifier) await notifyBestEffort(deps.notifier, 'warn', notify, warning);
+      }
+      if (runtimeWorkflow.id === 'opening-digest' && openingDigestPublishContext(run).source === 'cron') {
+        await deps.kickDeliveryOutbox?.();
       }
     } catch (e) {
       if (isTaskCancelled(e, signal)) {
@@ -494,27 +501,30 @@ export async function start() {
     runQdiiQuery: (args) => runQdiiQuery({ ...args, fetchFn: governor.fetch }),
   };
   deps.kickDeliveryOutbox = () => {
-    if (shuttingDown || deliveryFlushPromise || !config.discord.openingDigestEnabled) return deliveryFlushPromise;
-    deliveryFlushPromise = flushDiscordDeliveryOutbox({
-      store,
-      config,
-      fetchFn: governor.fetch,
-      onTerminalFailure: async ({ row, error, attempts }) => {
-        const run = store.getRun(row.run_id);
-        let notify = {};
-        try { notify = JSON.parse(run?.notify_json || '{}'); } catch {}
-        await deliverOrQueueNotification({
-          store,
-          notifier: deps.notifier,
-          runId: row.run_id,
-          method: 'warn:discord',
-          notify,
-          payload: `Opening Digest 邮件已成功，但 Discord #newsletter-feed 在 ${attempts} 次尝试后仍投递失败:${error?.message || error}`,
-        });
-      },
-    }).catch((error) => {
-      console.error('[hub] Discord delivery outbox 补发失败:', error?.message || error);
-    }).finally(() => { deliveryFlushPromise = undefined; });
+    if (shuttingDown || deliveryFlushPromise) return deliveryFlushPromise;
+    const terminalWarning = (method, message) => async ({ row, error, attempts }) => {
+      const run = store.getRun(row.run_id);
+      let notify = {};
+      try { notify = JSON.parse(run?.notify_json || '{}'); } catch {}
+      await deliverOrQueueNotification({
+        store, notifier: deps.notifier, runId: row.run_id, method, notify,
+        payload: message({ error, attempts }),
+      });
+    };
+    deliveryFlushPromise = Promise.all([
+      flushDiscordDeliveryOutbox({
+        store,
+        config,
+        fetchFn: governor.fetch,
+        onTerminalFailure: terminalWarning('warn:discord', ({ error, attempts }) => `Opening Digest 邮件已成功，但 Discord #newsletter-feed 在 ${attempts} 次尝试后仍投递失败:${error?.message || error}`),
+      }).catch((error) => console.error('[hub] Discord delivery outbox 补发失败:', error?.message || error)),
+      flushOpeningDigestWechatOutbox({
+        store,
+        config,
+        fetchFn: governor.fetch,
+        onTerminalFailure: terminalWarning('warn:wechat', ({ error, attempts }) => `Opening Digest 邮件已成功，但中文微信草稿在 ${attempts} 次尝试后仍失败:${error?.message || error}`),
+      }).catch((error) => console.error('[hub] WeChat delivery outbox 补发失败:', error?.message || error)),
+    ]).finally(() => { deliveryFlushPromise = undefined; });
     return deliveryFlushPromise;
   };
   const handler = makeHandler(deps);

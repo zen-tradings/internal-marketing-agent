@@ -11,7 +11,7 @@ import { collectOpeningMetrics, normalizeOpeningMetrics, renderMetricsHtml } fro
 import { easternDateKey } from '../lib/us-equity-calendar.js';
 import { auditOpeningDigestArticle } from '../lib/opening-digest-content.js';
 import { openingDigestBodyParts, parseOpeningDigestMetadata } from '../lib/opening-digest-editorial.js';
-import { translateOpeningDigestPayload } from '../lib/opening-digest-translation.js';
+import { prepareOpeningDigestWechatPayload, translateOpeningDigestPayload } from '../lib/opening-digest-translation.js';
 import { makeWechatOpeningDigestChannel } from './wechat-opening-digest.js';
 import { renderDiscordOpeningDigest } from './discord-opening-digest.js';
 import { acquireRuntimeResource, runtimeFetch } from '../config/runtime.js';
@@ -239,21 +239,52 @@ export function makeChannel({
             deliveryWarnings.push(`Opening Digest 邮件已成功，但 Discord #newsletter-feed 无法进入持久投递队列:${error.message}`);
           }
         }
-        if (digest.wechatEnabled) {
+        if (digest.wechatEnabled && source === 'cron' && typeof onDeferredDelivery === 'function') {
           try {
-            const translated = await translatePayload(openingPayload, {
+            const prior = existingDeliveries.find((item) => item.destination === 'wechat');
+            if (prior?.status === 'verified' && prior?.media_id) {
+              const delivery = { destination: 'wechat', status: 'verified', mediaId: prior.media_id, title: prior.title || '' };
+              deliveries.push(delivery);
+              traceMetadata.wechat = { status: 'verified', mediaId: prior.media_id, recovered: true };
+            } else {
+              const queued = await onDeferredDelivery({
+                destination: 'wechat',
+                title: `Zen Opening Digest 微信 · ${dateKey}`,
+                payload: openingPayload,
+              });
+              const delivery = {
+                destination: 'wechat',
+                status: queued?.state === 'delivered' ? 'verified' : queued?.state === 'failed' ? 'failed' : 'pending',
+                mediaId: prior?.media_id || '',
+                title: prior?.title || `Zen Opening Digest 微信 · ${dateKey}`,
+                details: { payloadSha256: queued?.payload_sha256 },
+              };
+              deliveries.push(delivery);
+              traceMetadata.wechat = { status: delivery.status, payloadSha256: queued?.payload_sha256 };
+            }
+          } catch (error) {
+            const delivery = { destination: 'wechat', status: 'failed', mediaId: '', title: '', error: error.message };
+            deliveries.push(delivery);
+            await onDelivery?.(delivery);
+            traceMetadata.wechat = { status: 'failed', error: error.message };
+            deliveryWarnings.push(`Opening Digest 邮件已成功，但中文微信草稿无法进入持久投递队列:${error.message}`);
+          }
+        } else if (digest.wechatEnabled) {
+          try {
+            const wechatPayload = prepareOpeningDigestWechatPayload(openingPayload);
+            const translated = await translatePayload(wechatPayload, {
               writer: config.writer, fetchFn, cacheDir: path.dirname(articlePath),
               timeoutMs: config.defaultTimeoutMs,
             });
             traceMetadata.translation = {
               model: translated.model, payloadHash: translated.payloadHash, blockCount: translated.blockCount,
-              repairs: translated.repairs,
-              invariants: { blockIdsAndOrder: true, numbersTickersTimesAndUrls: true },
+              repairs: translated.repairs, fallbacks: translated.fallbacks || [],
+              invariants: { blockIdsAndOrder: true, numbersTickersTimesAndBrands: true, sourceLinksRemoved: true },
             };
             const prior = existingDeliveries.find((item) => item.destination === 'wechat' && item.media_id);
             const wechat = prior
               ? { mediaId: prior.media_id, title: prior.title, status: prior.status || 'existing', errors: [], attempts: [] }
-              : await wechatChannel.publish({ payload: openingPayload, translation: translated, config, acceptance });
+              : await wechatChannel.publish({ payload: wechatPayload, translation: translated, config, acceptance });
             const delivery = { destination: 'wechat', status: wechat.status, mediaId: wechat.mediaId, title: wechat.title, details: { errors: wechat.errors, attempts: wechat.attempts } };
             deliveries.push(delivery);
             await onDelivery?.(delivery);
@@ -391,15 +422,17 @@ export async function publishHistoricalOpeningDigestWechat({
   });
   let traceMetadata = { historicalMigration: { newsletterId: Number(newsletterId), segmentId: Number(historicalSegmentId), segmentName: segment.name, sourceDir: resolvedDir } };
   try {
-    const translated = await translatePayload(openingPayload, {
+    const wechatPayload = prepareOpeningDigestWechatPayload(openingPayload);
+    const translated = await translatePayload(wechatPayload, {
       writer: config.writer, fetchFn, cacheDir: resolvedDir, timeoutMs: config.defaultTimeoutMs,
     });
-    const wechat = await wechatChannel.publish({ payload: openingPayload, translation: translated, config, acceptance: false });
+    const wechat = await wechatChannel.publish({ payload: wechatPayload, translation: translated, config, acceptance: false });
     traceMetadata = {
       ...traceMetadata,
       translation: {
         model: translated.model, payloadHash: translated.payloadHash, blockCount: translated.blockCount,
-        repairs: translated.repairs, invariants: { blockIdsAndOrder: true, numbersTickersTimesAndUrls: true },
+        repairs: translated.repairs, fallbacks: translated.fallbacks || [],
+        invariants: { blockIdsAndOrder: true, numbersTickersTimesAndBrands: true, sourceLinksRemoved: true },
       },
       wechat: { ...wechat, html: undefined },
     };

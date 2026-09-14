@@ -380,6 +380,8 @@ diagnosis; do not retry against production or send a Slack test message.
 
 ## Recovering a failed Opening Digest WeChat derivative
 
+New formal cron runs recover automatically through the SQLite `delivery_outbox`: transient translation and WeChat failures retry across restarts, and a known `media_id` is only read or updated. The command below is retained only for historical runs created before durable WeChat delivery was introduced.
+
 When a formal cron email succeeded but its Chinese WeChat derivative failed at the immutable-token translation gate before receiving any WeChat `media_id`, deploy and verify the fix first. Confirm `/ready` reports `active=0` and `pending=0`, then run the restricted recovery against the SQLite `runs.id`:
 
 ```bash

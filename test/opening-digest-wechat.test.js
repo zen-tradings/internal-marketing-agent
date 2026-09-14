@@ -14,6 +14,8 @@ import {
   WECHAT_OPENING_DIGEST_TEMPLATE_ID,
 } from '../src/channels/wechat-opening-digest.js';
 import {
+  OPENING_DIGEST_SAFE_HEADLINE,
+  prepareOpeningDigestWechatPayload,
   protectTranslationUnit,
   restoreTranslationUnit,
   translateOpeningDigestPayload,
@@ -56,6 +58,7 @@ function payload() {
 }
 
 function translated(source = payload()) {
+  source = prepareOpeningDigestWechatPayload(source);
   return {
     schemaVersion: 1, payloadHash: 'test', model: 'test', repairs: [],
     translations: translationUnits(source).map((unit) => ({
@@ -64,10 +67,10 @@ function translated(source = payload()) {
         headline: '利率考验市场信心',
         preheader: '早盘市场信号。',
         'body-1': '财报预告',
-        'body-2': '**8月10日 周一：** [NVDA](https://finance.yahoo.com/calendar/earnings) 盘后（预计）',
+        'body-2': '**8月10日 周一：** NVDA 盘后（预计）',
         'body-3': '今日催化',
-        'body-4': '[NVIDIA 公司动态](https://example.com/a) 使 SPY 在 10:15 EDT 变动 10.25%。',
-        'body-5': 'OCC 报告了影响 QQQ 的第二项催化（[CNBC](https://example.com/b)）。',
+        'body-4': 'NVIDIA 公司动态使 SPY 在 10:15 EDT 变动 10.25%。',
+        'body-5': 'OCC 报告了影响 QQQ 的第二项催化。',
         'body-6': '市场解读',
         'body-7': 'NVIDIA 公司仍是核心条件；2026 年指引保持不变。',
         'metric-note-1': '2Y UST 是最新可用的 U.S. Treasury 每日票面收益率。',
@@ -91,7 +94,7 @@ test('Opening Digest 专用直译保持块 ID、顺序、数字、Ticker、时�
       return { translations: units.map((unit) => ({ id: unit.id, text: mapping.get(unit.id) })) };
     },
   });
-  assert.deepEqual(result.translations.map((item) => item.id), translationUnits(payload()).map((item) => item.id));
+  assert.deepEqual(result.translations.map((item) => item.id), translationUnits(prepareOpeningDigestWechatPayload(payload())).map((item) => item.id));
   assert.match(result.translations.find((item) => item.id === 'body-4').text, /SPY.*10:15 EDT.*10\.25%/);
   assert.equal(result.translations.find((item) => item.id === 'oic-company-1').text, 'NVIDIA 公司');
   assert.equal(result.translations.find((item) => item.id === 'oic-company-2').text, 'Company 2');
@@ -146,8 +149,8 @@ test('Opening Digest 品牌门禁不把英文标题短语误判为机构名', as
   const mapping = new Map([
     ['preheader', '市场信号与催化因素。'],
     ['body-1', '今日催化'],
-    ['body-2', '**OIC IV 信号：SPCX** — OIC 前 20 名扫描显示 SPCX 为 68.54%（[Options Education](https://example.com/oic)）。'],
-    ['body-3', '**宏观：7 月 CPI** — 7 月 CPI 报告定于周三上午 8:30 ET 发布（[Barron’s](https://example.com/cpi)）。'],
+    ['body-2', '**OIC IV 信号：SPCX** — OIC 前 20 名扫描显示 SPCX 为 68.54%。'],
+    ['body-3', '**宏观：7 月 CPI** — 7 月 CPI 报告定于周三上午 8:30 ET 发布。'],
   ]);
   let calls = 0;
   const result = await translateOpeningDigestPayload(source, {
@@ -191,7 +194,7 @@ test('证据引用整体保护，避免 URL token 吞入引用闭合符和句末
     `**Oil risk** – WTI 升至 $94.60${firstCitation}, 而 S&P 500 下跌${secondCitation}.`);
 });
 
-test('证据引用后的中英文句末标点差异不误报 URL 不一致', async () => {
+test('9 月故障型证据引用在模型调用前已删除，不再参与 token 校验', async () => {
   const firstCitation = `【${10}†${'https://example.com/oil'}】`;
   const secondCitation = `【${3}†${'https://example.com/index'}】`;
   const source = {
@@ -200,17 +203,20 @@ test('证据引用后的中英文句末标点差异不误报 URL 不一致', asy
     },
     metrics: [],
   };
+  let modelInput = '';
   const result = await translateOpeningDigestPayload(source, {
     writer: { model: 'test' },
     complete: async ({ units }) => ({ translations: units.map((unit) => {
-      const markers = unit.text.match(/⟦ZEN_KEEP_[A-Z]{3}⟧/g) || [];
+      modelInput += unit.text;
       return {
         id: unit.id,
-        text: `${markers[0]} 升至 $${markers[1]}${markers[2]}，而 S&P ${markers[3]} 下跌${markers[4]}。`,
+        text: unit.text.replace('reached', '升至').replace('while the', '而').replace('fell', '下跌'),
       };
     }) }),
   });
-  assert.match(result.translations[0].text, new RegExp(`94\\.60.*${10}.*S&P 500.*${3}`));
+  assert.doesNotMatch(modelInput, /https?:\/\/|【|†/);
+  assert.doesNotMatch(result.translations[0].text, /https?:\/\/|【|†/);
+  assert.match(result.translations[0].text, /94\.60.*S&P 500/);
 });
 
 test('英文金额的数字与量级作为一个不可变 token 保护', () => {
@@ -271,6 +277,25 @@ test('超过 26 个不可变 token 时占位符仍唯一且可无损还原', () 
   assert.equal(restoreTranslationUnit(protectedUnit.unit.text, protectedUnit.tokens), unit.text);
 });
 
+test('超过 26 个来源引用在中文模型输入前全部净化，不再形成占位符碰撞', async () => {
+  const source = {
+    article: {
+      preheader: 'Signals.',
+      body: Array.from({ length: 30 }, (_, index) => `Fact ${index + 1}.0%【${index + 1}†https://example.com/${index + 1}】`).join('\n'),
+    },
+    metrics: [],
+  };
+  const seen = [];
+  await translateOpeningDigestPayload(source, {
+    writer: { model: 'test' },
+    complete: async ({ units }) => ({ translations: units.map((unit) => {
+      seen.push(unit.text);
+      return { id: unit.id, text: unit.id === 'preheader' ? '信号。' : unit.text.replace('Fact', '事实') };
+    }) }),
+  });
+  assert.doesNotMatch(seen.join('\n'), /https?:\/\/|【|†/);
+});
+
 test('财务季度与机构 Markdown 来源链接作为完整 token 保护', () => {
   const unit = {
     id: 'body-2', kind: 'paragraph',
@@ -311,7 +336,7 @@ test('局部修复漏一块时保留已合格块，下一轮只重试缺失块',
   assert.deepEqual(result.translations.map((item) => item.id), translationUnits(source).map((item) => item.id));
 });
 
-test('模型翻译前用占位符保护 URL、Ticker、时间和数字并无损还原', async () => {
+test('模型翻译前移除来源 URL，并继续保护 Ticker、时间和数字', async () => {
   const source = {
     article: {
       preheader: 'Market signals.',
@@ -334,7 +359,8 @@ test('模型翻译前用占位符保护 URL、Ticker、时间和数字并无损�
   assert.doesNotMatch(protectedText, /SPCX|68\.54%|8:30 a\.m\. ET|https:\/\/example\.com/);
   assert.match(protectedText, /⟦ZEN_KEEP_[A-Z]{3}⟧/);
   const translatedBody = result.translations.find((unit) => unit.id === 'body-2').text;
-  assert.match(translatedBody, /SPCX.*68\.54%.*8:30 a\.m\. ET.*https:\/\/example\.com\/cpi-2026/);
+  assert.match(translatedBody, /SPCX.*68\.54%.*8:30 a\.m\. ET/);
+  assert.doesNotMatch(translatedBody, /https?:\/\//);
 });
 
 test('Opening Digest 将金融缩写 bn 作为一个不可变金额 token 保护', () => {
@@ -380,11 +406,25 @@ test('17 字模型标题只移除必要分隔符，不截断判断或不可变 t
   assert.match(headline, /CPI.*88%/);
 });
 
+test('标题三轮仍损坏时使用固定安全标题，正文事实硬门禁仍保留', async () => {
+  const source = { article: { headline: 'Rates Test Conviction', body: 'SPY closed at 650.25.' }, metrics: [] };
+  const result = await translateOpeningDigestPayload(source, {
+    writer: { model: 'test' },
+    complete: async ({ units }) => ({ translations: units.flatMap((unit) => unit.id === 'headline' ? [] : [{ id: unit.id, text: unit.text.replace('closed at', '收于') }]) }),
+  });
+  assert.equal(result.translations.find((unit) => unit.id === 'headline').text, OPENING_DIGEST_SAFE_HEADLINE);
+  assert.equal(result.fallbacks.length, 1);
+  await assert.rejects(translateOpeningDigestPayload(source, {
+    writer: { model: 'test' },
+    complete: async ({ units }) => ({ translations: units.map((unit) => ({ id: unit.id, text: unit.id === 'headline' ? '利率考验信心' : 'SPY 收于 651.25。' })) }),
+  }), /650\.25/);
+});
+
 test('微信草稿标题使用“标题（日报·日期）”且测试身份保持在 32 字内', () => {
   assert.equal(openingDigestWechatTitle('AI硬件下滑，收益率回落', '2026-09-03'), 'AI硬件下滑，收益率回落（日报· 2026-09-03）');
   assert.equal(openingDigestWechatTitle('利率考验市场信心', '2026-08-10', { acceptance: true }), '[测试] 利率考验市场信心（日报· 08-10）');
   assert.equal([...openingDigestWechatTitle('1234567890123456', '2026-08-10', { acceptance: true })].length, 32);
-  assert.throws(() => openingDigestWechatTitle('12345678901234567', '2026-08-10'), /超过 16 字/);
+  assert.equal(openingDigestWechatTitle('12345678901234567', '2026-08-10'), `${OPENING_DIGEST_SAFE_HEADLINE}（日报· 2026-08-10）`);
 });
 
 test('中文微信 HTML 锁定新版模板、动态副标题、9 格行情与 OIC 20×8', () => {
@@ -456,9 +496,9 @@ test('微信财报预告将同一天的每个 ticker 拆为独立视觉行，邮
   assert.deepEqual(readback.errors, []);
 });
 
-test('微信回读前两次坏稿删除重建，第三次合格稿保留', async () => {
-  const source = payload(); const translation = translated(source);
-  let createCount = 0; const deleted = []; const drafts = new Map();
+test('微信回读不一致时两次更新同一草稿，第三次回读通过', async () => {
+  const source = prepareOpeningDigestWechatPayload(payload()); const translation = translated(source);
+  let createCount = 0; let readCount = 0; const updated = []; const drafts = new Map();
   const channel = makeWechatOpeningDigestChannel({
     renderCover: async () => Buffer.from('cover'),
     api: {
@@ -466,14 +506,15 @@ test('微信回读前两次坏稿删除重建，第三次合格稿保留', async
       uploadMaterial: async () => ({ media_id: 'cover-id', url: 'https://img/header.gif' }),
       uploadContentImage: async (_token, _buffer, filename) => `https://img/${filename}`,
       addDraft: async (_token, input) => { const mediaId = `m${++createCount}`; drafts.set(mediaId, input); return { media_id: mediaId }; },
-      getDraft: async (_token, mediaId) => ({ content: { news_item: [{ title: drafts.get(mediaId).title, digest: drafts.get(mediaId).digest, content: mediaId === 'm3' ? drafts.get(mediaId).content : drafts.get(mediaId).content.replaceAll('SPY', 'BAD') }] } }),
-      deleteDraft: async (_token, mediaId) => { deleted.push(mediaId); },
+      getDraft: async (_token, mediaId) => ({ content: { news_item: [{ title: drafts.get(mediaId).title, digest: drafts.get(mediaId).digest, content: ++readCount === 3 ? drafts.get(mediaId).content : drafts.get(mediaId).content.replaceAll('SPY', 'BAD') }] } }),
+      updateDraft: async (_token, mediaId) => { updated.push(mediaId); },
     },
   });
   const result = await channel.publish({ payload: source, translation, acceptance: true, config: config() });
   assert.equal(result.status, 'verified');
-  assert.equal(result.mediaId, 'm3');
-  assert.deepEqual(deleted, ['m1', 'm2']);
+  assert.equal(result.mediaId, 'm1');
+  assert.equal(createCount, 1);
+  assert.deepEqual(updated, ['m1', 'm1']);
   assert.equal(result.title, '[测试] 利率考验市场信心（日报· 08-10）');
 });
 
@@ -489,14 +530,12 @@ test('draft/get 暂不可用时保留唯一稿并标记 unverified', async () =>
       deleteDraft: async () => { deleted += 1; },
     },
   });
-  const result = await channel.publish({ payload: payload(), translation: translated(), config: config() });
-  assert.equal(result.status, 'unverified');
-  assert.equal(result.title, '利率考验市场信心（日报· 2026-08-10）');
+  await assert.rejects(channel.publish({ payload: prepareOpeningDigestWechatPayload(payload()), translation: translated(), config: config() }), /draft\/get 暂不可用/);
   assert.equal(created, 1);
   assert.equal(deleted, 0);
 });
 
-test('坏稿删除失败时不盲目重建，保留唯一稿并标记 unverified', async () => {
+test('坏稿更新失败时不再次创建，交给持久 outbox 重试', async () => {
   let created = 0;
   const channel = makeWechatOpeningDigestChannel({
     renderCover: async () => Buffer.from('cover'),
@@ -505,18 +544,15 @@ test('坏稿删除失败时不盲目重建，保留唯一稿并标记 unverified
       uploadContentImage: async () => 'https://img/fixed',
       addDraft: async () => ({ media_id: `m${++created}` }),
       getDraft: async () => ({ content: { news_item: [{ title: '错误标题', content: '<p>broken</p>' }] } }),
-      deleteDraft: async () => { throw new Error('delete unavailable'); },
+      updateDraft: async () => { throw new Error('update unavailable'); },
     },
   });
-  const result = await channel.publish({ payload: payload(), translation: translated(), config: config() });
-  assert.equal(result.status, 'unverified');
-  assert.equal(result.mediaId, 'm1');
+  await assert.rejects(channel.publish({ payload: prepareOpeningDigestWechatPayload(payload()), translation: translated(), config: config() }), /draft\/update.*update unavailable/);
   assert.equal(created, 1);
-  assert.ok(result.errors.some((error) => /draft\/delete.*delete unavailable/.test(error)));
 });
 
-test('第三次回读仍不一致时保留最新稿并返回精确字段差异', async () => {
-  let created = 0; const deleted = [];
+test('第三次回读仍不一致时保留同一稿并返回精确字段差异', async () => {
+  let created = 0; const updated = [];
   const channel = makeWechatOpeningDigestChannel({
     renderCover: async () => Buffer.from('cover'),
     api: {
@@ -524,16 +560,62 @@ test('第三次回读仍不一致时保留最新稿并返回精确字段差异',
       uploadContentImage: async () => 'https://img/fixed',
       addDraft: async () => ({ media_id: `m${++created}` }),
       getDraft: async () => ({ content: { news_item: [{ title: '错误标题', content: '<p>broken</p>' }] } }),
-      deleteDraft: async (_token, mediaId) => { deleted.push(mediaId); },
+      updateDraft: async (_token, mediaId) => { updated.push(mediaId); },
     },
   });
-  const result = await channel.publish({ payload: payload(), translation: translated(), config: config() });
+  const result = await channel.publish({ payload: prepareOpeningDigestWechatPayload(payload()), translation: translated(), config: config() });
   assert.equal(result.status, 'invalid');
-  assert.equal(result.mediaId, 'm3');
-  assert.deepEqual(deleted, ['m1', 'm2']);
+  assert.equal(result.mediaId, 'm1');
+  assert.equal(created, 1);
+  assert.deepEqual(updated, ['m1', 'm1']);
   assert.ok(result.errors.some((error) => /标题/.test(error)));
   assert.ok(result.errors.some((error) => /行情格/.test(error)));
   assert.ok(result.errors.some((error) => /OIC/.test(error)));
+});
+
+test('创建响应不明时按快照唯一恢复 media_id，不发第二次 draft/add', async () => {
+  const source = prepareOpeningDigestWechatPayload(payload());
+  const operations = memoryRemoteOperations();
+  let input; let listCalls = 0; let creates = 0; const created = [];
+  const channel = makeWechatOpeningDigestChannel({
+    renderCover: async () => Buffer.from('cover'), sleep: async () => {},
+    api: {
+      getAccessToken: async () => 'token', uploadMaterial: async () => ({ media_id: 'cover-id', url: 'https://img/header.gif' }),
+      uploadContentImage: async () => 'https://img/fixed',
+      listDrafts: async () => ({ item: ++listCalls === 1 ? [] : [{ media_id: 'wx-recovered', content: { news_item: [{ title: input.title }] } }] }),
+      addDraft: async (_token, value) => { creates += 1; input = value; throw new Error('socket closed after request'); },
+      getDraft: async () => ({ content: { news_item: [{ title: input.title, digest: input.digest, content: input.content }] } }),
+      updateDraft: async () => {},
+    },
+  });
+  const result = await channel.publish({
+    payload: source, translation: translated(source), config: config(), runId: 'run-recover',
+    remoteOperations: operations, onCreated: (value) => created.push(value),
+  });
+  assert.equal(result.mediaId, 'wx-recovered');
+  assert.equal(result.status, 'verified');
+  assert.equal(creates, 1);
+  assert.deepEqual(created.map((item) => item.remoteId), ['wx-recovered']);
+});
+
+test('创建响应不明出现多个新候选时停止，不继续新增草稿', async () => {
+  const source = prepareOpeningDigestWechatPayload(payload());
+  const operations = memoryRemoteOperations();
+  let input; let listCalls = 0; let creates = 0;
+  const channel = makeWechatOpeningDigestChannel({
+    renderCover: async () => Buffer.from('cover'), sleep: async () => {},
+    api: {
+      getAccessToken: async () => 'token', uploadMaterial: async () => ({ media_id: 'cover-id' }),
+      uploadContentImage: async () => 'https://img/fixed',
+      listDrafts: async () => ({ item: ++listCalls === 1 ? [] : ['a', 'b'].map((media_id) => ({ media_id, content: { news_item: [{ title: input.title }] } })) }),
+      addDraft: async (_token, value) => { creates += 1; input = value; throw new Error('timeout'); },
+      getDraft: async () => { throw new Error('不应回读'); }, updateDraft: async () => {},
+    },
+  });
+  await assert.rejects(channel.publish({
+    payload: source, translation: translated(source), config: config(), runId: 'run-ambiguous', remoteOperations: operations,
+  }), /2 个同日同标题新草稿/);
+  assert.equal(creates, 1);
 });
 
 test('320/375/390/430px Chromium 无横向溢出、裁切，长公司名可换行', async (t) => {
@@ -571,4 +653,25 @@ function config() {
 
 function stripMarkdownForTest(value) {
   return String(value).replace(/\*\*/g, '').replace(/\[([^\]]+)]\(https?:\/\/[^)]+\)/g, '$1');
+}
+
+function memoryRemoteOperations() {
+  const records = new Map();
+  return {
+    get: (operation) => records.get(operation),
+    prepare: (entry) => {
+      const record = { ...entry, payload_sha256: entry.payloadSha256, before_ids_json: JSON.stringify(entry.beforeIds), attempt_count: 0, remote_id: null, state: 'prepared' };
+      records.set(entry.operation, record); return record;
+    },
+    increment: (operation) => {
+      const record = records.get(operation); record.attempt_count += 1; record.state = 'attempting'; return record;
+    },
+    update: (operation, patch) => {
+      const record = records.get(operation);
+      if (patch.remoteId !== undefined) record.remote_id = patch.remoteId;
+      if (patch.lastError !== undefined) record.last_error = patch.lastError;
+      if (patch.state !== undefined) record.state = patch.state;
+      return record;
+    },
+  };
 }
