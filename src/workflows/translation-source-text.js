@@ -2700,7 +2700,7 @@ function englishNumberPhraseNumbers(value) {
     'thirteenth', 'fourteenth', 'fifteenth', 'sixteenth', 'seventeenth',
     'eighteenth', 'nineteenth', 'twentieth', 'thirtieth', 'fortieth', 'fiftieth',
     'sixtieth', 'seventieth', 'eightieth', 'ninetieth', 'single', 'both',
-    'double', 'triple', 'dozen',
+    'double', 'triple', 'dozen', 'dozens',
   ].join('|');
   const matches = String(value).matchAll(new RegExp(`\\b(?:${word})(?:[\\s-]+(?:${word}))*\\b`, 'gi'));
   return [...matches]
@@ -2728,7 +2728,7 @@ function parseEnglishNumberPhrase(value) {
     sixteenth: 16n, seventeenth: 17n, eighteenth: 18n, nineteenth: 19n,
     twentieth: 20n, thirtieth: 30n, fortieth: 40n, fiftieth: 50n,
     sixtieth: 60n, seventieth: 70n, eightieth: 80n, ninetieth: 90n,
-    single: 1n, both: 2n, double: 2n, triple: 3n, dozen: 12n,
+    single: 1n, both: 2n, double: 2n, triple: 3n, dozen: 12n, dozens: 10n,
   };
   const scales = {
     hundred: 100n,

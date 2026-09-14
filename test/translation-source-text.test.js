@@ -1398,6 +1398,14 @@ test('英文复数数量级可忠实译为中文概数，但不同数量级仍�
 
   const changed = assessTranslationUnit(unit, '长尾延伸至数千次。', { afterRepair: true });
   assert.match(changed.hardErrors.join(' '), /译文新增不等值数字/);
+
+  const dozens = assessTranslationUnit({
+    id: 'opening-digest-body-5',
+    kind: 'paragraph',
+    text: 'Dozens of AI-infrastructure companies fell more than 5%.',
+  }, '数十家 AI 基础设施公司跌幅超过 5%。', { afterRepair: true });
+  assert.deepEqual(dozens.hardErrors, []);
+  assert.deepEqual(dozens.warnings, []);
 });
 
 test('英文 both 可忠实译为中文“两者”，但不得扩成三者', () => {
