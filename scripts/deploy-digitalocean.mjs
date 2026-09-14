@@ -231,7 +231,12 @@ export function parsePreflight(output) {
   return entries;
 }
 
-const SSH_OPTIONS = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15'];
+const SSH_OPTIONS = [
+  '-o', 'BatchMode=yes',
+  '-o', 'ConnectTimeout=15',
+  '-o', 'ServerAliveInterval=15',
+  '-o', 'ServerAliveCountMax=12',
+];
 
 export const PREFLIGHT_SCRIPT = String.raw`set -euo pipefail
 metadata=http://169.254.169.254/metadata/v1
