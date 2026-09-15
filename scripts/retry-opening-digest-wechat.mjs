@@ -7,6 +7,8 @@ import { runWriter } from '../src/core/runner.js';
 import { openStore } from '../src/core/store.js';
 import { runWorkDir } from '../src/lib/run-workdir.js';
 import { makeChannel } from '../src/channels/customerio-opening-digest.js';
+import { createWechatApi } from '../src/channels/wechat-opening-digest.js';
+import { OPENING_DIGEST_TRANSLATION_VERSION } from '../src/lib/opening-digest-translation.js';
 import openingDigest from '../src/workflows/opening-digest.js';
 import { easternDateKey } from '../src/lib/us-equity-calendar.js';
 
@@ -355,6 +357,141 @@ export async function repairOpeningDigestWechatReferences({
   };
 }
 
+export async function recreateMissingOpeningDigestWechat({
+  runId,
+  dbPath,
+  workDir,
+  config,
+  now = () => new Date(),
+  readExistingDraft = async ({ mediaId }) => {
+    const api = createWechatApi({ timeoutMs: config.wechat.timeoutMs });
+    const token = await api.getAccessToken(config.wechat.appId, config.wechat.appSecret);
+    return api.getDraft(token, mediaId);
+  },
+  publish = (args) => makeChannel().publish(args),
+} = {}) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]{5,100}$/.test(String(runId || ''))) {
+    throw new Error('run-id 格式无效');
+  }
+  if (!dbPath || !fs.existsSync(dbPath)) throw new Error(`任务数据库不存在:${dbPath || '(empty)'}`);
+  if (!workDir) throw new Error('缺少 WORK_DIR');
+  if (!config?.openingDigest?.wechatEnabled) {
+    throw new Error('OPENING_DIGEST_WECHAT_ENABLED=true 才能重建微信草稿');
+  }
+
+  const store = openStore(dbPath);
+  const run = store.getRun(runId);
+  if (!run || run.workflow_id !== 'opening-digest' || run.source !== 'cron'
+    || run.status !== 'done' || run.error) {
+    throw new Error('只允许重建已完成的正式 cron Opening Digest');
+  }
+  if (run.schedule_key !== easternDateKey(now())) {
+    throw new Error('微信草稿重建只允许处理当前美东交易日的正式稿');
+  }
+  if (store.listByStatus('running').length || store.listByStatus('queued').length) {
+    throw new Error('队列非空，拒绝与主服务任务并行重建微信草稿');
+  }
+  const outbox = store.deliveryOutboxStats();
+  if (outbox.pending || outbox.failed) {
+    throw new Error(`delivery outbox 非空或有失败，拒绝重建:${JSON.stringify(outbox)}`);
+  }
+
+  const newsletterId = Number(run.remote_id);
+  const expectedCustomerIoId = `customerio-newsletter:${newsletterId}`;
+  const deliveries = store.listDeliveries(runId);
+  const customerio = deliveries.find((item) => item.destination === 'customerio');
+  const wechat = deliveries.find((item) => item.destination === 'wechat');
+  if (!Number.isInteger(newsletterId) || newsletterId <= 0
+    || run.media_id !== expectedCustomerIoId
+    || !customerio || !['delivered', 'existing'].includes(customerio.status)
+    || customerio.media_id !== expectedCustomerIoId) {
+    throw new Error('Customer.io 正式邮件身份无效，拒绝重建微信草稿');
+  }
+  if (!wechat || wechat.status !== 'verified' || !wechat.media_id) {
+    throw new Error('微信草稿重建要求数据库已有 verified 草稿和 media_id');
+  }
+
+  const sourceDir = runWorkDir(path.join(path.resolve(workDir), 'opening-digest'), runId);
+  const articlePath = path.join(sourceDir, 'article.md');
+  const sourceTracePath = path.join(sourceDir, 'research-trace.json');
+  for (const filename of REQUIRED_ARTIFACTS) {
+    if (!fs.existsSync(path.join(sourceDir, filename))) {
+      throw new Error(`Opening Digest 草稿重建缺少同源产物:${filename}`);
+    }
+  }
+  const cachedTranslation = readJson(path.join(sourceDir, 'opening-digest-zh-CN.json'), '当前中文译文缓存');
+  if (cachedTranslation.schemaVersion !== OPENING_DIGEST_TRANSLATION_VERSION
+    || (cachedTranslation.translations || []).some((unit) => (
+      COMPACT_REFERENCE_MARKER.test(String(unit?.source || ''))
+        || COMPACT_REFERENCE_MARKER.test(String(unit?.text || ''))
+    ))) {
+    throw new Error('当前中文译文缓存未通过引用净化版本门禁，拒绝重建');
+  }
+  const sourceTrace = readJson(sourceTracePath, '原始研究轨迹');
+  if (!/40007:\s*invalid media_id/i.test(String(sourceTrace.openingDigestDelivery?.wechat?.error || ''))) {
+    throw new Error('研究轨迹没有记录原草稿 media_id 失效，拒绝创建替代稿');
+  }
+  try {
+    await readExistingDraft({ mediaId: wechat.media_id });
+    throw new Error('原微信草稿仍可回读，拒绝创建重复草稿');
+  } catch (error) {
+    if (!/40007:\s*invalid media_id/i.test(String(error?.message || error))) throw error;
+  }
+
+  const repairConfig = {
+    ...config,
+    discord: { ...(config.discord || {}), openingDigestEnabled: false },
+  };
+  const result = await publish({
+    articlePath,
+    config: repairConfig,
+    workflow: openingDigest,
+    source: 'manual',
+    contentMode: 'editorial',
+    existingRemoteId: String(newsletterId),
+    existingDeliveries: deliveries.filter((item) => item.destination !== 'wechat'),
+  });
+  const recreated = result?.deliveries?.find((item) => item.destination === 'wechat');
+  if (!recreated?.mediaId || recreated.mediaId === wechat.media_id || recreated.status !== 'verified') {
+    throw new Error(`微信替代草稿未完成 verified 回读:${JSON.stringify(recreated || null)}`);
+  }
+  store.upsertDelivery(runId, {
+    destination: 'wechat',
+    status: 'verified',
+    mediaId: recreated.mediaId,
+    title: recreated.title,
+    details: {
+      recreatedAfterMissingRemoteId: wechat.media_id,
+      attempts: recreated.details?.attempts || [],
+    },
+  });
+  store.updateRemoteOperation(runId, 'create-opening-digest-wechat', {
+    state: 'confirmed',
+    remoteId: recreated.mediaId,
+    lastError: `replaced missing media_id:${wechat.media_id}`,
+  });
+  sourceTrace.openingDigestDelivery = {
+    ...(sourceTrace.openingDigestDelivery || {}),
+    wechat: {
+      status: 'verified',
+      mediaId: recreated.mediaId,
+      title: recreated.title,
+      recreatedAfterMissingRemoteId: wechat.media_id,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(sourceTracePath, `${JSON.stringify(sourceTrace, null, 2)}\n`, { mode: 0o600 });
+  return {
+    runId,
+    newsletterId,
+    mediaId: recreated.mediaId,
+    replacedMediaId: wechat.media_id,
+    title: recreated.title,
+    status: recreated.status,
+    sourceDir,
+  };
+}
+
 function readJson(filename, label) {
   try { return JSON.parse(fs.readFileSync(filename, 'utf8')); }
   catch (error) { throw new Error(`${label}缺失或损坏:${error.message}`); }
@@ -374,10 +511,12 @@ if (isMain) {
     const config = loadConfig(process.env);
     const repairVerified = process.argv[2] === '--repair-verified';
     const repairReferences = process.argv[2] === '--repair-references';
+    const recreateMissing = process.argv[2] === '--recreate-missing';
     const operation = repairVerified ? repairOpeningDigestWechat
-      : repairReferences ? repairOpeningDigestWechatReferences : retryOpeningDigestWechat;
+      : repairReferences ? repairOpeningDigestWechatReferences
+        : recreateMissing ? recreateMissingOpeningDigestWechat : retryOpeningDigestWechat;
     const result = await operation({
-      runId: repairVerified || repairReferences ? process.argv[3] : process.argv[2],
+      runId: repairVerified || repairReferences || recreateMissing ? process.argv[3] : process.argv[2],
       dbPath: config.dbPath,
       workDir: config.workDir,
       config,

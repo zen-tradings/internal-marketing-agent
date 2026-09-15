@@ -439,6 +439,24 @@ gates plus a run-scoped Chinese cache that proves the marker leak. It disables
 Discord and updates then verifies the same WeChat `media_id`; it never sends or
 schedules Customer.io and never creates another WeChat draft.
 
+If that repair proves the stored `media_id` has since been deleted from WeChat
+with error 40007, and the regenerated cache has already passed the current
+reference sanitizer, recreate exactly one replacement draft with:
+
+```bash
+run_id=replace-with-current-day-database-run-id
+sudo systemd-run --wait --pipe --collect \
+  --unit=zen-content-hub-opening-wechat-missing-recreate \
+  --uid=zenbot \
+  --property=WorkingDirectory=/opt/zen-content-hub \
+  --property=EnvironmentFile=/etc/zen-content-hub/zen-content-hub.env \
+  /usr/bin/npm run retry:opening-digest-wechat -- --recreate-missing "$run_id"
+```
+
+The command independently confirms the old draft still returns 40007 before
+creating anything, requires the current sanitized translation cache and the
+recorded failed repair trace, disables Discord, and never resends Customer.io.
+
 ## Recovering a failed translation
 
 Use the restricted recovery command only after the target release has passed

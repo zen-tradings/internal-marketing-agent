@@ -6,6 +6,7 @@ import path from 'node:path';
 import { openStore } from '../src/core/store.js';
 import { runWorkDir } from '../src/lib/run-workdir.js';
 import {
+  recreateMissingOpeningDigestWechat,
   repairOpeningDigestWechat,
   repairOpeningDigestWechatReferences,
   retryOpeningDigestWechat,
@@ -186,4 +187,51 @@ test('纯编号引用泄漏可净化并只更新当天同一个 verified 微信�
   assert.equal(JSON.parse(delivery.details_json).correctedReferenceLeak, true);
   const sourceTrace = JSON.parse(fs.readFileSync(path.join(value.sourceDir, 'research-trace.json'), 'utf8'));
   assert.equal(sourceTrace.openingDigestDelivery.wechatReferenceRepair.mediaId, 'wx-existing');
+});
+
+test('已确认远端删除的当天草稿可用净化缓存安全重建一次', async (t) => {
+  const value = fixture();
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  value.store.upsertDelivery(value.runId, {
+    destination: 'wechat', status: 'verified', mediaId: 'wx-missing',
+    title: '收益率承压（日报· 2026-09-08）',
+  });
+  fs.writeFileSync(path.join(value.sourceDir, 'opening-digest-zh-CN.json'), JSON.stringify({
+    schemaVersion: 20,
+    translations: [{ id: 'body-1', source: 'Yield pressure.', text: '收益率承压。' }],
+  }));
+  fs.writeFileSync(path.join(value.sourceDir, 'research-trace.json'), JSON.stringify({
+    openingDigestDelivery: { wechat: { status: 'failed', error: '微信 draft/get 暂不可用:40007: invalid media_id hint' } },
+  }));
+  value.store.prepareRemoteOperation({
+    runId: value.runId,
+    operation: 'create-opening-digest-wechat',
+    operationKey: `wechat:opening-digest:create:v1:${value.runId}`,
+    payloadSha256: 'old-payload',
+  });
+  value.store.updateRemoteOperation(value.runId, 'create-opening-digest-wechat', {
+    state: 'confirmed', remoteId: 'wx-missing',
+  });
+  let publishInput;
+  const result = await recreateMissingOpeningDigestWechat({
+    ...value,
+    now: () => new Date('2026-09-08T15:00:00.000Z'),
+    readExistingDraft: async () => { throw new Error('40007: invalid media_id hint'); },
+    publish: async (input) => {
+      publishInput = input;
+      return { deliveries: [{
+        destination: 'wechat', status: 'verified', mediaId: 'wx-recreated',
+        title: '收益率承压（日报· 2026-09-08）', details: { attempts: [{ status: 'verified' }] },
+      }] };
+    },
+  });
+  assert.equal(result.mediaId, 'wx-recreated');
+  assert.equal(result.replacedMediaId, 'wx-missing');
+  assert.equal(publishInput.source, 'manual');
+  assert.equal(publishInput.existingRemoteId, '66');
+  assert.equal(publishInput.existingDeliveries.some((item) => item.destination === 'wechat'), false);
+  const delivery = value.store.listDeliveries(value.runId).find((item) => item.destination === 'wechat');
+  assert.equal(delivery.media_id, 'wx-recreated');
+  assert.equal(JSON.parse(delivery.details_json).recreatedAfterMissingRemoteId, 'wx-missing');
+  assert.equal(value.store.getRemoteOperation(value.runId, 'create-opening-digest-wechat').remote_id, 'wx-recreated');
 });
