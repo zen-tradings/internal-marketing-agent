@@ -420,6 +420,25 @@ failure. It disables Discord, never sends or schedules Customer.io, regenerates
 into a run-scoped repair directory, and updates then verifies the existing
 WeChat draft instead of creating a duplicate.
 
+If the current-day verified WeChat draft contains compact evidence markers such
+as `【5】` because an older sanitizer accepted them, deploy the sanitizer fix and
+update that same draft with the restricted reference repair:
+
+```bash
+run_id=replace-with-current-day-database-run-id
+sudo systemd-run --wait --pipe --collect \
+  --unit=zen-content-hub-opening-wechat-reference-repair \
+  --uid=zenbot \
+  --property=WorkingDirectory=/opt/zen-content-hub \
+  --property=EnvironmentFile=/etc/zen-content-hub/zen-content-hub.env \
+  /usr/bin/npm run retry:opening-digest-wechat -- --repair-references "$run_id"
+```
+
+This mode requires the same idle/current-day/successful-email/existing-verified
+gates plus a run-scoped Chinese cache that proves the marker leak. It disables
+Discord and updates then verifies the same WeChat `media_id`; it never sends or
+schedules Customer.io and never creates another WeChat draft.
+
 ## Recovering a failed translation
 
 Use the restricted recovery command only after the target release has passed

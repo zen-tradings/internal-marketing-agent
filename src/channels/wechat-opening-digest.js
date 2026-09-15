@@ -219,7 +219,7 @@ export function validateWechatOpeningDigestDraft(saved, { title, payload, transl
   const document = new JSDOM(`<body>${article.content || ''}</body>`).window.document;
   if (document.querySelector('a[href]')) errors.push('正文不得包含可点击链接');
   const visibleWithoutCommunity = String(document.body.textContent || '').replaceAll(OPENING_DIGEST_DISCORD_INVITE_URL, '');
-  if (/(?:https?:\/\/|mailto:|【[^【】\s]+†|\[[^\]]+]\([^)]*\))/i.test(visibleWithoutCommunity)) {
+  if (/(?:https?:\/\/|mailto:|【[^【】\s]+†|【\s*\d+(?:\s*[-–—,，、;；]\s*\d+)*\s*】|\[[^\]]+]\([^)]*\))/i.test(visibleWithoutCommunity)) {
     errors.push('正文仍含来源链接、脚注或引用标记');
   }
   const subtitle = document.querySelector('[data-zen-section="subtitle"]')?.textContent || '';

@@ -5,7 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { openStore } from '../src/core/store.js';
 import { runWorkDir } from '../src/lib/run-workdir.js';
-import { repairOpeningDigestWechat, retryOpeningDigestWechat } from '../scripts/retry-opening-digest-wechat.mjs';
+import {
+  repairOpeningDigestWechat,
+  repairOpeningDigestWechatReferences,
+  retryOpeningDigestWechat,
+} from '../scripts/retry-opening-digest-wechat.mjs';
 
 function fixture({ wechatError = 'Opening Digest 中文直译硬校验失败:body-3(URL 不一致)' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'retry-opening-wechat-'));
@@ -145,4 +149,41 @@ test('正文模型技术失败可重新生成并只更新同一个 verified 微�
   assert.equal(JSON.parse(delivery.details_json).correctedFromTechnicalFallback, true);
   const sourceTrace = JSON.parse(fs.readFileSync(path.join(value.sourceDir, 'research-trace.json'), 'utf8'));
   assert.equal(sourceTrace.openingDigestDelivery.wechatRepair.mediaId, 'wx-existing');
+});
+
+test('纯编号引用泄漏可净化并只更新当天同一个 verified 微信草稿', async (t) => {
+  const value = fixture();
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  value.store.upsertDelivery(value.runId, {
+    destination: 'wechat',
+    status: 'verified',
+    mediaId: 'wx-existing',
+    title: '收益率承压（日报· 2026-09-08）',
+    details: { attempts: [{ status: 'verified' }] },
+  });
+  fs.writeFileSync(path.join(value.sourceDir, 'opening-digest-zh-CN.json'), JSON.stringify({
+    schemaVersion: 19,
+    translations: [{ id: 'body-1', source: 'Yield pressure【5】.', text: '收益率承压【5】。' }],
+  }));
+  let publishInput;
+  const result = await repairOpeningDigestWechatReferences({
+    ...value,
+    now: () => new Date('2026-09-08T15:00:00.000Z'),
+    publish: async (input) => {
+      publishInput = input;
+      return { deliveries: [{
+        destination: 'wechat', status: 'verified', mediaId: 'wx-existing',
+        title: '收益率承压（日报· 2026-09-08）', details: { attempts: [{ status: 'verified', updated: true }] },
+      }] };
+    },
+  });
+  assert.equal(result.mediaId, 'wx-existing');
+  assert.equal(publishInput.source, 'wechat-repair');
+  assert.equal(publishInput.existingRemoteId, '66');
+  assert.equal(publishInput.config.discord.openingDigestEnabled, false);
+  const delivery = value.store.listDeliveries(value.runId).find((item) => item.destination === 'wechat');
+  assert.equal(delivery.status, 'verified');
+  assert.equal(JSON.parse(delivery.details_json).correctedReferenceLeak, true);
+  const sourceTrace = JSON.parse(fs.readFileSync(path.join(value.sourceDir, 'research-trace.json'), 'utf8'));
+  assert.equal(sourceTrace.openingDigestDelivery.wechatReferenceRepair.mediaId, 'wx-existing');
 });

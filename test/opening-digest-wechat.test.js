@@ -488,9 +488,9 @@ test('中文微信 HTML 锁定新版模板、动态副标题、9 格行情与 OI
 test('中文微信剥离证据引用和所有正文链接但保留有语义 label', () => {
   const citation = `【${10}†${'https://example.com/oil'}】`;
   const source = payload();
-  source.article.body = `The market opened neutral as WTI reached $94.60${citation}.\n\n## Earnings ahead\n**Mon, Aug 10:** [NVDA](https://finance.yahoo.com/calendar/earnings) after close (expected)\n\n## What matters today\n[NVIDIA Corporation update](https://example.com/a) moved SPY 10.25% at 10:15 EDT.`;
+  source.article.body = `The market opened neutral as WTI reached $94.60${citation}【5】【8, 9】【10-12】.\n\n## Earnings ahead\n**Mon, Aug 10:** [NVDA](https://finance.yahoo.com/calendar/earnings) after close (expected)\n\n## What matters today\n[NVIDIA Corporation update](https://example.com/a) moved SPY 10.25% at 10:15 EDT.`;
   const translation = translated(source);
-  translation.translations.find((unit) => unit.id === 'body-1').text = `市场开盘中性，WTI 达到 $94.60${citation}。`;
+  translation.translations.find((unit) => unit.id === 'body-1').text = `市场开盘中性，WTI 达到 $94.60${citation}【5】【8, 9】【10-12】。`;
   const html = renderWechatOpeningDigestHtml({ payload: source, translation, images: { header: 'https://img/h', survey: 'https://img/s', footer: 'https://img/f' } });
   assert.doesNotMatch(html, /【|†|example\.com|finance\.yahoo\.com/i);
   assert.doesNotMatch(html, /href=/i);
@@ -500,6 +500,20 @@ test('中文微信剥离证据引用和所有正文链接但保留有语义 labe
     title: '利率考验市场信心', payload: source, translation,
   });
   assert.deepEqual(validation.errors, []);
+});
+
+test('微信回读拒绝残留的纯编号证据标记', () => {
+  const source = prepareOpeningDigestWechatPayload(payload());
+  const translation = translated(source);
+  const html = renderWechatOpeningDigestHtml({
+    payload: source,
+    translation,
+    images: { header: 'https://img/h', survey: 'https://img/s', footer: 'https://img/f' },
+  }).replace('NVIDIA 公司动态', 'NVIDIA 公司动态【5】');
+  const validation = validateWechatOpeningDigestDraft({ news_item: [{
+    title: '利率考验市场信心', digest: '早盘市场信号。', content: html,
+  }] }, { title: '利率考验市场信心', payload: source, translation });
+  assert.match(validation.errors.join('；'), /正文仍含来源链接、脚注或引用标记/);
 });
 
 test('微信财报预告将同一天的每个 ticker 拆为独立视觉行，邮件源文本不变', () => {

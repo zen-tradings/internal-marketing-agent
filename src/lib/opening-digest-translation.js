@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 19;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 20;
 export const OPENING_DIGEST_SAFE_HEADLINE = '今日开市要点';
 const MODEL_TRANSLATION_BATCH_SIZE = 1;
 const MODEL_TRANSLATION_MAX_TOKENS = 4096;
@@ -181,6 +181,7 @@ export function prepareOpeningDigestWechatPayload(payload) {
 export function stripOpeningDigestReferences(value) {
   return String(value || '')
     .replace(/【[^【】\s]+†https?:\/\/[^\s】]+】/gi, '')
+    .replace(/【\s*\d+(?:\s*[-–—,，、;；]\s*\d+)*\s*】/g, '')
     .replace(/[\uff08(]\s*(?:sources?|source links?|来源|资料来源)\s*[:：]\s*(?:\[[^\]]+]\((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+\)(?:\s*[;,；，]\s*)?)+\s*[)\uff09]/gi, '')
     .replace(/[\uff08(]\s*\[([^\]]+)]\(((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+)\)\s*[)\uff09]/gi, '')
     .replace(/\[([^\]]+)]\(((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+)\)/gi, '$1')
@@ -196,7 +197,7 @@ export function stripOpeningDigestReferences(value) {
 
 export function assertOpeningDigestWechatPayloadClean(payload) {
   const units = translationUnits(payload);
-  const dirty = units.filter((unit) => /(?:https?:\/\/|mailto:|【[^【】\s]+†)/i.test(unit.text));
+  const dirty = units.filter((unit) => /(?:https?:\/\/|mailto:|【[^【】\s]+†|【\s*\d+(?:\s*[-–—,，、;；]\s*\d+)*\s*】)/i.test(unit.text));
   if (dirty.length) {
     const error = translationError(`Opening Digest 中文 payload 仍含来源链接或引用:${dirty.map((unit) => unit.id).join(',')}`);
     error.retryable = false;
