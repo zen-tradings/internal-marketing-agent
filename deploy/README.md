@@ -421,8 +421,9 @@ into a run-scoped repair directory, and updates then verifies the existing
 WeChat draft instead of creating a duplicate.
 
 If the current-day verified WeChat draft contains compact evidence markers such
-as `【5】` because an older sanitizer accepted them, deploy the sanitizer fix and
-update that same draft with the restricted reference repair:
+as `【5】`, `【２】`, `【5†Source】`, or `[5]` because an older sanitizer accepted
+them, deploy the sanitizer fix and update that same draft with the restricted
+reference repair:
 
 ```bash
 run_id=replace-with-current-day-database-run-id
