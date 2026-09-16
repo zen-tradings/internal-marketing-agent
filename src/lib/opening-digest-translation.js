@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from '../workflows/translation-source-text.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 20;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 21;
 export const OPENING_DIGEST_SAFE_HEADLINE = '今日开市要点';
 const MODEL_TRANSLATION_BATCH_SIZE = 1;
 const MODEL_TRANSLATION_MAX_TOKENS = 4096;
@@ -180,8 +180,9 @@ export function prepareOpeningDigestWechatPayload(payload) {
 
 export function stripOpeningDigestReferences(value) {
   return String(value || '')
-    .replace(/【[^【】\s]+†https?:\/\/[^\s】]+】/gi, '')
-    .replace(/【\s*\d+(?:\s*[-–—,，、;；]\s*\d+)*\s*】/g, '')
+    .replace(/【[^【】]*†[^【】]*】/gi, '')
+    .replace(/【\s*[0-9０-９]+(?:\s*[-–—,，、;；]\s*[0-9０-９]+)*\s*】/g, '')
+    .replace(/\[\s*[0-9]+(?:\s*[-–—,，、;；]\s*[0-9]+)*\s*\]/g, '')
     .replace(/[\uff08(]\s*(?:sources?|source links?|来源|资料来源)\s*[:：]\s*(?:\[[^\]]+]\((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+\)(?:\s*[;,；，]\s*)?)+\s*[)\uff09]/gi, '')
     .replace(/[\uff08(]\s*\[([^\]]+)]\(((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+)\)\s*[)\uff09]/gi, '')
     .replace(/\[([^\]]+)]\(((?:https?:\/\/|mailto:)(?:[^()\s]|\([^()\s]*\))+)\)/gi, '$1')
@@ -189,6 +190,8 @@ export function stripOpeningDigestReferences(value) {
     .replace(/https?:\/\/[^\s<>"'】，。；！？)\uff09]+/gi, '')
     .replace(/mailto:[^\s<>"'】，。；！？)\uff09]+/gi, '')
     .replace(/[\uff08(]\s*[)\uff09]/g, '')
+    .replace(/【\s*】/g, '')
+    .replace(/\[\s*\]/g, '')
     .replace(/[ \t]+([,.;:!?，。；：！？])/g, '$1')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/[ \t]+$/gm, '')
@@ -407,7 +410,7 @@ export function protectTranslationUnit(unit) {
 }
 
 function evidenceCitations(source) {
-  return String(source || '').match(/【[^【】\s]+†https?:\/\/[^\s】]+】/gi) || [];
+  return String(source || '').match(/【[^【】]*†[^【】]*】/gi) || [];
 }
 
 function bareUrlTokens(source) {

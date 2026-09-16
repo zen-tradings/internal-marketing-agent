@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { openStore } from '../src/core/store.js';
 import { runWorkDir } from '../src/lib/run-workdir.js';
+import { OPENING_DIGEST_TRANSLATION_VERSION } from '../src/lib/opening-digest-translation.js';
 import {
   recreateMissingOpeningDigestWechat,
   repairOpeningDigestWechat,
@@ -197,7 +198,7 @@ test('已确认远端删除的当天草稿可用净化缓存安全重建一次',
     title: '收益率承压（日报· 2026-09-08）',
   });
   fs.writeFileSync(path.join(value.sourceDir, 'opening-digest-zh-CN.json'), JSON.stringify({
-    schemaVersion: 20,
+    schemaVersion: OPENING_DIGEST_TRANSLATION_VERSION,
     translations: [{ id: 'body-1', source: 'Yield pressure.', text: '收益率承压。' }],
   }));
   fs.writeFileSync(path.join(value.sourceDir, 'research-trace.json'), JSON.stringify({

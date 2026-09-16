@@ -18,6 +18,7 @@ import {
   prepareOpeningDigestWechatPayload,
   protectTranslationUnit,
   restoreTranslationUnit,
+  stripOpeningDigestReferences,
   translateOpeningDigestPayload,
   translationUnits,
 } from '../src/lib/opening-digest-translation.js';
@@ -500,6 +501,18 @@ test('中文微信剥离证据引用和所有正文链接但保留有语义 labe
     title: '利率考验市场信心', payload: source, translation,
   });
   assert.deepEqual(validation.errors, []);
+});
+
+test('中文微信净化覆盖全角数字、嵌套、†非URL与 ASCII 脚注引用变体', () => {
+  const stripped = stripOpeningDigestReferences('数据显示【２】上涨【【3】】，随后回落【4 †Data】与[5]，另见[6,7]与[8-10]。');
+  assert.equal(stripped, '数据显示上涨，随后回落与，另见与。');
+  assert.equal(stripOpeningDigestReferences('keep [NVDA](https://example.com/a) label'), 'keep NVDA label');
+  const prepared = prepareOpeningDigestWechatPayload({
+    article: { headline: 'Rates test conviction', preheader: 'Morning signals.', body: 'Fact one【4 †Data】 and【３】 plus [4] 。' },
+    metrics: [],
+  });
+  assert.doesNotMatch(prepared.article.body, /【|†|\[\s*[0-9]/);
+  assert.equal(prepared.article.body, 'Fact one and plus。');
 });
 
 test('微信回读拒绝残留的纯编号证据标记', () => {

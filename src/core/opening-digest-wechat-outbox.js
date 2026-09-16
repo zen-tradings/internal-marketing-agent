@@ -38,6 +38,7 @@ export async function flushOpeningDigestWechatOutbox({
   translatePayload = translateOpeningDigestPayload,
   wechatChannel = makeWechatOpeningDigestChannel(),
   onTerminalFailure,
+  onDelivered,
 } = {}) {
   if (!config?.openingDigest?.wechatEnabled || typeof store?.listPendingDeliveryOutbox !== 'function') {
     return { delivered: 0, retried: 0, failed: 0 };
@@ -107,6 +108,9 @@ export async function flushOpeningDigestWechatOutbox({
         wechat: { ...wechat, html: undefined },
       });
       delivered += 1;
+      // The success notice must never poison the already-completed delivery.
+      try { await onDelivered?.({ row, wechat }); }
+      catch (error) { console.error('[hub] WeChat delivery success notice 失败:', error?.message || error); }
     } catch (error) {
       mediaId = String(error?.remoteId || mediaId || store.listDeliveries(row.run_id)
         .find((item) => item.destination === DESTINATION)?.media_id || '');

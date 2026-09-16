@@ -523,6 +523,14 @@ export async function start() {
         config,
         fetchFn: governor.fetch,
         onTerminalFailure: terminalWarning('warn:wechat', ({ error, attempts }) => `Opening Digest 邮件已成功，但中文微信草稿在 ${attempts} 次尝试后仍失败:${error?.message || error}`),
+        onDelivered: ({ row, wechat }) => {
+          let notify = {};
+          try { notify = JSON.parse(store.getRun(row.run_id)?.notify_json || '{}'); } catch {}
+          return deliverOrQueueNotification({
+            store, notifier: deps.notifier, runId: row.run_id, method: 'success:wechat', notify,
+            payload: { title: wechat.title, mediaId: wechat.mediaId, channelId: 'wechat-opening-digest' },
+          });
+        },
       }).catch((error) => console.error('[hub] WeChat delivery outbox 补发失败:', error?.message || error)),
     ]).finally(() => { deliveryFlushPromise = undefined; });
     return deliveryFlushPromise;

@@ -13,7 +13,9 @@ import openingDigest from '../src/workflows/opening-digest.js';
 import { easternDateKey } from '../src/lib/us-equity-calendar.js';
 
 const RECOVERABLE_ERROR = /^Opening Digest 中文直译硬校验失败:/;
-const COMPACT_REFERENCE_MARKER = /【\s*\d+(?:\s*[-–—,，、;；]\s*\d+)*\s*】/;
+// Keep in sync with stripOpeningDigestReferences: any † citation (URL or not),
+// numeric markers including full-width digits, and ASCII bracket footnotes.
+const COMPACT_REFERENCE_MARKER = /(?:【[^【】]*†|【\s*[0-9０-９]+(?:\s*[-–—,，、;；]\s*[0-9０-９]+)*\s*】|\[\s*[0-9]+(?:\s*[-–—,，、;；]\s*[0-9]+)*\s*\])/i;
 const REQUIRED_ARTIFACTS = [
   'article.md',
   'article.md.opening-digest-state.json',

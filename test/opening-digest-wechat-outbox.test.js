@@ -63,6 +63,7 @@ test('正式邮件成功前微信 outbox 不执行，成功后消费同一冻结
   assert.equal(first.id, duplicate.id);
   assert.equal(first.payload_sha256, duplicate.payload_sha256);
   let publishes = 0;
+  const deliveriesNotices = [];
   const beforeEmail = await flushOpeningDigestWechatOutbox({
     store, config: config(root),
     translatePayload: async () => { throw new Error('邮件前不应翻译'); },
@@ -81,9 +82,15 @@ test('正式邮件成功前微信 outbox 不执行，成功后消费同一冻结
       await onCreated({ remoteId: 'wx-1', title: '利率考验信心（日报· 2026-09-10）' });
       return { mediaId: 'wx-1', title: '利率考验信心（日报· 2026-09-10）', status: 'verified', errors: [], attempts: [] };
     } },
+    onDelivered: async (entry) => deliveriesNotices.push(entry),
   });
   assert.deepEqual(afterEmail, { delivered: 1, retried: 0, failed: 0 });
   assert.equal(publishes, 1);
+  assert.equal(deliveriesNotices.length, 1);
+  assert.equal(deliveriesNotices[0].row.id, first.id);
+  assert.deepEqual(deliveriesNotices[0].wechat, {
+    mediaId: 'wx-1', title: '利率考验信心（日报· 2026-09-10）', status: 'verified', errors: [], attempts: [],
+  });
   assert.doesNotMatch(JSON.stringify(translatedInput), /https?:\/\/|【|†/);
   assert.match(translatedInput.article.body, /NVDA/);
   assert.equal(store.listDeliveries('od-wechat-1').find((item) => item.destination === 'wechat').status, 'verified');
@@ -158,6 +165,7 @@ test('事实硬门禁终态失败只告警一次，Customer.io 状态保持成�
     translatePayload: async () => { const error = new Error('数字 650.25 被改变'); error.retryable = false; throw error; },
     wechatChannel: { publish: async () => { throw new Error('不应创建'); } },
     onTerminalFailure: async (entry) => warnings.push(entry),
+    onDelivered: async () => { throw new Error('失败不应触发成功通知'); },
   };
   assert.deepEqual(await flushOpeningDigestWechatOutbox(options), { delivered: 0, retried: 0, failed: 1 });
   assert.deepEqual(await flushOpeningDigestWechatOutbox(options), { delivered: 0, retried: 0, failed: 0 });
