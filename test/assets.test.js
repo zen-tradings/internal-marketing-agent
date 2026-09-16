@@ -11,7 +11,7 @@ const alwaysExists = () => true;
 test('固定封底使用最新四二维码原图', () => {
   const footer = new URL('../assets/zen-footer-qr.png', import.meta.url);
   const digest = crypto.createHash('sha256').update(fs.readFileSync(footer)).digest('hex');
-  assert.equal(digest, '17970b8cc3a2eb4015ff0dcb9289d5bce23115eed6ee03685ed3944fb0ab7d7c');
+  assert.equal(digest, 'fce16f9a13c62cc67d4668645e738565cb00df13bb3876dba2e3663d77c975d5');
 });
 
 test('固定倒数第二张图使用内容调研问卷原图', () => {
