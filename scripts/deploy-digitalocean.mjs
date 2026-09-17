@@ -8,12 +8,12 @@ import dotenv from 'dotenv';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TARGET_FILE = path.join(REPO_ROOT, 'deploy', 'target.env');
 const LOCAL_ENV_FILE = path.join(REPO_ROOT, '.env');
-const DEFAULT_MODEL = 'qwen/qwen3.8-max';
+const DEFAULT_MODEL = 'z-ai/glm-5.3-flash';
 const DEFAULT_REASONING = 'high';
 const DEFAULT_PLANNER_MODEL = 'moonshotai/kimi-k3';
 const DEFAULT_PLANNER_REASONING = 'high';
-const DEFAULT_OPENING_DIGEST_MODEL = 'openai/gpt-oss-120b';
-const DEFAULT_OPTIONS_STRATEGY_MODEL = 'anthropic/claude-fable-5';
+const DEFAULT_OPENING_DIGEST_MODEL = 'z-ai/glm-5.3-flash';
+const DEFAULT_OPTIONS_STRATEGY_MODEL = 'z-ai/glm-5.3-flash';
 const DEFAULT_OPTIONS_STRATEGY_REASONING = 'high';
 const DEFAULT_OPTIONS_STRATEGY_MAX_TOKENS = 32000;
 const DEFAULT_OPTIONS_STRATEGY_TIMEOUT_MS = 900000;
@@ -31,6 +31,7 @@ export const DEPLOY_MANAGED_ENV_KEYS = Object.freeze([
   'OPENING_DIGEST_WECHAT_ENABLED',
   'OPENING_DIGEST_MODEL',
   'OPENROUTER_MODEL',
+  'OPENROUTER_TRANSLATION_MODEL',
   'OPENROUTER_ROUTER_MODEL',
   'OPENROUTER_PLANNER_MODEL',
   'OPENROUTER_REVIEW_MODEL',
@@ -76,6 +77,7 @@ export function parseDeployArgs(argv) {
     commit: 'HEAD',
     target: '',
     model: DEFAULT_MODEL,
+    translationModel: DEFAULT_MODEL,
     reasoning: DEFAULT_REASONING,
     plannerModel: DEFAULT_PLANNER_MODEL,
     plannerReasoning: DEFAULT_PLANNER_REASONING,
@@ -97,7 +99,7 @@ export function parseDeployArgs(argv) {
     const arg = argv[index];
     if (arg === '--activate') parsed.activate = true;
     else if (arg === '--sync-discord-config') parsed.syncDiscordConfig = true;
-    else if (['--commit', '--target', '--model', '--reasoning', '--planner-model', '--planner-reasoning', '--max-concurrency', '--opening-digest-model', '--opening-digest-wechat-enabled', '--opening-digest-segment-id', '--options-strategy-model', '--options-strategy-reasoning', '--options-strategy-max-tokens', '--options-strategy-timeout-ms'].includes(arg)) {
+    else if (['--commit', '--target', '--model', '--translation-model', '--reasoning', '--planner-model', '--planner-reasoning', '--max-concurrency', '--opening-digest-model', '--opening-digest-wechat-enabled', '--opening-digest-segment-id', '--options-strategy-model', '--options-strategy-reasoning', '--options-strategy-max-tokens', '--options-strategy-timeout-ms'].includes(arg)) {
       const value = argv[++index];
       if (!value) throw new Error(`${arg} requires a value`);
       const key = arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
@@ -161,6 +163,7 @@ export function validateDeployInputs({
   target,
   commit,
   model,
+  translationModel = DEFAULT_MODEL,
   reasoning,
   plannerModel,
   plannerReasoning,
@@ -178,6 +181,7 @@ export function validateDeployInputs({
   }
   if (!/^[a-f0-9]{40}$/i.test(commit)) throw new Error('Deploy commit must be a full 40-character SHA');
   if (typeof model !== 'string' || !/^[a-z0-9._/-]+$/i.test(model)) throw new Error('Invalid OpenRouter model id');
+  if (typeof translationModel !== 'string' || !/^[a-z0-9._/-]+$/i.test(translationModel)) throw new Error('Invalid OpenRouter translation model id');
   if (typeof plannerModel !== 'string' || !/^[a-z0-9._/-]+$/i.test(plannerModel)) throw new Error('Invalid OpenRouter planner model id');
   if (openingDigestModel != null && (typeof openingDigestModel !== 'string' || !/^[a-z0-9._/-]+$/i.test(openingDigestModel))) {
     throw new Error('Invalid Opening Digest model id');
@@ -280,7 +284,8 @@ opening_digest_model=$6
 opening_digest_wechat_enabled=$7
 opening_digest_segment_id=$8
 max_concurrency=$9
-shift 9
+translation_model=${10}
+shift 10
 options_strategy_model=$1
 options_strategy_reasoning=$2
 options_strategy_max_tokens=$3
@@ -430,6 +435,7 @@ update_env OPENROUTER_CONCURRENCY 2
 update_env EXA_SEARCH_QPS 8
 update_env SLACK_POST_INTERVAL_MS 1000
 update_env OPENROUTER_MODEL "$model"
+update_env OPENROUTER_TRANSLATION_MODEL "$translation_model"
 update_env OPENROUTER_ROUTER_MODEL z-ai/glm-5.2
 update_env OPENROUTER_PLANNER_MODEL "$planner_model"
 update_env OPENROUTER_REVIEW_MODEL z-ai/glm-5.2
@@ -516,6 +522,7 @@ test "$(sudo awk -F= '$1 == "OPENROUTER_CONCURRENCY" { print $2 }' "$env_file" |
 test "$(sudo awk -F= '$1 == "EXA_SEARCH_QPS" { print $2 }' "$env_file" | tail -n 1)" = 8
 test "$(sudo awk -F= '$1 == "SLACK_POST_INTERVAL_MS" { print $2 }' "$env_file" | tail -n 1)" = 1000
 test "$(sudo awk -F= '$1 == "OPENROUTER_MODEL" { print $2 }' "$env_file" | tail -n 1)" = "$model"
+test "$(sudo awk -F= '$1 == "OPENROUTER_TRANSLATION_MODEL" { print $2 }' "$env_file" | tail -n 1)" = "$translation_model"
 test "$(sudo awk -F= '$1 == "OPENROUTER_REASONING_EFFORT" { print $2 }' "$env_file" | tail -n 1)" = "$reasoning"
 test "$(sudo awk -F= '$1 == "OPENROUTER_PLANNER_MODEL" { print $2 }' "$env_file" | tail -n 1)" = "$planner_model"
 test "$(sudo awk -F= '$1 == "OPENROUTER_PLANNER_REASONING_EFFORT" { print $2 }' "$env_file" | tail -n 1)" = "$planner_reasoning"
@@ -605,7 +612,7 @@ export function assertLocalRelease(commit, run = runCommand) {
   run('git', ['merge-base', '--is-ancestor', commit, '@{upstream}'], { quiet: true });
 }
 
-export function activateRemote({ target, commit, model, reasoning, plannerModel, plannerReasoning, maxConcurrency, openingDigestModel = DEFAULT_OPENING_DIGEST_MODEL, openingDigestWechatEnabled, openingDigestSegmentId = 0, optionsStrategyModel = DEFAULT_OPTIONS_STRATEGY_MODEL, optionsStrategyReasoning = DEFAULT_OPTIONS_STRATEGY_REASONING, optionsStrategyMaxTokens = DEFAULT_OPTIONS_STRATEGY_MAX_TOKENS, optionsStrategyTimeoutMs = DEFAULT_OPTIONS_STRATEGY_TIMEOUT_MS, discordConfig = null }, run = runCommand) {
+export function activateRemote({ target, commit, model, translationModel = DEFAULT_MODEL, reasoning, plannerModel, plannerReasoning, maxConcurrency, openingDigestModel = DEFAULT_OPENING_DIGEST_MODEL, openingDigestWechatEnabled, openingDigestSegmentId = 0, optionsStrategyModel = DEFAULT_OPTIONS_STRATEGY_MODEL, optionsStrategyReasoning = DEFAULT_OPTIONS_STRATEGY_REASONING, optionsStrategyMaxTokens = DEFAULT_OPTIONS_STRATEGY_MAX_TOKENS, optionsStrategyTimeoutMs = DEFAULT_OPTIONS_STRATEGY_TIMEOUT_MS, discordConfig = null }, run = runCommand) {
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-content-hub-deploy-'));
   const short = commit.slice(0, 12);
   const archive = path.join(temporaryDir, `zen-content-hub-${short}.tar.gz`);
@@ -643,7 +650,7 @@ exit "$code"
     run('ssh', [
       ...SSH_OPTIONS,
       target,
-      `set -e; printf '%s' '${encodedScript}' | base64 -d > ${remoteScript}; printf '%s' '${encodedRunner}' | base64 -d > ${remoteRunner}; chmod 0700 ${remoteRunner}; rm -f ${remoteStatus} ${remoteLog}; systemd-run --quiet --no-block --unit=${remoteUnit} /bin/bash ${remoteRunner} ${remoteStatus} ${remoteLog} ${remoteScript} ${commit} ${model} ${reasoning} ${plannerModel} ${plannerReasoning} ${openingDigestModel} ${openingDigestWechatEnabled} ${openingDigestSegmentId} ${maxConcurrency} ${optionsStrategyModel} ${optionsStrategyReasoning} ${optionsStrategyMaxTokens} ${optionsStrategyTimeoutMs} ${remoteDiscordConfig}`,
+      `set -e; printf '%s' '${encodedScript}' | base64 -d > ${remoteScript}; printf '%s' '${encodedRunner}' | base64 -d > ${remoteRunner}; chmod 0700 ${remoteRunner}; rm -f ${remoteStatus} ${remoteLog}; systemd-run --quiet --no-block --unit=${remoteUnit} /bin/bash ${remoteRunner} ${remoteStatus} ${remoteLog} ${remoteScript} ${commit} ${model} ${reasoning} ${plannerModel} ${plannerReasoning} ${openingDigestModel} ${openingDigestWechatEnabled} ${openingDigestSegmentId} ${maxConcurrency} ${translationModel} ${optionsStrategyModel} ${optionsStrategyReasoning} ${optionsStrategyMaxTokens} ${optionsStrategyTimeoutMs} ${remoteDiscordConfig}`,
     ], { quiet: true });
 
     const startedAt = Date.now();
@@ -719,6 +726,7 @@ export async function main(argv = process.argv.slice(2)) {
     target,
     commit,
     model: options.model,
+    translationModel: options.translationModel,
     reasoning: options.reasoning,
     plannerModel: options.plannerModel,
     plannerReasoning: options.plannerReasoning,

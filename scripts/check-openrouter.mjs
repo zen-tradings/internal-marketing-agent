@@ -4,14 +4,14 @@ dotenv.config({ override: true });
 
 const key = process.env.OPENROUTER_API_KEY || '';
 const baseUrl = String(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
-const model = process.env.OPENROUTER_MODEL || 'qwen/qwen3.8-max';
+const model = process.env.OPENROUTER_MODEL || 'z-ai/glm-5.3-flash';
 const reasoningEffort = process.env.OPENROUTER_REASONING_EFFORT || 'high';
 const openingDigestModel = process.env.OPENING_DIGEST_MODEL || model;
 const translationModel = process.env.OPENROUTER_TRANSLATION_MODEL || model;
 const translationReasoningEffort = process.env.OPENROUTER_TRANSLATION_REASONING_EFFORT || 'high';
-const plannerModel = process.env.OPENROUTER_PLANNER_MODEL || model;
+const plannerModel = process.env.OPENROUTER_PLANNER_MODEL || 'moonshotai/kimi-k3';
 const plannerReasoningEffort = process.env.OPENROUTER_PLANNER_REASONING_EFFORT || 'high';
-const optionsStrategyModel = process.env.OPTIONS_STRATEGY_MODEL || 'anthropic/claude-fable-5';
+const optionsStrategyModel = process.env.OPTIONS_STRATEGY_MODEL || 'z-ai/glm-5.3-flash';
 const optionsStrategyReasoningEffort = process.env.OPTIONS_STRATEGY_REASONING_EFFORT || 'high';
 const timeoutMs = positiveInteger(process.env.OPENROUTER_CHECK_TIMEOUT_MS, 60000);
 const optionsStrategyCheckTimeoutMs = positiveInteger(process.env.OPTIONS_STRATEGY_TIMEOUT_MS, 900000);

@@ -69,11 +69,11 @@ export function loadConfig(env = process.env) {
     },
     writer: {
       openrouterApiKey: need('OPENROUTER_API_KEY'),
-      model: env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
-      routerModel: env.OPENROUTER_ROUTER_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
-      plannerModel: env.OPENROUTER_PLANNER_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
-      reviewModel: env.OPENROUTER_REVIEW_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
-      optionsStrategyModel: env.OPTIONS_STRATEGY_MODEL || 'anthropic/claude-fable-5',
+      model: env.OPENROUTER_MODEL || 'z-ai/glm-5.3-flash',
+      routerModel: env.OPENROUTER_ROUTER_MODEL || 'z-ai/glm-5.2',
+      plannerModel: env.OPENROUTER_PLANNER_MODEL || 'moonshotai/kimi-k3',
+      reviewModel: env.OPENROUTER_REVIEW_MODEL || 'z-ai/glm-5.2',
+      optionsStrategyModel: env.OPTIONS_STRATEGY_MODEL || 'z-ai/glm-5.3-flash',
       baseUrl: env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
       maxTokens: positiveIntegerOrThrow(env.OPENROUTER_MAX_TOKENS, 12000, 'OPENROUTER_MAX_TOKENS'),
       maxPromptChars: positiveIntegerOrThrow(env.OPENROUTER_MAX_PROMPT_CHARS, 160000, 'OPENROUTER_MAX_PROMPT_CHARS'),
@@ -140,7 +140,7 @@ export function loadConfig(env = process.env) {
     translation: {
       // Translation prefers structured HTML from the source; Datalab parses PDFs before returning to the same pipeline.
       // It has an independent quality-gated inference role and can consume both globally-governed OpenRouter slots.
-      model: env.OPENROUTER_TRANSLATION_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
+      model: env.OPENROUTER_TRANSLATION_MODEL || env.OPENROUTER_MODEL || 'z-ai/glm-5.3-flash',
       reasoningEffort: env.OPENROUTER_TRANSLATION_REASONING_EFFORT || 'high',
       batchConcurrency: positiveIntegerOrThrow(
         env.TRANSLATION_BATCH_CONCURRENCY,
@@ -221,7 +221,7 @@ export function loadConfig(env = process.env) {
     openingDigest: {
       enabled: booleanFlag(env.OPENING_DIGEST_ENABLED),
       wechatEnabled: booleanFlag(env.OPENING_DIGEST_WECHAT_ENABLED),
-      model: env.OPENING_DIGEST_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
+      model: env.OPENING_DIGEST_MODEL || env.OPENROUTER_MODEL || 'z-ai/glm-5.3-flash',
       timezone: env.OPENING_DIGEST_TIMEZONE || 'America/New_York',
       earningsPythonPath: env.OPENING_DIGEST_EARNINGS_PYTHON_PATH || env.QDII_PYTHON_PATH || 'python3',
       earningsWorkerPath: env.OPENING_DIGEST_EARNINGS_WORKER_PATH

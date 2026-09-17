@@ -925,7 +925,7 @@ test('V2 Fable 规划失败时硬失败且不调用普通模型', async () => {
     },
   });
   assert.equal(result.ok, false);
-  assert.match(result.stderr, /Fable 期权策略规划失败/);
+  assert.match(result.stderr, /期权策略规划失败/);
   assert.ok(models.length >= 1);
   assert.ok(models.every((model) => model === 'anthropic/claude-fable-5'));
   assert.doesNotMatch(models.join(','), /qwen|glm|kimi/);

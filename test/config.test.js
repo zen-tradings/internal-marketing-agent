@@ -26,14 +26,14 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal('egress' in c, false);
   assert.equal(c.writer.openrouterApiKey, 'or-key');
   assert.equal(c.writer.model, 'deepseek/deepseek-chat');
-  assert.equal(c.writer.plannerModel, 'deepseek/deepseek-chat');
+  assert.equal(c.writer.plannerModel, 'moonshotai/kimi-k3');
   assert.equal(c.writer.baseUrl, 'https://openrouter.ai/api/v1');
   assert.equal(c.writer.maxTokens, 12000);
   assert.equal(c.writer.reasoningEffort, 'high');
   assert.equal(c.writer.plannerReasoningEffort, 'none');
   assert.equal(c.writer.reviewReasoningEffort, 'none');
   assert.equal(c.writer.routerReasoningEffort, 'none');
-  assert.equal(c.writer.optionsStrategyModel, 'anthropic/claude-fable-5');
+  assert.equal(c.writer.optionsStrategyModel, 'z-ai/glm-5.3-flash');
   assert.equal(c.writer.optionsStrategyReasoningEffort, 'high');
   assert.equal(c.writer.optionsStrategyMaxTokens, 32000);
   assert.equal(c.writer.optionsStrategyTimeoutMs, 900000);
@@ -90,6 +90,21 @@ test('工作流环境在启动配置阶段拒绝未知渠道和无效域名', ()
   };
   assert.throws(() => loadConfig({ ...base, WECHAT_CHANNEL: 'customerio-opening-digest' }), /WECHAT_CHANNEL/);
   assert.throws(() => loadConfig({ ...base, EXA_PRIORITY_DOMAINS: 'https:\/\/example.com/path' }), /无效域名/);
+});
+
+test('默认写作角色使用 GLM 5.3 Flash，辅助角色保持既定模型', () => {
+  const base = {
+    SLACK_BOT_TOKEN: 'xoxb-x', SLACK_APP_TOKEN: 'xapp-x',
+    WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec', OPENROUTER_API_KEY: 'or-key',
+  };
+  const c = loadConfig(base);
+  assert.equal(c.writer.model, 'z-ai/glm-5.3-flash');
+  assert.equal(c.translation.model, 'z-ai/glm-5.3-flash');
+  assert.equal(c.openingDigest.model, 'z-ai/glm-5.3-flash');
+  assert.equal(c.writer.optionsStrategyModel, 'z-ai/glm-5.3-flash');
+  assert.equal(c.writer.routerModel, 'z-ai/glm-5.2');
+  assert.equal(c.writer.plannerModel, 'moonshotai/kimi-k3');
+  assert.equal(c.writer.reviewModel, 'z-ai/glm-5.2');
 });
 
 test('生产环境允许已验证的 1-2 并发并锁住重资源上限', () => {

@@ -11,7 +11,7 @@ try { existing = JSON.parse(fs.readFileSync(outPath, 'utf8')); } catch {}
 
 const writer = {
   key: process.env.OPENROUTER_API_KEY,
-  model: process.env.OPENROUTER_MODEL || 'qwen/qwen3.8-max',
+  model: process.env.OPENROUTER_TRANSLATION_MODEL || process.env.OPENROUTER_MODEL || 'z-ai/glm-5.3-flash',
   base: (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, ''),
 };
 

@@ -25,7 +25,7 @@ npm run deploy:digitalocean
 After reviewing the preflight output, activate the exact pushed commit:
 
 ```bash
-npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --max-concurrency 2 --opening-digest-model openai/gpt-oss-120b --opening-digest-wechat-enabled true --sync-discord-config --activate
+npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --max-concurrency 2 --model z-ai/glm-5.3-flash --translation-model z-ai/glm-5.3-flash --opening-digest-model z-ai/glm-5.3-flash --options-strategy-model z-ai/glm-5.3-flash --opening-digest-wechat-enabled true --sync-discord-config --activate
 ```
 
 需要同时切换 Opening Digest 的受控测试受众时，必须通过同一事务化部署命令传入已在 Customer.io 核验的 segment ID；部署失败会连同受保护环境文件一起回滚：
@@ -93,14 +93,14 @@ CUSTOMERIO_WRITE_CONCURRENCY=1
 OPENROUTER_CONCURRENCY=2
 # Structured translation uses the same model by default with an independently configurable role;
 # live no-regression acceptance requires high reasoning. One long translation may consume both global slots.
-OPENROUTER_TRANSLATION_MODEL=qwen/qwen3.8-max
+OPENROUTER_TRANSLATION_MODEL=z-ai/glm-5.3-flash
 OPENROUTER_TRANSLATION_REASONING_EFFORT=high
 TRANSLATION_BATCH_CONCURRENCY=2
 EXA_SEARCH_QPS=8
 QDII_ENABLED=true
 QDII_PYTHON_PATH=.venv/bin/python
 QDII_WORKER_PATH=/opt/zen-content-hub/python/qdii_worker.py
-OPENROUTER_MODEL=qwen/qwen3.8-max
+OPENROUTER_MODEL=z-ai/glm-5.3-flash
 OPENROUTER_ROUTER_MODEL=z-ai/glm-5.2
 OPENROUTER_PLANNER_MODEL=moonshotai/kimi-k3
 OPENROUTER_REVIEW_MODEL=z-ai/glm-5.2
@@ -108,11 +108,11 @@ OPENROUTER_REASONING_EFFORT=high
 OPENROUTER_PLANNER_REASONING_EFFORT=high
 OPENROUTER_REVIEW_REASONING_EFFORT=none
 OPENROUTER_ROUTER_REASONING_EFFORT=none
-OPTIONS_STRATEGY_MODEL=anthropic/claude-fable-5
+OPTIONS_STRATEGY_MODEL=z-ai/glm-5.3-flash
 OPTIONS_STRATEGY_REASONING_EFFORT=high
 OPTIONS_STRATEGY_MAX_TOKENS=32000
 OPTIONS_STRATEGY_TIMEOUT_MS=900000
-OPENING_DIGEST_MODEL=openai/gpt-oss-120b
+OPENING_DIGEST_MODEL=z-ai/glm-5.3-flash
 # Full English multi-post delivery for formal cron runs only. Keep the webhook
 # secret in this root-owned environment file; never commit it.
 DISCORD_OPENING_DIGEST_ENABLED=false

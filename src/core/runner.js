@@ -656,7 +656,7 @@ async function runAnalysisV2({
     });
   } catch (error) {
     if (modelProfile === OPTIONS_STRATEGY_PROFILE) {
-      throw new Error(`Fable 期权策略规划失败:${describeFetchError(error).slice(0, 500)}`);
+      throw new Error(`期权策略规划失败:${describeFetchError(error).slice(0, 500)}`);
     }
     trace.planningFallback = describeFetchError(error).slice(0, 500);
     rawPlanning = {
@@ -741,7 +741,7 @@ async function runAnalysisV2({
     });
   } catch (error) {
     if (modelProfile === OPTIONS_STRATEGY_PROFILE) {
-      throw new Error(`Fable 期权策略证据整理失败:${describeFetchError(error).slice(0, 500)}`);
+      throw new Error(`期权策略证据整理失败:${describeFetchError(error).slice(0, 500)}`);
     }
     trace.evidenceFallback = describeFetchError(error).slice(0, 500);
     rawEvidence = {};

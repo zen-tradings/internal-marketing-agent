@@ -25,7 +25,8 @@ test('DigitalOcean deploy defaults to read-only preflight and preserves protecte
     activate: false,
     commit: 'HEAD',
     target: '',
-    model: 'qwen/qwen3.8-max',
+    model: 'z-ai/glm-5.3-flash',
+    translationModel: 'z-ai/glm-5.3-flash',
     reasoning: 'high',
     plannerModel: 'moonshotai/kimi-k3',
     plannerReasoning: 'high',
@@ -34,7 +35,7 @@ test('DigitalOcean deploy defaults to read-only preflight and preserves protecte
     openingDigestWechatEnabled: undefined,
     openingDigestSegmentId: 0,
     syncDiscordConfig: false,
-    optionsStrategyModel: 'anthropic/claude-fable-5',
+    optionsStrategyModel: 'z-ai/glm-5.3-flash',
     optionsStrategyReasoning: 'high',
     optionsStrategyMaxTokens: 32000,
     optionsStrategyTimeoutMs: 900000,
@@ -43,6 +44,7 @@ test('DigitalOcean deploy defaults to read-only preflight and preserves protecte
   assert.equal(parseDeployArgs(['--opening-digest-segment-id', '19']).openingDigestSegmentId, '19');
   assert.equal(parseDeployArgs(['--opening-digest-wechat-enabled', 'true']).openingDigestWechatEnabled, 'true');
   assert.equal(parseDeployArgs(['--opening-digest-model', 'openai/gpt-oss-20b']).openingDigestModel, 'openai/gpt-oss-20b');
+  assert.equal(parseDeployArgs(['--translation-model', 'z-ai/custom']).translationModel, 'z-ai/custom');
   assert.equal(parseDeployArgs(['--max-concurrency', '1']).maxConcurrency, '1');
   assert.equal(parseDeployArgs(['--options-strategy-model', 'anthropic/custom']).optionsStrategyModel, 'anthropic/custom');
   assert.equal(parseDeployArgs(['--options-strategy-timeout-ms', '1200000']).optionsStrategyTimeoutMs, '1200000');
@@ -70,6 +72,7 @@ test('embedded remote preflight and activation scripts are valid Bash', () => {
   assert.match(ACTIVATE_SCRIPT, /check-opening-digest-python\.mjs/);
   assert.match(ACTIVATE_SCRIPT, /update_env OPENING_DIGEST_WECHAT_ENABLED/);
   assert.match(ACTIVATE_SCRIPT, /update_env OPENING_DIGEST_MODEL/);
+  assert.match(ACTIVATE_SCRIPT, /update_env OPENROUTER_TRANSLATION_MODEL "\$translation_model"/);
   assert.match(ACTIVATE_SCRIPT, /update_env MAX_CONCURRENCY "\$max_concurrency"/);
   assert.match(ACTIVATE_SCRIPT, /update_env BROWSER_CONCURRENCY 1/);
   assert.match(ACTIVATE_SCRIPT, /update_env WECHAT_WRITE_CONCURRENCY 1/);
@@ -151,18 +154,22 @@ test('deploy target must come from an explicit DigitalOcean target file', () => 
 
 test('deployment inputs reject shell injection and invalid reasoning', () => {
   assert.doesNotThrow(() => validateDeployInputs({
-    target: 'root@203.0.113.8', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
+    target: 'root@203.0.113.8', commit: SHA, model: 'z-ai/glm-5.3-flash', translationModel: 'z-ai/glm-5.3-flash', reasoning: 'high',
     plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
     maxConcurrency: 2,
-    openingDigestModel: 'openai/gpt-oss-120b',
+    openingDigestModel: 'z-ai/glm-5.3-flash',
     openingDigestWechatEnabled: true,
     openingDigestSegmentId: '19',
   }));
   assert.throws(() => validateDeployInputs({
-    target: 'root@example.com', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
+    target: 'root@example.com', commit: SHA, model: 'z-ai/glm-5.3-flash', translationModel: 'z-ai/glm-5.3-flash', reasoning: 'high',
     plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
     openingDigestModel: 'openai/gpt-oss-120b;touch', openingDigestWechatEnabled: true,
   }), /Invalid Opening Digest model id/);
+  assert.throws(() => validateDeployInputs({
+    target: 'root@example.com', commit: SHA, model: 'z-ai/glm-5.3-flash', translationModel: 'z-ai/glm-5.3-flash;touch', reasoning: 'high',
+    plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
+  }), /Invalid OpenRouter translation model id/);
   assert.throws(() => validateDeployInputs({
     target: 'root@example.com;touch /tmp/x', commit: SHA, model: 'qwen/qwen3.8-max', reasoning: 'high',
     plannerModel: 'moonshotai/kimi-k3', plannerReasoning: 'high',
