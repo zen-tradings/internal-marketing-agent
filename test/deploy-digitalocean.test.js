@@ -73,6 +73,7 @@ test('embedded remote preflight and activation scripts are valid Bash', () => {
   assert.match(ACTIVATE_SCRIPT, /update_env OPENING_DIGEST_WECHAT_ENABLED/);
   assert.match(ACTIVATE_SCRIPT, /update_env OPENING_DIGEST_MODEL/);
   assert.match(ACTIVATE_SCRIPT, /update_env OPENROUTER_TRANSLATION_MODEL "\$translation_model"/);
+  assert.match(ACTIVATE_SCRIPT, /translation_model=\$\{10\}/);
   assert.match(ACTIVATE_SCRIPT, /update_env MAX_CONCURRENCY "\$max_concurrency"/);
   assert.match(ACTIVATE_SCRIPT, /update_env BROWSER_CONCURRENCY 1/);
   assert.match(ACTIVATE_SCRIPT, /update_env WECHAT_WRITE_CONCURRENCY 1/);

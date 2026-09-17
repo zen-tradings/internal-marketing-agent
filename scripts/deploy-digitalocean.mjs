@@ -284,7 +284,7 @@ opening_digest_model=$6
 opening_digest_wechat_enabled=$7
 opening_digest_segment_id=$8
 max_concurrency=$9
-translation_model=${10}
+translation_model=${'${10}'}
 shift 10
 options_strategy_model=$1
 options_strategy_reasoning=$2
