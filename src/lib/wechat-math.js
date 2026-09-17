@@ -212,11 +212,35 @@ export function protectMathInMarkdown(markdown) {
   }
   flushSegment();
 
+  const protectedMarkdown = dedupeDisplayEquations(output.join('\n'), equations);
+
   return {
-    markdown: output.join('\n'),
+    markdown: protectedMarkdown,
     changed: equations.length > 0,
     equations,
   };
+}
+
+// Models often emit a numbered display equation twice: once as an inline-only
+// paragraph and once as a $$ block with identical TeX. Dropping the inline copy
+// keeps the centered display form without any content loss (直译不增不减).
+function dedupeDisplayEquations(markdown, equations) {
+  const byToken = new Map(equations.map((equation) => [equation.token, equation]));
+  const normalize = (tex) => String(tex).replace(/\s+/g, '');
+  let result = markdown.replace(/(ZENMATH\d{4}XZENMATH)\n{2,}(ZENMATH\d{4}XZENMATH)/g,
+    (pair, inlineToken, displayToken) => {
+      const inline = byToken.get(inlineToken);
+      const display = byToken.get(displayToken);
+      if (!inline || !display || inline.display || !display.display) return pair;
+      if (normalize(inline.tex) !== normalize(display.tex)) return pair;
+      byToken.delete(inlineToken);
+      inline.deduped = true;
+      return displayToken;
+    });
+  for (let index = equations.length - 1; index >= 0; index -= 1) {
+    if (equations[index].deduped) equations.splice(index, 1);
+  }
+  return result;
 }
 
 function buildEquationImage(document, equation) {
@@ -226,9 +250,11 @@ function buildEquationImage(document, equation) {
   node.setAttribute('src', image.src);
   node.setAttribute('data-zen-math', 'true');
   node.setAttribute('alt', '');
+  // image.width/height are CSS pixels measured at MATH_BASE_FONT_PX in the capture
+  // page, so dividing by the base font alone yields reader-font-relative em sizing.
   const style = equation.display
-    ? `width:${(image.width / (MATH_CAPTURE_SCALE * MATH_BASE_FONT_PX)).toFixed(4)}em;max-width:100%;height:auto;margin:1em auto;display:block;`
-    : `height:${(image.height / (MATH_CAPTURE_SCALE * MATH_BASE_FONT_PX)).toFixed(4)}em;vertical-align:middle;max-width:100%;`;
+    ? `width:${(image.width / MATH_BASE_FONT_PX).toFixed(4)}em;max-width:100%;height:auto;margin:1em auto;display:block;`
+    : `height:${(image.height / MATH_BASE_FONT_PX).toFixed(4)}em;vertical-align:middle;max-width:100%;`;
   node.setAttribute('style', style);
   return node;
 }
@@ -282,6 +308,19 @@ export function validateMathRestored(html, { equations = [] } = {}) {
   const images = [...document.querySelectorAll('img[data-zen-math="true"]')];
   if (images.length !== equations.length) {
     errors.push(`公式图片恢复数量不符:提取 ${equations.length} 个,恢复 ${images.length} 个`);
+  }
+  // Plausible rendered-size bounds catch sizing regressions (e.g. em divisors)
+  // before a draft with invisible formulas can be published.
+  const readEm = (image) => parseFloat(/([\d.]+)em/.exec(image.getAttribute('style') || '')?.[1] ?? 'NaN');
+  for (const [index, image] of images.entries()) {
+    const em = readEm(image);
+    if (Number.isNaN(em)) {
+      errors.push(`第 ${index + 1} 张公式图片缺少 em 尺寸`);
+    } else if (image.getAttribute('data-zen-math-display') || image.closest('[data-zen-math-display]')) {
+      if (em < 1 || em > 40) errors.push(`第 ${index + 1} 张显示公式宽度 ${em}em 超出合理范围`);
+    } else if (em < 0.4 || em > 8) {
+      errors.push(`第 ${index + 1} 张行内公式高度 ${em}em 超出合理范围`);
+    }
   }
   for (const [index, image] of images.entries()) {
     if (!image.getAttribute('src')) errors.push(`第 ${index + 1} 张公式图片缺少 src`);

@@ -149,6 +149,47 @@ test('恢复与校验:残留占位符或 TeX 必须硬失败', () => {
   assert.doesNotThrow(() => validateMathRestored('<pre><code>\\mathbf{X}</code></pre>', { equations: [] }));
 });
 
+test('恢复与校验:公式 em 尺寸 = 像素 / 16(随读者字号缩放,不得缩小)', () => {
+  const protection = protectMathInMarkdown('设 $\\mathbf{X}_{\\leq t}$ 与显示公式\n\n$$\\max f$$\n\n结束。\n');
+  withImages(protection.equations);
+  const html = restoreMathInHtml(
+    protection.equations.map((equation) => equation.token).join('\n\n'),
+    { equations: protection.equations },
+  );
+  const document = new JSDOM(html).window.document;
+  for (const image of document.querySelectorAll('img[data-zen-math="true"]')) {
+    const style = image.getAttribute('style');
+    const em = parseFloat(/([\d.]+)em/.exec(style)[1]);
+    const isDisplay = Boolean(image.closest('[data-zen-math-display]'));
+    if (isDisplay) assert.equal(em, 96 / 16, '显示宽度应为 px/16');
+    else assert.equal(em, 32 / 16, '行内高度应为 px/16');
+  }
+});
+
+test('恢复与校验:公式尺寸超出合理范围必须硬失败', () => {
+  const tiny = [{ token: 'ZENMATH0001XZENMATH', tex: 'x_t', display: false, hasCjk: false, image: { src: 'm.png', width: 96, height: 6 } }];
+  const restoredTiny = restoreMathInHtml('<p>A ZENMATH0001XZENMATH B</p>', { equations: tiny });
+  assert.throws(() => validateMathRestored(restoredTiny, { equations: tiny }), /超出合理范围/);
+});
+
+test('公式去重:行内段落与相同 TeX 的显示块只保留显示版', () => {
+  const source = '该框架求解\n\n$\\max_{\\_1}$\n\n$$\\max_{\\_1}$$\n\n其中 $x_i$ 有效。\n';
+  const result = protectMathInMarkdown(source);
+  assert.equal(result.equations.length, 2, '重复的行内版被删除,仅剩显示版与无关行内公式');
+  assert.ok(result.equations.some((equation) => equation.display));
+  assert.ok(!result.markdown.match(/ZENMATH\d{4}XZENMATH\n\nZENMATH\d{4}XZENMATH/));
+  // 重复对被移除后,显示占位符仍在自己的段落里
+  const displayToken = result.equations.find((equation) => equation.display).token;
+  assert.ok(new RegExp(`\n\n${displayToken}\n\n`).test(result.markdown));
+});
+
+test('公式去重:TeX 不同或顺序不同时不去重', () => {
+  const different = protectMathInMarkdown('$\\max a$\n\n$$\\max b$$\n\n');
+  assert.equal(different.equations.length, 2);
+  const reverse = protectMathInMarkdown('$$\\max a$$\n\n$\\max a$\n\n');
+  assert.equal(reverse.equations.length, 2, '显示在前、行内在后不去重');
+});
+
 test('恢复:公式图片校验通过 validatePreparedWechatHtml 的本地图片检查', async () => {
   const dir = await fs.mkdtemp(path.join(process.cwd(), 'test', '.tmp-math-'));
   try {
