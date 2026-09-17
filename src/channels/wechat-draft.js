@@ -291,8 +291,15 @@ export function makeChannel({
           signal,
           stripHeadingOrdinals: (workflow?.mode || '') !== 'translation',
           headingBrowserExecutablePath: config.translation?.browserExecutablePath,
+          mathBrowserExecutablePath: config.translation?.browserExecutablePath,
           finalSurveyPath: assetsConfig.surveyImage,
           finalFooterPath: assetsConfig.footerImage,
+          onMathCjkEquation: (count) => (notifier && notify
+            ? notifier.warn(
+              notify,
+              `已将 ${count} 处含中文字形的公式渲染为图片。部署机字体可能导致中文字形异常，请人工复核。`,
+            )
+            : Promise.resolve()),
         }, getInputContent), signal);
         await onCreated?.({ remoteId: String(mediaId), title });
         return { mediaId, title };

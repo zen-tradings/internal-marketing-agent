@@ -1,11 +1,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { JSDOM } from 'jsdom';
 import { createWechatClient } from '@wenyan-md/core/wechat';
 import { defaultHttpAdapter } from '@wenyan-md/core/http';
 import { prepareRenderContext, publishToWechatDraft, wechatPublisher } from '@wenyan-md/core/wrapper';
 import { fetchWithTimeout } from './http-timeout.js';
+import {
+  MATH_TOKEN_RE,
+  protectMathInMarkdown,
+  renderEquationPngs,
+  restoreMathInHtml,
+  validateMathRestored,
+} from './wechat-math.js';
 import { restyleSectionHeadings } from './wechat-heading.js';
 
 const wechatRequestContext = new AsyncLocalStorage();
@@ -30,10 +38,103 @@ wechatPublisher._listDraftsFn = boundedWechatClient.listDrafts;
 wechatPublisher._getDraftFn = boundedWechatClient.getDraft;
 wechatPublisher._updateDraftFn = boundedWechatClient.updateDraft;
 
+// Formula-heavy articles produce many small equation images. wenyan's uploadImages
+// fires every upload concurrently and repeats identical files; gate uploads through
+// a small concurrency window and reuse an in-process content-hash cache so repeated
+// files (deduped formulas, covers on retries) upload once.
+const UPLOAD_CONCURRENCY = 4;
+const UPLOAD_RETRY_DELAY_MS = 1000;
+const uploadCache = new Map();
+let uploadInFlight = 0;
+const uploadWaiters = [];
+
+function uploadQueueSlot(task) {
+  return new Promise((resolve) => {
+    const resume = () => {
+      uploadInFlight += 1;
+      resolve();
+    };
+    if (uploadInFlight < UPLOAD_CONCURRENCY) {
+      uploadInFlight += 1;
+      resolve();
+    } else {
+      uploadWaiters.push(resume);
+    }
+  }).then(async () => {
+    try {
+      return await task();
+    } finally {
+      uploadInFlight -= 1;
+      const next = uploadWaiters.shift();
+      if (next) next();
+    }
+  });
+}
+
+function installUploadGate() {
+  if (wechatPublisher.__zenUploadGate) return;
+  wechatPublisher.__zenUploadGate = true;
+  const previous = wechatPublisher.uploadImage.bind(wechatPublisher);
+  wechatPublisher.uploadImage = async function zenUploadImage(file, filename, accessToken, appId) {
+    let cacheKey;
+    try {
+      if (file && typeof file.arrayBuffer === 'function') {
+        const buffer = Buffer.from(await file.arrayBuffer());
+        cacheKey = `${appId || ''}:${createHash('sha256').update(buffer).digest('hex')}`;
+        const cached = uploadCache.get(cacheKey);
+        if (cached) return cached;
+      }
+    } catch (error) {
+      cacheKey = undefined;
+      console.error('图片上传去重缓存失败,回退直传:', error?.message || error);
+    }
+    if (cacheKey) {
+      let result;
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          result = await uploadQueueSlot(() => previous(file, filename, accessToken, appId));
+          break;
+        } catch (error) {
+          if (attempt >= 2) throw error;
+          console.error('图片上传失败,重试一次:', error?.message || error);
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((resolve) => setTimeout(resolve, UPLOAD_RETRY_DELAY_MS));
+        }
+      }
+      if (result?.media_id && result?.url) uploadCache.set(cacheKey, result);
+      return result;
+    }
+    return previous(file, filename, accessToken, appId);
+  };
+}
+installUploadGate();
+
 export async function renderAndPublishWithFinalFooter(inputContent, options, getInputContent) {
-  const { gzhContent, absoluteDirPath } = await prepareRenderContext(inputContent, options, getInputContent);
+  const { content, absoluteDirPath } = await getInputContent(inputContent, options.file);
+  // Protect math before the markdown renderer can fragment it, rasterize each
+  // formula to a PNG inside the run directory, and restore the images after styling.
+  const protection = protectMathInMarkdown(content);
+  if (protection.equations.length) {
+    if (!absoluteDirPath) throw new Error('公式渲染缺少隔离工作目录');
+    await renderEquationPngs(protection.equations, {
+      outDir: absoluteDirPath,
+      executablePath: options.mathBrowserExecutablePath || options.headingBrowserExecutablePath,
+      signal: options.signal,
+    });
+    const cjkCount = protection.equations.filter((equation) => equation.hasCjk).length;
+    if (cjkCount && options.onMathCjkEquation) {
+      try { await options.onMathCjkEquation(cjkCount); }
+      catch (warnErr) { console.error('公式中文字形提醒失败(不影响流程):', warnErr); }
+    }
+  }
+  const rendered = await prepareRenderContext(undefined, options, async () => ({
+    content: protection.markdown,
+    absoluteDirPath,
+  }));
+  const gzhContent = rendered.gzhContent;
   if (!gzhContent?.title) throw new Error('未能找到文章标题');
-  gzhContent.content = normalizeCodeBreaks(normalizeBodyTypography(normalizeListMarkers(
+  const styledMathHtml = restoreMathInHtml(
     await restyleSectionHeadings(
       styleKeyHighlights(alignTerminalReferences(removeDuplicateReferenceSections(gzhContent.content))),
       {
@@ -44,7 +145,10 @@ export async function renderAndPublishWithFinalFooter(inputContent, options, get
         renderCards: options.renderHeadingCards,
       },
     ),
-  )));
+    { equations: protection.equations },
+  );
+  if (protection.equations.length) validateMathRestored(styledMathHtml, { equations: protection.equations });
+  gzhContent.content = normalizeCodeBreaks(normalizeBodyTypography(normalizeListMarkers(styledMathHtml)));
   if (options.finalSurveyPath || options.finalFooterPath) {
     gzhContent.content = appendFinalTailImages(gzhContent.content, {
       surveyPath: options.finalSurveyPath,
@@ -108,6 +212,11 @@ export function validatePreparedWechatHtml(html, {
   const document = new JSDOM(`<body>${value}</body>`).window.document;
   const dangerous = document.querySelectorAll('script,style,iframe,object,embed');
   if (dangerous.length) errors.push(`最终 HTML 含 ${dangerous.length} 个禁止的可执行或嵌入节点`);
+  if (value.match(MATH_TOKEN_RE)) errors.push('最终 HTML 残留未恢复的公式占位符');
+  if (document.querySelector('mjx-container')) errors.push('最终 HTML 残留 MathJax 渲染容器,公式必须为图片');
+  if ([...document.querySelectorAll('svg')].some((svg) => svg.querySelector('[data-mml-node="math"]'))) {
+    errors.push('最终 HTML 残留 MathJax 公式 SVG,公式必须为图片');
+  }
   for (const [index, pre] of [...document.querySelectorAll('pre')].entries()) {
     const code = pre.children.length === 1 && pre.firstElementChild?.tagName === 'CODE'
       ? pre.firstElementChild

@@ -44,6 +44,7 @@
   },
   "dependencies": {
     "@antv/infographic": "^0.2.19",
+    "mathjax-full": "3.2.2",
     "@mozilla/readability": "^0.6.0",
     "@slack/bolt": "^3.17.0",
     "@wenyan-md/core": "3.0.11",
