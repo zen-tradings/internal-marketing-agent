@@ -300,6 +300,8 @@ test('Opening Digest 保留价格事实，但禁止解释没有催化原因', as
     assert.match(prompt, /write one factual price sentence only: omit a Reason clause entirely/i);
     assert.match(prompt, /never comment that a cause is missing, unknown, or unasserted/i);
     assert.doesNotMatch(prompt, /without asserting a cause/i);
+    assert.match(prompt, /exactly two short paragraphs/i);
+    assert.doesNotMatch(prompt, /one compact paragraph/i);
     assert.match(
       openingDigestPhaseGuidance(new Date('2026-08-10T14:00:00.000Z')),
       /normally produced around 10:00 a\.m\. ET/i,
