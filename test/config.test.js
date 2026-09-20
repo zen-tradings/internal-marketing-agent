@@ -62,6 +62,7 @@ test('loadConfig 读取 env 并给出默认值', () => {
   });
   assert.equal(c.translation.model, 'deepseek/deepseek-chat');
   assert.equal(c.translation.reasoningEffort, 'high');
+  assert.equal(c.translation.maxTokens, 24000); // 默认
   assert.equal(c.translation.batchConcurrency, 2);
   assert.equal(c.translation.browserEnabled, true);
   assert.equal(c.translation.maxPdfPages, 120);

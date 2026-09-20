@@ -114,6 +114,9 @@ const LEGAL_OFFICIAL_SOURCES = [
   'sec.gov',
 ];
 const EDITORIAL_SEARCH_POLICY = 'Prefer English-language sources within the same evidence tier, plus independent third-party reporting or research in any language. Exclude state-owned, public-service, and government-funded media. Government regulators, exchanges, and statistical agencies remain allowed only for original filings or primary data.';
+// Full trace files are rewritten on persisted updates; throttle high-frequency inference
+// telemetry so a long run does not reserialize the whole trace on every request.
+const TRACE_WRITE_THROTTLE_MS = 5000;
 
 export async function runWriter({
   workflow,
@@ -217,13 +220,21 @@ export async function runWriter({
       const translationWriter = {
         ...writer,
         reasoningEffort: config.translation?.reasoningEffort || 'high',
+        ...(Number(config.translation?.maxTokens) > 0
+          ? { maxTokens: Number(config.translation?.maxTokens) }
+          : {}),
       };
       const translationWorkflow = { ...workflow, model };
       trace.translationInference = { requests: [], summary: summarizeInferenceTelemetry([]) };
+      let lastTranslationTraceWriteMs = 0;
       const onInferenceTelemetry = (event) => {
         trace.translationInference.requests.push(event);
         trace.translationInference.summary = summarizeInferenceTelemetry(trace.translationInference.requests);
-        writeResearchTrace(researchTracePath, trace);
+        const nowMs = Date.now();
+        if (nowMs - lastTranslationTraceWriteMs >= TRACE_WRITE_THROTTLE_MS) {
+          lastTranslationTraceWriteMs = nowMs;
+          writeResearchTrace(researchTracePath, trace);
+        }
       };
       const result = await generateStrictTranslation({
         input,
@@ -442,6 +453,7 @@ export async function runWriter({
     if (prompt.length > maxPromptChars) {
       throw new Error(`生成输入超过全局上限:${prompt.length}/${maxPromptChars} 字符;请减少链接或缩短素材`);
     }
+    const truncationSignal = {};
     const content = await completeArticle({
       prompt,
       model,
@@ -449,8 +461,12 @@ export async function runWriter({
       fetchFn,
       timeoutMs: generationTimeoutMs,
       systemPrompt: workflow.systemPrompt,
+      truncationSignal,
     });
     throwIfTaskCancelled(signal);
+    if (truncationSignal.truncated) {
+      throw new Error('写作输出被 max_tokens 截断(finish_reason=length);请提高 OPENROUTER_MAX_TOKENS 后重试');
+    }
     let article = renderQuarterlyCharts(normalizeArticle(content));
     if (workflow.id === 'opening-digest') article = normalizeOpeningDigestCitations(article, research);
     if (!hasTitleFrontmatter(article)) {
@@ -631,6 +647,19 @@ async function runAnalysisV2({
   signal,
 }) {
   trace.pipelineVersion = 'v2';
+  trace.analysisInference = { requests: [], summary: summarizeInferenceTelemetry([]) };
+  let lastAnalysisTraceWriteMs = 0;
+  const onAnalysisInferenceTelemetry = (event) => {
+    trace.analysisInference.requests.push(event);
+    trace.analysisInference.summary = summarizeInferenceTelemetry(trace.analysisInference.requests);
+    // Trace persistence is throttled: every inference event already recomputes the summary,
+    // and rewriting the full trace file per event turns long runs into O(n²) synchronous IO.
+    const nowMs = Date.now();
+    if (nowMs - lastAnalysisTraceWriteMs >= TRACE_WRITE_THROTTLE_MS) {
+      lastAnalysisTraceWriteMs = nowMs;
+      writeResearchTrace(researchTracePath, trace);
+    }
+  };
   const analysis = config.analysis || {};
   const maxQueries = positiveNumber(analysis.searchMaxQueries, 8);
   const recentWindowDays = positiveNumber(analysis.recentWindowDays, 60);
@@ -653,6 +682,8 @@ async function runAnalysisV2({
       fetchFn,
       timeoutMs: generationTimeoutMs,
       systemPrompt: '你是分析任务规划器。Slack 原始 Prompt 是不可修改的任务合同。只返回有效 JSON。',
+      onTelemetry: onAnalysisInferenceTelemetry,
+      inferenceContext: { stage: 'planner' },
     });
   } catch (error) {
     if (modelProfile === OPTIONS_STRATEGY_PROFILE) {
@@ -738,6 +769,8 @@ async function runAnalysisV2({
       fetchFn,
       timeoutMs: generationTimeoutMs,
       systemPrompt: '你是研究证据编辑。只依据给定来源建立证据矩阵，只返回有效 JSON。',
+      onTelemetry: onAnalysisInferenceTelemetry,
+      inferenceContext: { stage: 'evidence' },
     });
   } catch (error) {
     if (modelProfile === OPTIONS_STRATEGY_PROFILE) {
@@ -815,6 +848,7 @@ async function runAnalysisV2({
   if (prompt.length > maxPromptChars) {
     throw new Error(`生成输入超过全局上限:${prompt.length}/${maxPromptChars} 字符;请减少链接或缩短素材`);
   }
+  const writingTruncationSignal = {};
   const content = await completeArticle({
     prompt,
     model,
@@ -822,8 +856,14 @@ async function runAnalysisV2({
     fetchFn,
     timeoutMs: generationTimeoutMs,
     systemPrompt: ANALYSIS_V2_SYSTEM_PROMPT,
+    truncationSignal: writingTruncationSignal,
+    onTelemetry: onAnalysisInferenceTelemetry,
+    inferenceContext: { stage: 'writing' },
   });
   throwIfTaskCancelled(signal);
+  if (writingTruncationSignal.truncated) {
+    throw new Error('分析写作输出被 max_tokens 截断(finish_reason=length);请提高 OPENROUTER_MAX_TOKENS 后重试');
+  }
   let article = renderQuarterlyCharts(normalizeAnalysisArticle(content, taskContract));
   const audit = await auditAnalysisV2({
     article,
@@ -836,6 +876,7 @@ async function runAnalysisV2({
     fetchFn,
     trace,
     researchTracePath,
+    onTelemetry: onAnalysisInferenceTelemetry,
   });
   article = audit.article;
   const initialReferenceIds = [...evidenceMatrix.selected_reference_ids];
@@ -1229,6 +1270,7 @@ async function auditAnalysisV2({
   fetchFn,
   trace,
   researchTracePath,
+  onTelemetry,
 }) {
   const warnings = [];
   let firstRaw;
@@ -1240,6 +1282,8 @@ async function auditAnalysisV2({
       fetchFn,
       timeoutMs: workflow.timeoutMs,
       systemPrompt: '你是逐句事实审计员。只定位原文中的问题，不得重写全文，只返回有效 JSON。',
+      onTelemetry,
+      inferenceContext: { stage: 'audit' },
     });
   } catch (error) {
     const message = `事实审计服务不可用，已保留证据约束稿:${describeFetchError(error).slice(0, 240)}`;
@@ -1275,6 +1319,8 @@ async function auditAnalysisV2({
         fetchFn,
         timeoutMs: workflow.timeoutMs,
         systemPrompt: '你是核心论点局部修复员。只返回由给定证据直接支持的逐句替换 JSON，不得重写全文。',
+        onTelemetry,
+        inferenceContext: { stage: 'core-repair', pass: 1 },
       });
     } catch (error) {
       throw new Error(`核心论点删除后无法完成局部补写:${describeFetchError(error).slice(0, 240)}`);
@@ -1325,10 +1371,15 @@ async function auditAnalysisV2({
   for (const issue of firstApplied.retained) {
     warnings.push(`事实审计已保留待人工复核(${issue.confidence}/${issue.risk}/${issue.impact}):${issue.article_quote.slice(0, 160)}`);
   }
-  if (!firstApplied.applied.length
-    && !firstApplied.retained.some((issue) => issue.risk === 'high')) {
+  // Second full-article audit is expensive; run it only when the first pass made high-risk or
+  // core-impact edits (verify the repairs) or kept high-risk claims (check remaining text).
+  // Low-risk local edits are already surfaced as warnings and do not justify another full pass.
+  const needsSecondAudit = firstApplied.applied.some((issue) => issue.risk === 'high' || issue.impact === 'core')
+    || firstApplied.retained.some((issue) => issue.risk === 'high');
+  if (!needsSecondAudit) {
+    trace.factReview.secondAuditSkipped = true;
     return {
-      article,
+      article: firstApplied.article,
       warnings,
       review: trace.factReview,
     };
@@ -1347,6 +1398,8 @@ async function auditAnalysisV2({
       fetchFn,
       timeoutMs: workflow.timeoutMs,
       systemPrompt: '你是局部修复复核员。只复核已经局部修改的句子及当前稿件剩余的高风险事实；不得重复报告已保留的低风险问题，不得重写全文，只返回有效 JSON。',
+      onTelemetry,
+      inferenceContext: { stage: 'audit-verify' },
     });
   } catch (error) {
     const message = `局部复核服务不可用，已保留第一次确定性修复:${describeFetchError(error).slice(0, 240)}`;
@@ -1393,6 +1446,8 @@ async function auditAnalysisV2({
         fetchFn,
         timeoutMs: workflow.timeoutMs,
         systemPrompt: '你是核心论点局部修复员。只返回由给定证据直接支持的逐句替换 JSON，不得重写全文。',
+        onTelemetry,
+        inferenceContext: { stage: 'core-repair', pass: 2 },
       });
     } catch (error) {
       throw new Error(`核心论点删除后无法完成局部补写:${describeFetchError(error).slice(0, 240)}`);
@@ -2886,6 +2941,10 @@ async function completeArticle({
   responseFormat,
   onTelemetry,
   inferenceContext,
+  // Optional mutable flag: set to true when the response returned visible content but
+  // finished with finish_reason=length (budget exhausted mid-output). Empty responses are
+  // still retried inside this function; non-empty truncation must be handled by the caller.
+  truncationSignal,
 }) {
   const controller = new AbortController();
   const timer = timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
@@ -2966,6 +3025,12 @@ async function completeArticle({
         throw malformed;
       }
       const content = extractMessageContent(data?.choices?.[0]?.message?.content);
+      const finishReason = data?.choices?.[0]?.finish_reason || null;
+      const truncated = Boolean(content) && finishReason === 'length';
+      if (truncated && truncationSignal) {
+        truncationSignal.truncated = true;
+        truncationSignal.finishReason = finishReason;
+      }
       const outcome = content ? 'completed' : 'empty';
       emitInferenceTelemetry(onTelemetry, buildInferenceTelemetry({
         inferenceContext, requestStartedAt, requestStartedMs, queueWaitMs, transportRequests,

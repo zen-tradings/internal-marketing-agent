@@ -818,6 +818,167 @@ test('V2 完整链路按 Opus 5/Kimi K2 定向搜索、写作、局部审计并�
   assert.equal(trace.factReview.approved, true);
 });
 
+const V2_PLANNER_RESPONSE = {
+  task_contract: {
+    output_language: '简体中文',
+    article_type: 'prompt-driven-model-comparison',
+    exact_entities_and_versions: [
+      { literal: 'Opus 5', version: '5' },
+      { literal: 'Kimi K2', version: 'K2' },
+    ],
+    must_cover: ['比较两者能力'],
+    requested_structure: [],
+    freshness_requirement: 'recent',
+  },
+  search_plan: [
+    { query: 'Opus 5 official release capabilities', lane: 'official', recent: false },
+    { query: 'Kimi K2 official release capabilities', lane: 'official', recent: false },
+  ],
+};
+
+const V2_EVIDENCE_RESPONSE = {
+  source_assessments: [
+    { source_id: 'S1', source_type: 'primary', relevant: true, entity_matches: ['Opus 5'], safe_statements: ['Opus 5 已发布'] },
+    { source_id: 'S2', source_type: 'primary', relevant: true, entity_matches: ['Kimi K2'], safe_statements: ['Kimi K2 已发布'] },
+  ],
+  requirements: [{ requirement: '比较两者能力', source_ids: ['S1', 'S2'], safe_statements: [], covered: true }],
+  entities: [
+    { literal: 'Opus 5', verified: true, source_ids: ['S1'] },
+    { literal: 'Kimi K2', verified: true, source_ids: ['S2'] },
+  ],
+  conflicts: [],
+  relevant_source_ids: ['S1', 'S2'],
+  selected_reference_ids: ['S1', 'S2'],
+  clarification_needed: false,
+};
+
+function v2PipelineFetch({ article, auditResponses = [], writingResponse } = {}) {
+  const completions = [];
+  let index = 0;
+  const fetchFn = async (url, options) => {
+    const body = JSON.parse(options.body || '{}');
+    if (String(url).endsWith('/search')) {
+      return jsonResponse({ results: [
+        {
+          title: 'Anthropic announces Opus 5',
+          url: 'https://www.anthropic.com/news/opus-5',
+          publishedDate: '2026-07-20',
+          text: 'Anthropic officially announces Opus 5 and its capabilities.',
+        },
+        {
+          title: 'Kimi K2 official release',
+          url: 'https://www.kimi.com/blog/kimi-k2',
+          publishedDate: '2026-07-18',
+          text: 'Kimi officially releases Kimi K2 and describes its capabilities.',
+        },
+      ] });
+    }
+    index += 1;
+    completions.push(body);
+    if (index === 1) {
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify(V2_PLANNER_RESPONSE) } }] });
+    }
+    if (index === 2) {
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify(V2_EVIDENCE_RESPONSE) } }] });
+    }
+    if (index === 3) {
+      return writingResponse || jsonResponse({ choices: [{ message: { content: article } }] });
+    }
+    const auditResponse = auditResponses[index - 4];
+    if (!auditResponse) throw new Error(`unexpected extra completion #${index}`);
+    return jsonResponse({ choices: [{ message: { content: JSON.stringify(auditResponse) } }] });
+  };
+  return { fetchFn, completions };
+}
+
+const V2_AUDIT_FIXTURE_ARTICLE = '---\ntitle: Opus 5 与 Kimi K2\n---\n\n两者需要按用户指定维度比较。\n\nOpus 5 于 2026 年 7 月发布。';
+
+function v2AuditIssue(overrides = {}) {
+  return {
+    article_quote: 'Opus 5 于 2026 年 7 月发布。',
+    issue_type: 'contradiction',
+    impact: 'supporting',
+    risk: 'low',
+    origin: 'model_added',
+    confidence: 'high',
+    action: 'replace',
+    replacement: '据官方公告，Opus 5 于 2026 年 7 月发布。',
+    evidence_ids: ['S1'],
+    ...overrides,
+  };
+}
+
+test('V2 低风险局部修正只写 warning，不再触发第二轮全文审计', async () => {
+  const { fetchFn, completions } = v2PipelineFetch({
+    article: V2_AUDIT_FIXTURE_ARTICLE,
+    auditResponses: [{ approved: true, issues: [v2AuditIssue()] }],
+  });
+
+  const result = await runWriter({
+    workflow: workflow(),
+    input: 'please write a deep dive analysis report comparing newly released Opus 5 and Kimi K2',
+    config: config(),
+    fetchFn,
+    taskContext: { promptRevision: 1 },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(completions.length, 4);
+  assert.match(fs.readFileSync(result.articlePath, 'utf8'), /据官方公告，Opus 5 于 2026 年 7 月发布。/);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.factReview.applied.length, 1);
+  assert.equal(trace.factReview.secondAuditSkipped, true);
+  assert.equal(trace.analysisInference.summary.requestAttempts, 4);
+  assert.deepEqual([...new Set(trace.analysisInference.requests.map((item) => item.stage))],
+    ['planner', 'evidence', 'writing', 'audit']);
+  assert.ok(result.warnings.some((warning) => /事实审计已自动局部修正/.test(warning)));
+});
+
+test('V2 高风险修正后仍触发第二轮复核', async () => {
+  const { fetchFn, completions } = v2PipelineFetch({
+    article: V2_AUDIT_FIXTURE_ARTICLE,
+    auditResponses: [
+      { approved: true, issues: [v2AuditIssue({ risk: 'high' })] },
+      { approved: true, issues: [] },
+    ],
+  });
+
+  const result = await runWriter({
+    workflow: workflow(),
+    input: 'please write a deep dive analysis report comparing newly released Opus 5 and Kimi K2',
+    config: config(),
+    fetchFn,
+    taskContext: { promptRevision: 1 },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(completions.length, 5);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.factReview.secondAuditSkipped, undefined);
+  assert.deepEqual([...new Set(trace.analysisInference.requests.map((item) => item.stage))],
+    ['planner', 'evidence', 'writing', 'audit', 'audit-verify']);
+});
+
+test('V2 写作输出被 max_tokens 截断时硬失败，不静默接受残缺稿件', async () => {
+  const { fetchFn } = v2PipelineFetch({
+    writingResponse: jsonResponse({
+      choices: [{ finish_reason: 'length', message: { content: '---\ntitle: Opus 5 与 Kimi K2\n---\n\n两者需要按用户指定维度比较。' } }],
+    }),
+  });
+
+  const result = await runWriter({
+    workflow: workflow(),
+    input: 'please write a deep dive analysis report comparing newly released Opus 5 and Kimi K2',
+    config: config(),
+    fetchFn,
+    taskContext: { promptRevision: 1 },
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.stderr, /max_tokens 截断/);
+  assert.equal(fs.existsSync(result.articlePath), false);
+});
+
 test('五类 V2 期权策略按 Fable planner/evidence/writer + 原 review 模型执行', async () => {
   for (const workflowId of ['wechat', 'company', 'earnings', 'sector', 'macro']) {
     const completionBodies = [];

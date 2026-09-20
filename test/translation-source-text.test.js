@@ -2244,3 +2244,61 @@ test('Linear Issue 鉴权失败或正文为空时给出明确授权提示', asyn
     dnsLookup: PUBLIC_DNS,
   }), /描述为空/);
 });
+
+test('翻译批次输出被 max_tokens 截断时按不完整响应重试并拆分批次恢复', async () => {
+  const blockTexts = Array.from({ length: 8 }, (_, index) => `Paragraph ${index + 1} explains the mechanism.`);
+  const source = {
+    version: 5,
+    contentMode: 'structured-document',
+    sourceType: 'html',
+    extractor: 'fixture',
+    sourceUrl: 'https://example.com/truncated',
+    title: 'Truncation recovery',
+    author: '',
+    sha256: 'truncation-recovery-source',
+    blocks: blockTexts.map((text, index) => ({
+      id: `b00000${index + 1}`,
+      order: index,
+      type: 'paragraph',
+      text,
+    })),
+  };
+  const calls = [];
+  const completeArticle = async ({ prompt, truncationSignal }) => {
+    const payload = JSON.parse(/输入 JSON:\n([\s\S]+)$/.exec(prompt)[1]);
+    calls.push(payload.units.length);
+    if (payload.units.length > 6) {
+      // 模拟推理把完成预算耗尽：finish_reason=length，只来得及输出一个块。
+      if (truncationSignal) {
+        truncationSignal.truncated = true;
+        truncationSignal.finishReason = 'length';
+      }
+      return JSON.stringify({
+        translations: [{ id: payload.units[0].id, text: `第 ${payload.units[0].text} 截断译文`.replace('Paragraph', '') }],
+      });
+    }
+    return JSON.stringify({
+      translations: payload.units.map((unit) => ({
+        id: unit.id,
+        text: `中文译文：${unit.text}`,
+      })),
+    });
+  };
+
+  const translated = await translateDocument({
+    source,
+    workDir: tempDir(),
+    model: 'test-model',
+    writer: {},
+    completeArticle,
+  });
+  // 标题 + 8 段正文构成 9 个单元；初始批次两次都被截断，随后确定性拆分成 ≤6 块的子批次并完整恢复。
+  assert.equal(calls[0], 9);
+  assert.equal(calls[1], 9);
+  assert.deepEqual(calls.slice(2), [6, 3]);
+  const article = renderTranslatedDocument(translated);
+  assert.equal((article.match(/中文译文：Paragraph/g) || []).length, 8);
+  assert.match(article, /title: "中文译文：Truncation recovery"/);
+  const completeness = validateTranslationArtifact({ source, translated, article });
+  assert.deepEqual(completeness.errors, []);
+});

@@ -142,6 +142,9 @@ export function loadConfig(env = process.env) {
       // It has an independent quality-gated inference role and can consume both globally-governed OpenRouter slots.
       model: env.OPENROUTER_TRANSLATION_MODEL || env.OPENROUTER_MODEL || 'z-ai/glm-5.3-flash',
       reasoningEffort: env.OPENROUTER_TRANSLATION_REASONING_EFFORT || 'high',
+      // Reasoning tokens and visible translation share one completion budget; keep this above the
+      // observed high-effort reasoning usage so output blocks are never starved into truncation.
+      maxTokens: positiveIntegerOrThrow(env.OPENROUTER_TRANSLATION_MAX_TOKENS, 24000, 'OPENROUTER_TRANSLATION_MAX_TOKENS'),
       batchConcurrency: positiveIntegerOrThrow(
         env.TRANSLATION_BATCH_CONCURRENCY,
         2,

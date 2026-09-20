@@ -42,6 +42,9 @@ const TRANSLATION_SHORT_UNIT_MAX_ITEMS = 48;
 const TRANSLATION_SHORT_UNIT_AVERAGE_CHARS = 120;
 const REPAIR_BATCH_MAX_CHARS = 4000;
 const REPAIR_BATCH_MAX_ITEMS = 6;
+// Checkpoint files are rewritten whole on every save; throttle per-unit saves so a large
+// document does not reserialize the checkpoint after every accepted block.
+const CHECKPOINT_WRITE_THROTTLE_MS = 3000;
 const EMBEDDED_CHART_MIN_WIDTH = 200;
 const EMBEDDED_CHART_MIN_HEIGHT = 120;
 const EMBEDDED_CHART_MAX_WIDTH = 2400;
@@ -1011,6 +1014,13 @@ export async function translateDocument({
     validationExceptions: [...validationExceptions.values()],
     updatedAt: new Date().toISOString(),
   });
+  let lastCheckpointWriteMs = 0;
+  const writeCheckpointThrottled = () => {
+    const nowMs = Date.now();
+    if (nowMs - lastCheckpointWriteMs < CHECKPOINT_WRITE_THROTTLE_MS) return;
+    lastCheckpointWriteMs = nowMs;
+    writeCheckpoint();
+  };
   if (checkpointInvalidatedUnits) writeCheckpoint();
 
   const pendingUnits = units.filter((unit) => !completed.has(unit.id));
@@ -1135,10 +1145,15 @@ export async function translateDocument({
         validationWarnings.delete(assessment.unit.id);
         validationExceptions.delete(assessment.unit.id);
       }
-      // Persist each text unit immediately after it passes structural hard gates. A failure in another unit of the
-      // same batch does not discard completed progress on resume.
-      writeCheckpoint();
+      // Persist progress as units pass structural hard gates, throttled to avoid rewriting the
+      // whole checkpoint per unit; a failure in another unit of the same batch does not discard
+      // completed progress on resume.
+      writeCheckpointThrottled();
     }
+    // Always flush at batch boundaries so at-most CHECKPOINT_WRITE_THROTTLE_MS of accepted
+    // units can be lost to a crash between throttled saves.
+    writeCheckpoint();
+    lastCheckpointWriteMs = Date.now();
 
     const invalid = assessments.filter((item) => item.hardErrors
       .some((reason) => !isReviewableEquivalenceError(reason)));
@@ -2113,14 +2128,21 @@ ${JSON.stringify({ units })}`,
     },
   };
   const complete = async (nextRequest) => {
+    const truncationSignal = {};
     try {
-      return await completeArticle({ ...nextRequest, responseFormat });
+      const raw = await completeArticle({ ...nextRequest, responseFormat, truncationSignal });
+      lastTruncated = Boolean(truncationSignal.truncated);
+      return raw;
     } catch (error) {
+      lastTruncated = false;
       if (!/(?:response[_ -]?format|json[_ -]?schema|structured output|HTTP 400|OpenRouter 400)/i.test(safeError(error))) throw error;
-      return completeArticle({
+      const raw = await completeArticle({
         ...nextRequest,
         inferenceContext: { ...nextRequest.inferenceContext, schemaFallback: true },
+        truncationSignal,
       });
+      lastTruncated = Boolean(truncationSignal.truncated);
+      return raw;
     }
   };
   const parseTranslations = (raw) => {
@@ -2135,11 +2157,21 @@ ${JSON.stringify({ units })}`,
   };
   let bestTranslations = [];
   let lastResponseError;
+  // Set by complete() when the provider returned partial content with finish_reason=length.
+  // A truncated batch response is treated like any other incomplete response: retry once,
+  // then deterministically split into smaller batches instead of failing the whole task.
+  let lastTruncated = false;
+  const truncationError = () => {
+    const error = new Error(`翻译批次输出被 max_tokens 截断(finish_reason=length),收到 ${bestTranslations.length}/${batch.length} 块`);
+    error.retryableTranslationResponse = true;
+    return error;
+  };
   for (let attempt = 0; attempt < 2; attempt++) {
     throwIfTaskCancelled(signal);
     const retryInstruction = attempt === 0
       ? ''
       : `${repair ? '上一次修复响应缺少输入块' : '上一次响应不是完整合法 JSON 或缺少输入块'}。请重新返回全部 ${batch.length} 个块；只允许使用这些 ID：${batch.map((unit) => unit.id).join('、')}。`;
+    lastTruncated = false;
     try {
       const translations = parseTranslations(await complete({
         ...request,
@@ -2153,9 +2185,15 @@ ${JSON.stringify({ units })}`,
       }));
       if (translations.length > bestTranslations.length) bestTranslations = translations;
       if (hasExpectedTranslationSet(batch, translations)) return translations;
+      if (lastTruncated) lastResponseError = truncationError();
     } catch (error) {
-      if (error?.retryableTranslationResponse !== true) throw error;
-      lastResponseError = error;
+      if (lastTruncated) {
+        lastResponseError = truncationError();
+      } else if (error?.retryableTranslationResponse !== true) {
+        throw error;
+      } else {
+        lastResponseError = error;
+      }
     }
   }
 
