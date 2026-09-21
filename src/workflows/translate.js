@@ -16,7 +16,7 @@ const METHODOLOGY = `【直译任务 — 专属要求,与通用规范冲突时�
 export function isRetryableTranslationError(error) {
   if (error?.retryableTranslationResponse === true) return true;
   const message = String(error?.message || error || '');
-  return /(?:fetch failed|network|socket|econnreset|econnrefused|etimedout|timed out|timeout|enotfound|eai_again|429|rate limit|超时|网络|连接重置|Datalab HTTP 5\d\d|原文获取失败:5\d\d|OpenRouter completion failed: 5\d\d|Unexpected end of JSON input|OpenRouter returned malformed JSON response)/i
+  return /(?:fetch failed|network|socket|econnreset|econnrefused|etimedout|timed out|timeout|enotfound|eai_again|429|rate limit|超时|网络|连接重置|Datalab HTTP 5\d\d|原文获取失败:5\d\d|OpenRouter completion failed: 5\d\d|Unexpected end of JSON input|OpenRouter returned malformed JSON response|max_tokens 截断)/i
     .test(message);
 }
 

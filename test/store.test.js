@@ -137,13 +137,15 @@ test('recoverRunningWorkflow 只自动恢复指定工作流的运行中任务', 
 
 test('requeueRecoverableTranslation 可恢复中断、历史出口、发布、网络或结构响应失败的直译', () => {
   const s = openStore(':memory:');
-  for (const id of ['egress', 'publish', 'generate', 'truncated', 'malformed', 'missing', 'validation', 'completeness', 'content']) {
+  for (const id of ['egress', 'publish', 'generate', 'truncated', 'malformed', 'missing', 'validation', 'completeness', 'content', 'budget-truncated']) {
     s.createRun({ id, workflowId: 'translate', source: 'slack', input: '直译', notify: {} });
     s.setStatus(id, 'failed', {
-      stage: ['generate', 'truncated', 'malformed', 'missing', 'validation', 'completeness', 'content'].includes(id) ? 'generate' : id,
+      stage: ['generate', 'truncated', 'malformed', 'missing', 'validation', 'completeness', 'content', 'budget-truncated'].includes(id) ? 'generate' : id,
       error: id === 'generate'
         ? '网络请求失败:fetch failed (ECONNRESET)'
-        : id === 'truncated'
+        : id === 'budget-truncated'
+          ? '翻译批次输出被 max_tokens 截断(finish_reason=length),收到 0/10 块'
+          : id === 'truncated'
           ? 'Unexpected end of JSON input'
           : id === 'malformed'
             ? 'OpenRouter returned malformed JSON response after retry'
@@ -168,6 +170,7 @@ test('requeueRecoverableTranslation 可恢复中断、历史出口、发布、�
   assert.equal(s.requeueRecoverableTranslation('missing'), 1);
   assert.equal(s.requeueRecoverableTranslation('validation'), 1);
   assert.equal(s.requeueRecoverableTranslation('completeness'), 1);
+  assert.equal(s.requeueRecoverableTranslation('budget-truncated'), 1);
   assert.equal(s.getRun('validation').status, 'queued');
   assert.equal(s.requeueRecoverableTranslation('content'), 0);
   assert.equal(s.getRun('content').status, 'failed');

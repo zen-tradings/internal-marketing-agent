@@ -608,6 +608,7 @@ export function openStore(dbPath) {
               OR error LIKE '结构化翻译校验失败:%'
               OR error LIKE '结构化翻译缺块:%'
               OR error LIKE '直译完整性门禁失败:%'
+              OR error LIKE '%max_tokens 截断%'
             ))
           )
       `, id);

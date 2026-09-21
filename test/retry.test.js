@@ -39,6 +39,7 @@ test('工作流重试过滤器会立即停止确定性错误，只重试网络�
   assert.equal(isRetryableTranslationError(new Error('fetch failed: ECONNRESET')), true);
   assert.equal(isRetryableTranslationError(new Error('OpenRouter completion timed out')), true);
   assert.equal(isRetryableTranslationError(new Error('Unexpected end of JSON input')), true);
+  assert.equal(isRetryableTranslationError(new Error('翻译批次输出被 max_tokens 截断(finish_reason=length),收到 0/10 块')), true);
   assert.equal(isRetryableTranslationError(Object.assign(new Error('structured response failed'), {
     retryableTranslationResponse: true,
   })), true);
