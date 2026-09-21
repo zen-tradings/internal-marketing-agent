@@ -1,0 +1,32 @@
+[Unit]
+Description=OpenAI Secure MCP Tunnel for Zen Content Hub
+Wants=network-online.target
+After=network-online.target zen-content-hub-mcp.service
+Requires=zen-content-hub-mcp.service
+
+[Service]
+Type=simple
+User=zentunnel
+Group=zentunnel
+Environment=HOME=/var/lib/zen-content-hub-tunnel
+EnvironmentFile=/etc/zen-content-hub/zen-content-hub-mcp-tunnel.env
+ExecStart=/usr/local/bin/tunnel-client run --profile zen-content-hub-production
+Restart=always
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/zen-content-hub-tunnel
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
+

@@ -64,6 +64,12 @@ publishing or public-IP gate.
 /var/lib/zen-content-hub/      SQLite database and per-run artifacts
 ```
 
+The optional ChatGPT production read-only MCP uses separate `zenmcp` and
+`zentunnel` identities, a sanitized read model, loopback-only HTTP, an outbound-only
+Secure MCP Tunnel, and a dedicated audit log. It is not enabled by the normal bot
+deployment. Follow [`../docs/production-readonly-mcp.md`](../docs/production-readonly-mcp.md)
+after the release is active and the target ChatGPT workspace has been approved.
+
 Install Node.js 22+, Python 3.11+ with `venv`, Chrome/Chromium, and Poppler.
 The cover generator and its OFL-licensed Resource Han Rounded CN Medium display font are versioned
 in `tools/cover-generator`, so cover rendering does not depend on host-installed CJK fonts.

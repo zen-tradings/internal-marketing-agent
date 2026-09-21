@@ -1,0 +1,38 @@
+[Unit]
+Description=Zen Content Hub production read-only MCP server
+After=zen-content-hub-mcp-export.service
+Requires=zen-content-hub-mcp-export.service
+
+[Service]
+Type=simple
+User=zenmcp
+Group=zenmcp
+WorkingDirectory=/opt/zen-content-hub
+Environment=NODE_ENV=production
+Environment=HOME=/var/lib/zen-content-hub-mcp
+EnvironmentFile=/etc/zen-content-hub/zen-content-hub-mcp.env
+ExecStart=/usr/bin/node scripts/start-mcp-server.mjs
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=15
+UMask=0077
+CPUQuota=20%
+MemoryMax=192M
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadOnlyPaths=/var/lib/zen-content-hub-mcp
+ReadWritePaths=/var/log/zen-content-hub-mcp
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target

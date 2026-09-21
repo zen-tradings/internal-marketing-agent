@@ -1,0 +1,14 @@
+[Unit]
+Description=Refresh the Zen Content Hub MCP read model every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=20s
+AccuracySec=10s
+Persistent=true
+Unit=zen-content-hub-mcp-export.service
+
+[Install]
+WantedBy=timers.target
+

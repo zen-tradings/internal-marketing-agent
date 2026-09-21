@@ -1,0 +1,9 @@
+/var/log/zen-content-hub-mcp/audit.jsonl {
+    daily
+    rotate 90
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0600 zenmcp zenmcp
+}
