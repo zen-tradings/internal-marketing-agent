@@ -318,9 +318,19 @@ test('微信分区标题:直译不去序号且不发明英文', async () => {
 test('微信 GIF 降帧重编码:检测 GIF 魔数并用 Pillow 降帧', async (t) => {
   const { execFileSync, spawnSync } = await import('node:child_process');
   const { isAnimatedGif, reencodeAnimatedGif } = await import('../src/lib/wechat-render.js');
-  const pythonPath = process.env.QDII_PYTHON_PATH || '.venv/bin/python';
-  const pilCheck = spawnSync(pythonPath, ['-c', 'import PIL'], { stdio: 'ignore' });
-  if (pilCheck.error || pilCheck.status !== 0) { t.skip('Pillow 运行时不可用'); return; }
+  // 与 reencodeAnimatedGif 的运行时解析保持一致:context → QDII_PYTHON_PATH → python3。
+  let pythonPath = null;
+  for (const candidate of [process.env.QDII_PYTHON_PATH, '.venv/bin/python', 'python3'].filter(Boolean)) {
+    const check = spawnSync(candidate, ['-c', 'import PIL'], { stdio: 'ignore' });
+    if (!check.error && check.status === 0) { pythonPath = candidate; break; }
+  }
+  if (!pythonPath) { t.skip('Pillow 运行时不可用'); return; }
+  const previousPythonPath = process.env.QDII_PYTHON_PATH;
+  process.env.QDII_PYTHON_PATH = pythonPath;
+  t.after(() => {
+    if (previousPythonPath === undefined) delete process.env.QDII_PYTHON_PATH;
+    else process.env.QDII_PYTHON_PATH = previousPythonPath;
+  });
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-gif-'));
   const fixturePath = path.join(dir, 'figure-360.gif');
