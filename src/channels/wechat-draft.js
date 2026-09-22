@@ -292,6 +292,8 @@ export function makeChannel({
           stripHeadingOrdinals: (workflow?.mode || '') !== 'translation',
           headingBrowserExecutablePath: config.translation?.browserExecutablePath,
           mathBrowserExecutablePath: config.translation?.browserExecutablePath,
+          // Pillow runs in the QDII venv; used only when WeChat rejects a high-frame GIF with errcode -1.
+          gifReencodePythonPath: config.qdii?.pythonPath,
           finalSurveyPath: assetsConfig.surveyImage,
           finalFooterPath: assetsConfig.footerImage,
           onMathCjkEquation: (count) => (notifier && notify

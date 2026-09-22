@@ -314,3 +314,44 @@ test('微信分区标题:直译不去序号且不发明英文', async () => {
   assert.equal(seen[0].en, '');
   assert.equal(seen[1].zh, '一、方法');
 });
+
+test('微信 GIF 降帧重编码:检测 GIF 魔数并用 Pillow 降帧', async (t) => {
+  const { execFileSync, spawnSync } = await import('node:child_process');
+  const { isAnimatedGif, reencodeAnimatedGif } = await import('../src/lib/wechat-render.js');
+  const pythonPath = process.env.QDII_PYTHON_PATH || '.venv/bin/python';
+  const pilCheck = spawnSync(pythonPath, ['-c', 'import PIL'], { stdio: 'ignore' });
+  if (pilCheck.error || pilCheck.status !== 0) { t.skip('Pillow 运行时不可用'); return; }
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-gif-'));
+  const fixturePath = path.join(dir, 'figure-360.gif');
+  const makeGifScript = [
+    'import sys',
+    'from PIL import Image',
+    "frames = [Image.new('L', (2, 2), color=i % 255) for i in range(360)]",
+    'frames[0].save(sys.argv[1], save_all=True, append_images=frames[1:], duration=100, loop=0)',
+  ].join('\n');
+  execFileSync(pythonPath, ['-c', makeGifScript, fixturePath], { stdio: 'ignore' });
+  const gifFile = new File([fs.readFileSync(fixturePath)], 'figure-360.gif', { type: 'image/gif' });
+  const pngFile = new File([Buffer.from('89504e470d0a1a0a', 'hex')], 'x.png', { type: 'image/png' });
+
+  assert.equal(await isAnimatedGif(gifFile), true);
+  assert.equal(await isAnimatedGif(pngFile), false);
+
+  const reencoded = await reencodeAnimatedGif(gifFile, 'figure-360.gif');
+  assert.equal(reencodeAnimatedGif instanceof Function, true);
+  assert.equal(reencoded.type, 'image/gif');
+  const reencodedPath = path.join(dir, 'result.gif');
+  fs.writeFileSync(reencodedPath, Buffer.from(await reencoded.arrayBuffer()));
+  const frameProbe = spawnSync(pythonPath, ['-c', [
+    'import sys',
+    'from PIL import Image, ImageSequence',
+    'im = Image.open(sys.argv[1])',
+    'frames = sum(1 for _ in ImageSequence.Iterator(im))',
+    "print(frames, im.info.get('duration'))",
+  ].join('\n'), reencodedPath], { encoding: 'utf8' });
+  assert.equal(frameProbe.status, 0);
+  const [frames, duration] = frameProbe.stdout.trim().split(/\s+/).map(Number);
+  assert.ok(frames <= 60, `降帧后帧数应 ≤ 60,实际 ${frames}`);
+  assert.equal(duration, 600, '降帧后单帧时长应保留总动画时长(360×100ms/60)');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
