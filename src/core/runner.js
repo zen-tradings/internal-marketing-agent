@@ -2957,7 +2957,7 @@ async function completeArticle({
     // Empty bodies usually mean reasoning exhausted the output budget or a transient provider failure. Retry once at
     // application level: lower forced reasoning to low and disable it for other models to avoid useless repeat billing.
     for (let attempt = 0; attempt < 2; attempt++) {
-      const effort = attempt === 0
+      let effort = attempt === 0
         ? configuredEffort
         : (writer.preserveReasoningOnEmpty || modelRequiresReasoning(model)) ? 'low' : 'none';
       const requestStartedAt = new Date().toISOString();
@@ -2965,6 +2965,10 @@ async function completeArticle({
       let queueWaitMs = 0;
       let transportRequests = 0;
       let res;
+      // OpenRouter hard-rejects `reasoning: { effort: 'none' }` on endpoints where reasoning is mandatory
+      // (e.g. z-ai/glm-5.3-flash) with a router-level 400 before dispatching to any provider. Escalate that
+      // specific rejection to 'low' within the same attempt instead of failing the whole task.
+      for (let send = 0; ; send++) {
       try {
         res = await fetchWithRetry(fetchFn, url, {
         method: 'POST',
@@ -2999,12 +3003,24 @@ async function completeArticle({
         throw error;
       }
       if (!res.ok) {
-        const error = new Error(formatOpenRouterHttpError(res, await safeText(res)));
+        const errorBody = await safeText(res);
+        if (send === 0 && effort === 'none' && REASONING_MANDATORY_RE.test(errorBody)) {
+          emitInferenceTelemetry(onTelemetry, buildInferenceTelemetry({
+            inferenceContext, requestStartedAt, requestStartedMs, queueWaitMs, transportRequests,
+            attempt, effort, model, response: res, outcome: 'reasoning-mandatory-rejection',
+            error: new Error('reasoning effort none rejected: endpoint mandates reasoning'),
+          }));
+          effort = 'low';
+          continue;
+        }
+        const error = new Error(formatOpenRouterHttpError(res, errorBody));
         emitInferenceTelemetry(onTelemetry, buildInferenceTelemetry({
           inferenceContext, requestStartedAt, requestStartedMs, queueWaitMs, transportRequests,
           attempt, effort, model, response: res, error,
         }));
         throw error;
+      }
+      break;
       }
       let data;
       try {
@@ -3109,11 +3125,16 @@ function summarizeInferenceTelemetry(requests) {
   };
 }
 
+// z-ai/glm-5.3-flash mandates reasoning on OpenRouter: `reasoning: { effort: 'none' }` is rejected with a
+// router-level 400 ("Reasoning is mandatory for this endpoint and cannot be disabled.") before any provider routing.
 function modelRequiresReasoning(model) {
-  return /^qwen\/qwen3\.8-max(?:$|[-:])/i.test(String(model || ''))
+  return /^z-ai\/glm-5\.3-flash(?:$|[-:])/i.test(String(model || ''))
+    || /^qwen\/qwen3\.8-max(?:$|[-:])/i.test(String(model || ''))
     || /^anthropic\/claude-fable-5(?:$|[-:])/i.test(String(model || ''))
     || /^openai\/gpt-oss-(?:20b|120b)(?:$|[-:])/i.test(String(model || ''));
 }
+
+const REASONING_MANDATORY_RE = /reasoning is mandatory for this endpoint/i;
 
 function extractMessageContent(content) {
   if (typeof content === 'string') return content.trim() ? content : '';

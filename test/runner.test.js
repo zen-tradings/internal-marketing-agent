@@ -542,6 +542,51 @@ test('GPT-OSS 首次空正文时保持 mandatory reasoning 并用 low 重试', a
   assert.deepEqual(completionBodies.map((body) => body.reasoning.effort), ['high', 'low']);
 });
 
+test('GLM 5.3 Flash 空正文重试保持 mandatory reasoning 并用 low 重试', async () => {
+  const workflow = tempWorkflow({ model: 'z-ai/glm-5.3-flash' });
+  const config = baseConfig();
+  config.writer.reasoningEffort = 'high';
+  const completionBodies = [];
+  const fetchFn = async (url, opts) => {
+    if (String(url).endsWith('/search')) return jsonResponse({ results: [] });
+    completionBodies.push(JSON.parse(opts.body));
+    if (completionBodies.length === 1) {
+      return jsonResponse({
+        choices: [{ finish_reason: 'length', message: { content: null, reasoning: 'thinking' } }],
+        usage: { completion_tokens: 12000, completion_tokens_details: { reasoning_tokens: 12000 } },
+      });
+    }
+    return jsonResponse({ choices: [{ message: { content: '---\ntitle: GLM retry\n---\n正文。' } }] });
+  };
+  const result = await runWriter({ workflow, input: 'AMAT', config, fetchFn });
+  assert.equal(result.ok, true);
+  assert.deepEqual(completionBodies.map((body) => body.reasoning.effort), ['high', 'low']);
+});
+
+test('OpenRouter 拒绝 reasoning none 时同轮升级为 low 而不是整单失败', async () => {
+  const workflow = tempWorkflow({ model: 'future/reasoning-mandatory-model' });
+  const config = baseConfig();
+  config.writer.reasoningEffort = 'none';
+  const completionBodies = [];
+  const fetchFn = async (url, opts) => {
+    if (String(url).endsWith('/search')) return jsonResponse({ results: [] });
+    completionBodies.push(JSON.parse(opts.body));
+    if (completionBodies.length === 1) {
+      return jsonResponse({
+        error: {
+          message: 'Reasoning is mandatory for this endpoint and cannot be disabled.',
+          code: 400,
+          metadata: { provider_name: null },
+        },
+      }, { status: 400, statusText: 'Bad Request', ok: false });
+    }
+    return jsonResponse({ choices: [{ message: { content: '---\ntitle: 升级成功\n---\n正文。' } }] });
+  };
+  const result = await runWriter({ workflow, input: 'AMAT', config, fetchFn });
+  assert.equal(result.ok, true);
+  assert.deepEqual(completionBodies.map((body) => body.reasoning.effort), ['none', 'low']);
+});
+
 test('Fable profile 空正文重试保持同一模型且 adaptive thinking 不降为 none', async () => {
   const workflow = tempWorkflow({ id: 'email', mode: 'newsletter', factReview: false });
   const config = baseConfig();

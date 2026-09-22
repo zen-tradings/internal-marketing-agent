@@ -609,6 +609,9 @@ export function openStore(dbPath) {
               OR error LIKE '结构化翻译缺块:%'
               OR error LIKE '直译完整性门禁失败:%'
               OR error LIKE '%max_tokens 截断%'
+              -- OpenRouter 端点强制 reasoning 时，空正文重试发出的 effort:'none' 会被路由层 400 拒绝；
+              -- 代码已修复（自动升级 low），带 checkpoint 的历史失败允许续跑。
+              OR error LIKE '%Reasoning is mandatory for this endpoint%'
             ))
           )
       `, id);
