@@ -1,3 +1,4 @@
+import { performRemoteOperation, remoteOperationsFor } from '../lib/remote-operation.js';
 import { isDryRun } from '../config/runtime.js';
 import crypto from 'node:crypto';
 import {
@@ -63,14 +64,16 @@ export async function flushDiscordDeliveryOutbox({
       });
       while (Number(row.next_message_index) < payload.messages.length) {
         const index = Number(row.next_message_index);
-        const result = await postDiscordWebhookMessage({
-          webhookUrl: discord.webhookUrl,
-          message: payload.messages[index],
-          expectedChannelId: discord.expectedChannelId,
-          fetchFn,
-          timeoutMs: discord.timeoutMs,
+        const messageId = await performRemoteOperation({
+          operations: remoteOperationsFor(store, row.run_id), runId: row.run_id,
+          operation: `discord-message-${index}`, payload: payload.messages[index],
+          create: async () => (await postDiscordWebhookMessage({
+            webhookUrl: discord.webhookUrl, message: payload.messages[index],
+            expectedChannelId: discord.expectedChannelId, fetchFn, timeoutMs: discord.timeoutMs,
+          })).messageId,
+          definitelyRejected: error => Number.isInteger(error.status) && error.status >= 400 && error.status < 500 && error.status !== 408,
         });
-        row = store.advanceDeliveryOutbox(row.id, { messageId: result.messageId });
+        row = store.advanceDeliveryOutbox(row.id, { messageId });
         messages += 1;
       }
       const messageIds = parseJsonArray(row.message_ids_json);
@@ -85,6 +88,13 @@ export async function flushDiscordDeliveryOutbox({
       delivered += 1;
     } catch (error) {
       const current = store.getDeliveryOutbox(row.id) || row;
+      if (error.stage === 'needs_review') {
+        const reviewed = store.reviewDeliveryOutbox(row.id, error.message);
+        store.upsertDelivery(row.run_id, { destination: DESTINATION, status: 'needs_review', title: row.title, error: error.message });
+        failed += 1;
+        await onTerminalFailure?.({ row: reviewed, error, attempts: Number(current.attempts || 0) + 1 });
+        continue;
+      }
       const attempts = Number(current.attempts || 0) + 1;
       const retryable = error?.retryable !== false && attempts < Number(discord.maxAttempts || 8);
       if (retryable) {

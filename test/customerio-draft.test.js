@@ -204,7 +204,7 @@ test('Customer.io channel:后台确定性操作不改变草稿名称或邮件标
   assert.equal(operations.snapshot().remote_id, '42');
 });
 
-test('Customer.io channel:首次创建结果不明时回读失败后只重试一次并给出重复风险 warning', async () => {
+test('Customer.io channel:创建结果不明且回查失败时进入待核对，不重复创建', async () => {
   const operations = memoryRemoteOperations();
   let posts = 0;
   const channel = makeChannel({
@@ -218,14 +218,12 @@ test('Customer.io channel:首次创建结果不明时回读失败后只重试一
       return { ok: true, status: 200, async json() { return { newsletter: { id: 43 } }; } };
     },
   });
-  const result = await channel.publish({
+  await assert.rejects(channel.publish({
     articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' },
     runId: 'run-retry', remoteOperations: operations,
-  });
-  assert.equal(posts, 2);
-  assert.equal(result.mediaId, 'customerio-newsletter:43');
-  assert.match(result.deliveryWarnings[0], /可能存在同名重复草稿/);
-  assert.equal(operations.snapshot().attempt_count, 2);
+  }), error => error.stage === 'needs_review');
+  assert.equal(posts, 1);
+  assert.equal(operations.snapshot().attempt_count, 1);
 });
 
 test('Customer.io channel:创建结果不明但差集唯一时自动认领且不再 POST', async () => {
@@ -266,7 +264,7 @@ test('Customer.io channel:创建结果不明但差集唯一时自动认领且不
   assert.equal(operations.snapshot().remote_id, '44');
 });
 
-test('Customer.io channel:两次不明确后进入 needs_review 且绝不第三次 POST', async () => {
+test('Customer.io channel:结果不明确后进入 needs_review 且重启不重复 POST', async () => {
   const operations = memoryRemoteOperations();
   let posts = 0;
   const channel = makeChannel({
@@ -284,17 +282,17 @@ test('Customer.io channel:两次不明确后进入 needs_review 且绝不第三�
     runId: 'run-fail', remoteOperations: operations,
   }), (error) => {
     assert.equal(error.stage, 'needs_review');
-    assert.match(error.message, /两次创建请求/);
+    assert.match(error.message, /创建请求/);
     return true;
   });
-  assert.equal(posts, 2);
-  assert.equal(operations.snapshot().attempt_count, 2);
+  assert.equal(posts, 1);
+  assert.equal(operations.snapshot().attempt_count, 1);
   assert.equal(operations.snapshot().state, 'needs_review');
   await assert.rejects(channel.publish({
     articlePath: '/tmp/article.md', config: config(), workflow: { edition: 'Vol. 1' },
     runId: 'run-fail', remoteOperations: operations, resumeFromCheckpoint: true,
   }), /已停止继续创建/);
-  assert.equal(posts, 2, '重启或外层重试不得产生第三次 POST');
+  assert.equal(posts, 1, '重启或外层重试不得重复 POST');
 });
 
 test('Customer.io channel:正文含真实密钥或本地路径时在上传前拦截', async () => {

@@ -168,10 +168,10 @@ async function createNewsletterDraft({
       recovered, record, remoteOperations, onCreated, name, audience, audienceCount, runId,
     });
   }
-  while (Number(record.attempt_count || 0) < 2) {
+  while (Number(record.attempt_count || 0) < 1) {
     throwIfTaskCancelled(signal);
     record = remoteOperations.increment(operation);
-    if (!record || Number(record.attempt_count || 0) > 2) break;
+    if (!record || Number(record.attempt_count || 0) > 1) break;
     try {
       const newsletterId = await postNewsletter({ baseUrl, cio, payload, fetchFn });
       remoteOperations.update(operation, { state: 'confirmed', remoteId: String(newsletterId), lastError: '' });
@@ -199,9 +199,9 @@ async function createNewsletterDraft({
 
   remoteOperations.update(operation, {
     state: 'needs_review',
-    lastError: '两次创建请求后仍无法唯一确认 newsletter.id',
+    lastError: '创建请求后仍无法唯一确认 newsletter.id',
   });
-  const error = publishError(`Customer.io 两次创建请求后仍无法唯一确认草稿，已停止继续创建；请人工检查同名草稿。任务:${runId}`);
+  const error = publishError(`Customer.io 创建请求后仍无法唯一确认草稿，已停止继续创建；请人工检查同名草稿。任务:${runId}`);
   error.stage = 'needs_review';
   throw error;
 }

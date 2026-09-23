@@ -1,3 +1,4 @@
+import { performRemoteOperation } from '../lib/remote-operation.js';
 import { validateLocalImage, registerPublicationAssets } from './publication-assets.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -36,7 +37,28 @@ const boundedWechatClient = createWechatClient({
 // network method at module initialization so caching and rendering stay unchanged; AsyncLocalStorage isolates request options.
 wechatPublisher.fetchAccessToken = boundedWechatClient.fetchAccessToken;
 wechatPublisher.uploadMaterial = boundedWechatClient.uploadMaterial;
-wechatPublisher.publishArticle = boundedWechatClient.publishArticle;
+wechatPublisher.publishArticle = async (token, payload) => {
+  const context = wechatRequestContext.getStore() || {};
+  const list = async () => {
+    const data = await boundedWechatClient.listDrafts(token, 0, 20, 0);
+    return data?.item || [];
+  };
+  const mediaId = await performRemoteOperation({
+    operations: context.remoteOperations, runId: context.runId,
+    operation: 'create-wechat-draft', payload,
+    snapshot: async () => (await list()).map(item => String(item.media_id)),
+    create: async () => (await boundedWechatClient.publishArticle(token, payload)).media_id,
+    recover: async (record) => {
+      const before = new Set(JSON.parse(record.before_ids_json || '[]'));
+      const matches = (await list()).filter(item => {
+        const article = item?.content?.news_item?.[0];
+        return !before.has(String(item.media_id)) && article?.title === payload.title && article?.content === payload.content;
+      });
+      return matches.length === 1 ? matches[0].media_id : undefined;
+    },
+  });
+  return { media_id: mediaId };
+};
 wechatPublisher._listDraftsFn = boundedWechatClient.listDrafts;
 wechatPublisher._getDraftFn = boundedWechatClient.getDraft;
 wechatPublisher._updateDraftFn = boundedWechatClient.updateDraft;
@@ -247,6 +269,8 @@ export async function renderAndPublishWithFinalFooter(inputContent, options, get
   gzhContent.content = assets.content;
   gzhContent.cover = assets.cover;
   const data = await wechatRequestContext.run({
+    runId: options.runId,
+    remoteOperations: options.remoteOperations,
     timeoutMs: options.timeoutMs || 30000,
     signal: options.signal,
     fetchFn: options.fetchFn || globalThis.fetch,

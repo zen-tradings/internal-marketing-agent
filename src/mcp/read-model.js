@@ -11,7 +11,7 @@ const WORKFLOWS = new Set([
 ]);
 const RUN_SOURCES = new Set(['slack', 'cron', 'manual', 'recovery', 'test']);
 const RUN_STATUSES = new Set([
-  'queued', 'running', 'needs_input', 'done', 'failed', 'cancelled', 'interrupted',
+  'queued', 'running', 'needs_input', 'done', 'failed', 'cancelled', 'interrupted', 'needs_review',
 ]);
 const DESTINATIONS = new Set([
   'wechat', 'wechat-opening-digest', 'customerio', 'customerio-draft',
@@ -19,7 +19,7 @@ const DESTINATIONS = new Set([
 ]);
 const DELIVERY_STATUSES = new Set([
   'pending', 'prepared', 'attempting', 'created', 'scheduled', 'sent', 'delivered',
-  'done', 'failed', 'skipped', 'cancelled', 'existing', 'verified', 'unverified', 'queued',
+  'done', 'failed', 'needs_review', 'skipped', 'cancelled', 'existing', 'verified', 'unverified', 'queued',
 ]);
 
 const READ_MODEL_SCHEMA = `

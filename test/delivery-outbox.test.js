@@ -58,7 +58,7 @@ test('Discord delivery outbox 从已成功的消息之后续传，不重发前�
     fetchFn: async (_url, init) => {
       if (init.method === 'GET') return response({ id: 'webhook', channel_id: 'C-discord' });
       firstRoundPosts += 1;
-      if (firstRoundPosts === 2) throw new Error('temporary network outage');
+      if (firstRoundPosts === 2) return response({ message: 'rate limited', retry_after: 0.01 }, 429);
       return response({ id: '201', channel_id: 'C-discord' });
     },
   });

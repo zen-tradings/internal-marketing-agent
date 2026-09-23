@@ -59,13 +59,14 @@ export async function flushNotificationOutbox({ store, notifier, now = Date.now(
 
 function notificationDisposition(method, run) {
   if (!run) return 'discard';
-  const terminalStatuses = new Set(['done', 'failed', 'cancelled', 'needs_input']);
+  const terminalStatuses = new Set(['done', 'failed', 'cancelled', 'needs_input', 'needs_review']);
   const notifierMethod = notifierMethodFor(method);
   const expectedStatus = {
     success: 'done',
     failure: 'failed',
     cancelled: 'cancelled',
     needsInput: 'needs_input',
+    needsReview: 'needs_review',
   }[notifierMethod];
   if (expectedStatus) {
     if (run.status === expectedStatus) return 'send';

@@ -88,6 +88,7 @@ export function makeChannel({
       runId,
       signal,
       existingRemoteId,
+      remoteOperations,
       onCreated,
       resumeFromCheckpoint = false,
       contentPolicy = {},
@@ -286,6 +287,7 @@ export function makeChannel({
       try {
         const mediaId = await withRuntimeResource('wechat-write', () => renderAndPublish(undefined, {
           ...RENDER_OPTS,
+          runId, remoteOperations,
           file: articlePath,
           appId,
           appSecret,
@@ -308,7 +310,7 @@ export function makeChannel({
         }, getInputContent), signal);
         await onCreated?.({ remoteId: String(mediaId), title });
         return { mediaId, title };
-      } catch (e) { const err = new Error(`发布失败:${e.message}`); err.stage = 'publish'; throw err; }
+      } catch (e) { if (e.stage === 'needs_review') throw e; const err = new Error(`发布失败:${e.message}`); err.stage = 'publish'; throw err; }
     },
   };
 }

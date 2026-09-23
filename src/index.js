@@ -1,3 +1,5 @@
+import { pruneHistory } from './core/retention.js';
+import { remoteOperationsFor } from './lib/remote-operation.js';
 import dotenv from 'dotenv';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -183,18 +185,31 @@ export function makeHandler(deps) {
         setPhase('generate');
       }
 
-      const { title, mediaId, sourceCount, completeness, deliveryWarnings = [] } = await runWithRetry(async () => {
+      const publicationJournal = {
+        get: () => store.getPublication?.(run.id),
+        prepare: payload => store.preparePublication(run.id, payload),
+        confirm: id => store.confirmPublication(run.id, id),
+      };
+      const { title, mediaId, sourceCount, completeness, deliveryWarnings = [] } = await (async () => {
         throwIfTaskCancelled(signal);
         // A media_id proves a prior retry or restart republish succeeded; skip regeneration/publication to avoid duplicates.
         const existing = store.getRun(run.id);
+        if (!isDryRun(config) && publicationJournal.get()) {
+          setPhase('publish');
+          return channels[runtimeWorkflow.channel].publish({ config, publicationJournal,
+            remoteOperations: remoteOperationsFor(store, run.id), runId: run.id,
+            onCreated: ({ remoteId }) => store.setRemoteId(run.id, remoteId) });
+        }
         if (existing.media_id) {
           setPhase('published');
           return { title: existing.title, mediaId: existing.media_id };
         }
 
-        const resumeFromCheckpoint = Boolean(run.restored || writerAttempt > 0);
-        writerAttempt += 1;
-        const res = await runWriter({
+        let resumeFromCheckpoint;
+        const res = await runWithRetry(async () => {
+          resumeFromCheckpoint = Boolean(run.restored || writerAttempt > 0);
+          writerAttempt += 1;
+          const generated = await runWriter({
             workflow: runtimeWorkflow,
             input: run.input,
             config,
@@ -222,6 +237,9 @@ export function makeHandler(deps) {
             resumeFromCheckpoint,
             signal,
           });
+          if (!generated.ok && !generated.needsInput) throw stageError('generate', generated.stderr);
+          return generated;
+        }, runtimeWorkflow.retries, runtimeWorkflow.retryDelayMs, undefined, signal, runtimeWorkflow.shouldRetry);
         if (res.needsInput) {
           const err = stageError('needs_input', res.stderr || res.clarification?.question || '任务需要用户确认');
           err.needsInput = true;
@@ -275,6 +293,7 @@ export function makeHandler(deps) {
         throwIfTaskCancelled(signal);
         const publishContext = openingDigestPublishContext(run);
         const { mediaId, title, deliveryWarnings = [] } = await channel.publish({
+          publicationJournal,
           articlePath: res.articlePath,
           config,
           workflow: runtimeWorkflow,
@@ -318,13 +337,7 @@ export function makeHandler(deps) {
         }
         setPhase('published');
         return { mediaId, title, sourceCount: res.sources?.length || 0, completeness: res.completeness, deliveryWarnings };
-      },
-      runtimeWorkflow.retries,
-      runtimeWorkflow.retryDelayMs,
-      undefined,
-      signal,
-      runtimeWorkflow.shouldRetry,
-    );
+      })();
       store.setStatus(run.id, 'done', { title, mediaId, finishedAt: Date.now() });
       await deliverOrQueueNotification({
         store, notifier: deps.notifier, runId: run.id, method: 'success', notify,
@@ -337,6 +350,19 @@ export function makeHandler(deps) {
         await deps.kickDeliveryOutbox?.();
       }
     } catch (e) {
+      const emailConfirmed = store.getRemoteOperation?.(run.id, 'deliver-opening-email')?.state === 'confirmed';
+      if (store.getRun(run.id)?.media_id || emailConfirmed) {
+        store.setStatus(run.id, 'done', { finishedAt: Date.now() });
+        await deliverOrQueueNotification({ store, notifier: deps.notifier, runId: run.id,
+          method: 'warn:recovery', notify, payload: `发布已成功，本地收尾需要核对:${e.message}` });
+        return;
+      }
+      if (e.stage === 'needs_review') {
+        store.setStatus(run.id, 'needs_review', { stage: 'needs_review', error: e.message, finishedAt: Date.now() });
+        await deliverOrQueueNotification({ store, notifier: deps.notifier, runId: run.id,
+          method: 'needsReview', notify, payload: { error: e.message, runId: run.id } });
+        return;
+      }
       if (isTaskCancelled(e, signal)) {
         const cleanup = cleanupRunArtifacts(workflows, run);
         store.setStatus(run.id, 'cancelled', {
@@ -455,32 +481,10 @@ export async function start() {
   }));
   validateCronConfiguration({ workflows: WORKFLOWS, timezone: config.cronTimezone });
   const store = openStore(config.dbPath);
-  const now = Date.now();
-  const DAY_MS = 24 * 60 * 60 * 1000;
-  const runBefore = now - config.runRetentionDays * DAY_MS;
-  let prunedRuns = 0;
-  for (const expired of store.listPrunableRuns(runBefore)) {
-    const workflow = WORKFLOWS[expired.workflow_id];
-    let cleaned = true;
-    if (workflow?.workDir) {
-      const artifactDir = runWorkDir(workflow.workDir, expired.id);
-      try { fs.rmSync(artifactDir, { recursive: true, force: true }); }
-      catch (error) {
-        cleaned = false;
-        console.error(`[hub] 历史任务目录清理失败，保留数据库记录待下次重试:${artifactDir}:${error?.message || error}`);
-      }
-    }
-    if (cleaned) prunedRuns += store.deletePrunableRun(expired.id, runBefore);
-  }
-  const pruned = store.prune({
-    threadBefore: now - config.slackThreadRetentionDays * DAY_MS,
-    eventBefore: now - config.slackThreadRetentionDays * DAY_MS,
-  });
-  if (prunedRuns || pruned.threads || pruned.events) {
-    console.log(`[hub] 已清理历史记录:runs=${prunedRuns},threads=${pruned.threads},events=${pruned.events}`);
-  }
+  pruneHistory({ store, workflows: WORKFLOWS, config });
   // Long translations persist chunk checkpoints and can safely resume after restart.
   // Other workflows remain interrupted pending explicit confirmation to avoid duplicate drafts.
+  store.recoverPublications();
   const recoveredTranslations = store.recoverRunningWorkflow('translate');
   if (recoveredTranslations) console.log(`[hub] 启动:自动恢复 ${recoveredTranslations} 个直译任务`);
   const interrupted = store.markInterrupted();
@@ -669,6 +673,13 @@ export async function start() {
     }
   }, 30000);
   outboxTimer.unref?.();
+  const retentionTimer = setInterval(() => {
+    if (!shuttingDown) {
+      try { pruneHistory({ store, workflows: WORKFLOWS, config }); }
+      catch (error) { console.error('[hub] 定期清理失败:', error.message); }
+    }
+  }, 60 * 60 * 1000);
+  retentionTimer.unref?.();
   for (const row of persistedQueued) {
     restoreRun(row);
   }
@@ -693,6 +704,7 @@ export async function start() {
     console.log(`[hub] 收到 ${signal},停止接单并等待活动任务收尾`);
     queue.stop();
     clearInterval(outboxTimer);
+    clearInterval(retentionTimer);
     await stopHealthServer(healthServer).catch(() => {});
     if (currentSlackApp) {
       try { await currentSlackApp.stop(); } catch (error) { console.error('[hub] Slack 停止失败:', error?.message || error); }

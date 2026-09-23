@@ -1,3 +1,4 @@
+import { performRemoteOperation, needsReview } from '../lib/remote-operation.js';
 import { assertLivePublication } from '../config/runtime.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -37,11 +38,13 @@ export function makeChannel({
     id: 'customerio-opening-digest',
     templateId: CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID,
     templateLocked: true,
-    async publish({ articlePath, config, workflow, source = 'manual', existingRemoteId = '', existingDeliveries = [], onCreated, onDelivery, onDeferredDelivery, contentMode = 'editorial', acceptanceId = '' }) {
+    async publish({ publicationJournal, remoteOperations, runId, articlePath, config, workflow, source = 'manual', existingRemoteId = '', existingDeliveries = [], onCreated, onDelivery, onDeferredDelivery, contentMode = 'editorial', acceptanceId = '' }) {
       assertLivePublication(config);
       const cio = config.customerio || {};
       const digest = config.openingDigest || {};
       assertDigestConfig(cio, digest);
+      const frozen = publicationJournal?.get();
+      if (frozen) return withFrozenPublication(frozen.payload, { publicationJournal, remoteOperations, runId, cio, digest, fetchFn, sleep, onCreated });
       const current = now();
       const dateKey = easternDateKey(current);
       const diagnostics = [];
@@ -98,6 +101,12 @@ export function makeChannel({
           if (newsletterId) await onCreated?.({ remoteId: String(newsletterId), title: name });
         }
         const emailAlreadySent = remote?.sent_at != null;
+        if (source === 'cron' && publicationJournal && emailAlreadySent) {
+          const delivery = { destination: 'customerio', status: 'existing', mediaId: `customerio-newsletter:${newsletterId}`, title: name };
+          await onDelivery?.(delivery);
+          return publishResult({ newsletterId, name, digest, audience, deliveries: [delivery],
+            deliveryWarnings: ['Opening Digest 邮件已发送，但缺少对应冻结内容，已停止派生投递，请人工核对。'] });
+        }
         if (wechatRepair && !emailAlreadySent) {
           throw publishError('Opening Digest 微信纠错要求 Customer.io 邮件已经发送');
         }
@@ -186,6 +195,24 @@ export function makeChannel({
           from: cio.from,
           subscription_topic_id: digest.subscriptionTopicId,
         };
+        if (source === 'cron' && publicationJournal) {
+          const destinations = [];
+          if (config.discord?.openingDigestEnabled) destinations.push({
+            destination: 'discord', title: `Zen Opening Digest · ${dateKey}`,
+            payload: { schemaVersion: 1, dateKey, messages: renderDiscordOpeningDigest(openingPayload, { coverImageUrl: headerImageUrl }) },
+          });
+          if (digest.wechatEnabled) destinations.push({
+            destination: 'wechat', title: `Zen Opening Digest 微信 · ${dateKey}`,
+            payload: { schemaVersion: 1, openingPayload },
+          });
+          const target = openingSendTarget(current, digest.timezone || 'America/New_York');
+          const bundle = { schemaVersion: 1, name, email: payload, destinations,
+            scheduledAt: target.getTime() > current.getTime() + CUSTOMERIO_MIN_SCHEDULE_LEAD_MS ? Math.floor(target.getTime() / 1000) : null,
+            timezone: digest.timezone || 'America/New_York', existingRemoteId: newsletterId || null };
+          publicationJournal.prepare(bundle);
+          releaseCustomerio();
+          return await withFrozenPublication(bundle, { publicationJournal, remoteOperations, runId, cio, digest, fetchFn, sleep, onCreated });
+        }
         if (!newsletterId) {
           try {
             const newsletter = await customerIoRequestWithRetry({
@@ -325,6 +352,53 @@ export function makeChannel({
       }
     },
   };
+}
+
+async function withFrozenPublication(bundle, { publicationJournal, remoteOperations, runId, cio, digest, fetchFn, sleep, onCreated }) {
+  // Configuration drift must not silently change the frozen recipient contract.
+  if (Number(bundle.email.subscription_topic_id) !== Number(digest.subscriptionTopicId)
+    || Number(bundle.email.recipients.and[0].or[0].segment.id) !== Number(digest.segmentId)) {
+    throw needsReview('冻结邮件受众与当前配置不一致，请人工核对');
+  }
+  const release = await acquireRuntimeResource('customerio-write');
+  try {
+    const inspect = async (id) => {
+      const data = await customerIoRequestWithRetry({ baseUrl: cio.baseUrl, appApiKey: cio.appApiKey,
+        path: `/v1/newsletters/${id}`, method: 'GET', fetchFn, timeoutMs: cio.timeoutMs, sleep });
+      const remote = data?.newsletter || data;
+      assertExistingNewsletter(remote, { newsletterId: Number(id), name: bundle.name,
+        segmentId: digest.segmentId, subscriptionTopicId: digest.subscriptionTopicId });
+      return remote;
+    };
+    const newsletterId = await performRemoteOperation({
+      operations: remoteOperations, runId, operation: 'create-opening-email', payload: bundle.email,
+      create: async () => {
+        if (bundle.existingRemoteId) { await inspect(bundle.existingRemoteId); return bundle.existingRemoteId; }
+        const result = await customerIoOnce({ baseUrl: cio.baseUrl, appApiKey: cio.appApiKey,
+          path: '/v1/newsletters', method: 'POST', body: bundle.email, fetchFn, timeoutMs: cio.timeoutMs });
+        return result?.newsletter?.id;
+      },
+      recover: async () => (await recoverExistingNewsletter({ cio, digest, name: bundle.name, fetchFn, sleep, diagnostics: [] }))?.id,
+      definitelyRejected: error => Number.isInteger(error.status) && error.status >= 400 && error.status < 500 && error.status !== 408,
+    });
+    await onCreated?.({ remoteId: newsletterId, title: bundle.name });
+    const confirmed = remote => remote.sent_at != null || (bundle.scheduledAt && Number(remote.scheduled_at) === bundle.scheduledAt);
+    await performRemoteOperation({
+      operations: remoteOperations, runId, operation: 'deliver-opening-email',
+      payload: { newsletterId, scheduledAt: bundle.scheduledAt },
+      create: async () => {
+        if (confirmed(await inspect(newsletterId))) return newsletterId;
+        await customerIoOnce({ baseUrl: cio.baseUrl, appApiKey: cio.appApiKey,
+          path: `/v1/newsletters/${newsletterId}/${bundle.scheduledAt ? 'schedule' : 'send'}`, method: 'POST',
+          body: bundle.scheduledAt ? { scheduled_at: bundle.scheduledAt, timezone: bundle.timezone, tz_match_enabled: false } : {},
+          fetchFn, timeoutMs: cio.timeoutMs });
+        return newsletterId;
+      },
+      recover: async () => confirmed(await inspect(newsletterId)) ? newsletterId : undefined,
+      definitelyRejected: error => error.status === 429,
+    });
+    return publicationJournal.confirm(newsletterId);
+  } finally { release(); }
 }
 
 export function renderOpeningDigestContentHtml({ body, metrics = [], options = null } = {}) {
@@ -693,7 +767,7 @@ async function sendNewsletterSafely({ cio, newsletterId, fetchFn, sleep, diagnos
         diagnostics.push(`Customer.io 发送结果已通过远端 sent_at 恢复:${newsletterId}`);
         return;
       }
-      if (attempt < 2) await sleep([250, 750][attempt]);
+      throw needsReview('Customer.io 发送结果不明，已停止再次发送，请人工核对', error);
     }
   }
   throw lastError || publishError('Customer.io 发送重试耗尽');

@@ -116,6 +116,13 @@ export async function flushOpeningDigestWechatOutbox({
       mediaId = String(error?.remoteId || mediaId || store.listDeliveries(row.run_id)
         .find((item) => item.destination === DESTINATION)?.media_id || '');
       const current = store.getDeliveryOutbox(row.id) || row;
+      if (error.stage === 'needs_review') {
+        const reviewed = store.reviewDeliveryOutbox(row.id, error.message);
+        store.upsertDelivery(row.run_id, { destination: DESTINATION, status: 'needs_review', mediaId, title: row.title, error: error.message });
+        failed += 1;
+        await onTerminalFailure?.({ row: reviewed, error, attempts: Number(current.attempts || 0) + 1 });
+        continue;
+      }
       const attempts = Number(current.attempts || 0) + 1;
       const retryable = error?.retryable !== false && !isWechatConfigurationError(error) && attempts < maxAttempts;
       if (retryable) {

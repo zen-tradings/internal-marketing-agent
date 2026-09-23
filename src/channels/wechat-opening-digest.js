@@ -1,3 +1,4 @@
+import { needsReview } from '../lib/remote-operation.js';
 import { assertLivePublication } from '../config/runtime.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -140,9 +141,9 @@ async function createDraftIdempotently({ api, token, input, payloadSha256, runId
     const recovered = await recoverCreatedDraft({ api, token, title: input.title, beforeIds, sleep });
     if (recovered) return confirmCreatedDraft({ recovered, remoteOperations, operation, onCreated, title: input.title });
   }
-  while (Number(record.attempt_count || 0) < 2) {
+  while (Number(record.attempt_count || 0) < 1) {
     record = remoteOperations.increment(operation);
-    if (!record || Number(record.attempt_count || 0) > 2) break;
+    if (!record || Number(record.attempt_count || 0) > 1) break;
     try {
       const created = await api.addDraft(token, input);
       const mediaId = requireMediaId(created);
@@ -157,9 +158,9 @@ async function createDraftIdempotently({ api, token, input, payloadSha256, runId
   }
   remoteOperations.update(operation, {
     state: 'needs_review',
-    lastError: '两次创建请求后仍无法唯一确认 media_id',
+    lastError: '创建请求后仍无法唯一确认 media_id',
   });
-  throw wechatError(`微信两次创建请求后仍无法唯一确认草稿，已停止继续创建；请人工检查同日同标题草稿。任务:${runId}`, { retryable: false });
+  throw needsReview(`微信创建请求后仍无法唯一确认草稿，已停止继续创建；请人工检查同日同标题草稿。任务:${runId}`);
 }
 
 async function recoverCreatedDraft({ api, token, title, beforeIds, sleep }) {

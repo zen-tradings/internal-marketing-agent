@@ -1,3 +1,4 @@
+import { retainSlackMessages } from '../lib/slack-thread-context.js';
 import boltPkg from '@slack/bolt';
 import { extractExplicitEntityVersions, extractUserUrls } from '../core/analysis-v2.js';
 import { attachmentsFromSlackMessages, normalizeSlackAttachments } from '../core/user-sources.js';
@@ -314,9 +315,7 @@ export function mergeSlackThreadMessages(messages, incoming) {
   const index = next.findIndex((message) => String(message.ts) === String(incoming.ts));
   if (index >= 0) next[index] = { ...next[index], ...incoming };
   else next.push({ ...incoming });
-  return next
-    .sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0))
-    .slice(-12);
+  return retainSlackMessages(next);
 }
 
 export function buildSlackThreadInput(messages, { clarification } = {}) {
@@ -440,6 +439,13 @@ export async function registerSlack({
     try {
       await threadMutex.run(threadKey, async () => {
       const previous = store?.getSlackThread?.(threadKey);
+      if (previous && String(ts) !== String(rootTs)
+        && !previous.messages?.some(message => String(message.ts) === String(rootTs))) {
+        await postMessage({ channel, thread_ts: rootTs,
+          text: '❓ 此历史线程已缺少最初的任务要求。请在新消息中重新提交完整 Prompt 和附件，避免把补充要求当作原始任务。',
+        }, { priority: 3, kind: 'terminal' });
+        return;
+      }
       const isThreadRevision = Boolean(previous && (isEdit || threadTs));
       if (isThreadRevision && previous?.last_run_id) {
         const result = await cancelTask?.({

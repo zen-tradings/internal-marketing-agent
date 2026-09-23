@@ -51,6 +51,9 @@ export function createNotifier(postMessage, { intervalMs = 0 } = {}) {
     },
     progress(notify, { message }) { return send(notify, `⏳ ${String(message || '任务处理中')}`, 1, 'progress'); },
     failure(notify, { stage, error }) { return send(notify, `❌ 任务失败(阶段:${stage})\n${String(error).slice(0, 500)}`, 3, 'terminal'); },
+    needsReview(notify, { error, runId }) {
+      return send(notify, `⚠️ 发布结果待核对，已停止自动重发\n任务:${runId}\n${String(error).slice(0, 800)}`, 3, 'terminal');
+    },
     needsInput(notify, { question, details }) {
       const conflicts = Array.isArray(details?.conflicts) && details.conflicts.length
         ? `\n冲突:\n${details.conflicts.slice(0, 3).map((item) => `• ${item.description || item.topic}`).join('\n')}`

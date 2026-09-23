@@ -188,7 +188,7 @@ test('openStore 自动创建数据库父目录', () => {
   assert.equal(fs.existsSync(path.dirname(dbPath)), true);
 });
 
-test('Slack 线程上下文按 channel + thread_ts 保存并限制最近 12 条', () => {
+test('Slack 线程缺少根消息时仅保留最近 11 条补充', () => {
   const s = openStore(':memory:');
   const messages = Array.from({ length: 15 }, (_, i) => ({ text: `第${i + 1}条`, ts: String(i + 1) }));
   s.upsertSlackThread({
@@ -197,8 +197,8 @@ test('Slack 线程上下文按 channel + thread_ts 保存并限制最近 12 条'
   });
   const thread = s.getSlackThread('D1:100.1');
   assert.equal(thread.workflow_id, 'translate');
-  assert.equal(thread.messages.length, 12);
-  assert.equal(thread.messages[0].text, '第4条');
+  assert.equal(thread.messages.length, 11);
+  assert.equal(thread.messages[0].text, '第5条');
   assert.equal(thread.last_run_id, 'run-1');
   assert.equal(thread.prompt_revision, 1);
   assert.equal(thread.clarification, null);

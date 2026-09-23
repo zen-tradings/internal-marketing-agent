@@ -29,6 +29,10 @@
 - `opening-digest` 的内容格式/新鲜度、部分行情、OIC、封面、受众人数和预检异常属于可发送降级，只写 `research-trace.json`，不得发 Slack warning。受控例外是邮件成功后的派生渠道：显式启用的微信同步和仅正式 cron 的 Discord 持久 outbox 都复用冻结 payload；人工 TEST 永不进入 Discord。微信草稿创建失败、第三次回读仍不一致或无法回读，以及 Discord 终态投递失败时，邮件任务仍保持 `done`，并发送精确的 best-effort Slack warning；只有明确的硬门禁、严重事实问题修复耗尽或 Customer.io 邮件的客观发送失败才发送 Slack failure。正文退订标签必须本地移除，Customer.io layout 唯一负责法定退订链接，不得恢复 `/contents` 读回门禁。
 - 不提交 `.env`、凭据、任务数据库或生成内容。修改环境变量时同步 `.env.example`；改变用户流程、渠道或运维方式时同步 README 或 `docs/`。
 
+- 发布写入必须先持久化操作记录；结果不明只允许只读核对，无法唯一确认则 `needs_review`，不得自动再次创建或发送。生成重试不得包含发布阶段。
+- 正式 Opening Digest 在邮件写入前冻结邮件与派生 payload；邮件确认、主任务完成、派生 outbox 激活和成功通知入队必须在一个数据库事务中提交。重启只恢复冻结记录，不重生成已发送内容。
+- 演练使用独立数据库和任务目录，禁止真实渠道写入及真实 outbox 补发。历史清理不得删除尚有待补发、待投递或待核对操作的任务。
+
 ## 运维边界
 
 - 生产必须设置 `MAX_QUEUE_SIZE` 并只运行一个进程；当前 1 vCPU/2GB 主机使用 `MAX_CONCURRENCY=2`，且不得超过 2；资源门禁保持浏览器/微信写入/Customer.io 写入各 1、OpenRouter 2、Exa Search 8 QPS，单个直译可在该全局门禁内使用最多 2 个批次 worker，不得通过第二实例扩大并发。

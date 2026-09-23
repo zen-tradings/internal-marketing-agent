@@ -1,6 +1,14 @@
+import { retainSlackMessages } from '../lib/slack-thread-context.js';
+import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+
+const PRUNABLE = `status IN ('done', 'failed', 'interrupted', 'cancelled', 'needs_input')
+  AND NOT EXISTS (SELECT 1 FROM notification_outbox n WHERE n.run_id = runs.id AND n.sent_at IS NULL)
+  AND NOT EXISTS (SELECT 1 FROM delivery_outbox d WHERE d.run_id = runs.id AND d.state IN ('pending', 'needs_review'))
+  AND NOT EXISTS (SELECT 1 FROM remote_operations o WHERE o.run_id = runs.id AND o.state IN ('prepared', 'attempting', 'ambiguous', 'needs_review'))
+  AND NOT EXISTS (SELECT 1 FROM publication_intents p WHERE p.run_id = runs.id AND p.state != 'confirmed')`;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS runs (
@@ -28,6 +36,14 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
 CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at);
 
+CREATE TABLE IF NOT EXISTS publication_intents (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+  payload_json TEXT NOT NULL,
+  payload_sha256 TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'prepared',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS remote_operations (
   run_id TEXT NOT NULL,
   operation TEXT NOT NULL,
@@ -170,6 +186,7 @@ export function openStore(dbPath) {
   ensureColumn(db, 'runs', 'slack_response_ts', 'TEXT');
   ensureColumn(db, 'runs', 'schedule_key', 'TEXT');
   ensureColumn(db, 'runs', 'priority', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'remote_operations', 'payload_json', 'TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_runs_queue_order ON runs(status, priority DESC, created_at ASC)');
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_workflow_schedule
     ON runs(workflow_id, schedule_key) WHERE schedule_key IS NOT NULL`);
@@ -357,25 +374,77 @@ export function openStore(dbPath) {
       return { pending: counts.pending || 0, delivered: counts.delivered || 0, failed: counts.failed || 0 };
     },
     listByStatus(status) { return db.prepare('SELECT * FROM runs WHERE status = ? ORDER BY priority DESC, created_at').all(status); },
+    getPublication(runId) {
+      const row = db.prepare('SELECT * FROM publication_intents WHERE run_id = ?').get(runId);
+      return row ? { ...row, payload: JSON.parse(row.payload_json) } : undefined;
+    },
+    preparePublication(runId, payload) {
+      const json = JSON.stringify(payload);
+      const hash = crypto.createHash('sha256').update(json).digest('hex');
+      db.prepare(`INSERT OR IGNORE INTO publication_intents (run_id, payload_json, payload_sha256, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)`).run(runId, json, hash, Date.now(), Date.now());
+      const row = db.prepare('SELECT * FROM publication_intents WHERE run_id = ?').get(runId);
+      if (row.payload_sha256 !== hash) throw new Error('发布内容已冻结，禁止覆盖');
+      return { ...row, payload: JSON.parse(row.payload_json) };
+    },
+    confirmPublication(runId, newsletterId) {
+      return db.transaction(() => {
+        const row = db.prepare('SELECT * FROM publication_intents WHERE run_id = ?').get(runId);
+        if (!row) throw new Error('冻结发布记录不存在');
+        const payload = JSON.parse(row.payload_json);
+        const now = Date.now();
+        for (const child of payload.destinations) {
+          const json = JSON.stringify(child.payload);
+          const hash = crypto.createHash('sha256').update(json).digest('hex');
+          const existing = db.prepare('SELECT payload_sha256 FROM delivery_outbox WHERE run_id = ? AND destination = ?').get(runId, child.destination);
+          if (existing && existing.payload_sha256 !== hash) throw new Error('派生投递内容与冻结记录不一致');
+          db.prepare(`INSERT OR IGNORE INTO delivery_outbox (run_id, destination, title, payload_json, payload_sha256, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`).run(runId, child.destination, child.title, json, hash, now, now);
+          db.prepare(`INSERT OR IGNORE INTO run_deliveries (run_id, destination, status, title, created_at, updated_at)
+            VALUES (?, ?, 'pending', ?, ?, ?)`).run(runId, child.destination, child.title, now, now);
+        }
+        const mediaId = `customerio-newsletter:${newsletterId}`;
+        db.prepare(`INSERT INTO run_deliveries (run_id, destination, status, media_id, title, created_at, updated_at)
+          VALUES (?, 'customerio', 'delivered', ?, ?, ?, ?)
+          ON CONFLICT(run_id, destination) DO UPDATE SET status = 'delivered', media_id = excluded.media_id, updated_at = excluded.updated_at`)
+          .run(runId, mediaId, payload.name, now, now);
+        db.prepare(`UPDATE runs SET status = 'done', media_id = ?, remote_id = ?, title = ?, error = NULL, finished_at = ? WHERE id = ?`)
+          .run(mediaId, String(newsletterId), payload.name, now, runId);
+        db.prepare(`UPDATE publication_intents SET state = 'confirmed', updated_at = ? WHERE run_id = ?`).run(now, runId);
+        const run = db.prepare('SELECT notify_json FROM runs WHERE id = ?').get(runId);
+        db.prepare(`INSERT OR IGNORE INTO notification_outbox (run_id, method, notify_json, payload_json, created_at)
+          VALUES (?, 'success', ?, ?, ?)`).run(runId, run.notify_json || '{}', JSON.stringify({ title: payload.name, mediaId, channelId: 'customerio-opening-digest' }), now);
+        return { title: payload.name, mediaId };
+      })();
+    },
+    recoverPublications() {
+      return db.prepare(`UPDATE runs SET status = 'queued' WHERE status IN ('running', 'interrupted', 'done')
+        AND id IN (SELECT run_id FROM publication_intents WHERE state = 'prepared')`).run().changes;
+    },
+    reviewDeliveryOutbox(id, error) {
+      db.prepare(`UPDATE delivery_outbox SET state = 'needs_review', last_error = ?, updated_at = ? WHERE id = ?`)
+        .run(String(error || '').slice(0, 1000), Date.now(), id);
+      return db.prepare('SELECT * FROM delivery_outbox WHERE id = ?').get(id);
+    },
     getRemoteOperation(runId, operation) {
       return db.prepare('SELECT * FROM remote_operations WHERE run_id = ? AND operation = ?').get(runId, operation);
     },
-    prepareRemoteOperation({ runId, operation, operationKey, payloadSha256, beforeIds = [] }) {
+    prepareRemoteOperation({ runId, operation, operationKey, payloadSha256, beforeIds = [], payload }) {
       const now = Date.now();
       db.prepare(`
         INSERT INTO remote_operations
-          (run_id, operation, operation_key, payload_sha256, before_ids_json, attempt_count, state, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 0, 'prepared', ?, ?)
+          (run_id, operation, operation_key, payload_sha256, before_ids_json, payload_json, attempt_count, state, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 0, 'prepared', ?, ?)
         ON CONFLICT(run_id, operation) DO UPDATE SET
           updated_at = excluded.updated_at
-      `).run(runId, operation, operationKey, payloadSha256, JSON.stringify(beforeIds), now, now);
+      `).run(runId, operation, operationKey, payloadSha256, JSON.stringify(beforeIds), payload ? JSON.stringify(payload) : null, now, now);
       return db.prepare('SELECT * FROM remote_operations WHERE run_id = ? AND operation = ?').get(runId, operation);
     },
     incrementRemoteOperationAttempt(runId, operation) {
       db.prepare(`
         UPDATE remote_operations
         SET attempt_count = attempt_count + 1, state = 'attempting', updated_at = ?
-        WHERE run_id = ? AND operation = ? AND attempt_count < 2 AND remote_id IS NULL
+        WHERE run_id = ? AND operation = ? AND (attempt_count = 0 OR state = 'rejected') AND remote_id IS NULL
       `).run(Date.now(), runId, operation);
       return db.prepare('SELECT * FROM remote_operations WHERE run_id = ? AND operation = ?').get(runId, operation);
     },
@@ -404,7 +473,7 @@ export function openStore(dbPath) {
       return row;
     },
     upsertSlackThread({ threadKey, channelId, threadTs, workflowId, messages, lastRunId, promptRevision }) {
-      const bounded = Array.isArray(messages) ? messages.slice(-12) : [];
+      const bounded = Array.isArray(messages) ? retainSlackMessages(messages, threadTs) : [];
       db.prepare(`
         INSERT INTO slack_threads
           (thread_key, channel_id, thread_ts, workflow_id, messages_json, last_run_id, prompt_revision, clarification_json, updated_at)
@@ -561,22 +630,22 @@ export function openStore(dbPath) {
         publishedAt: row.published_at,
       }));
     },
-    listPrunableRuns(before) {
+    listPrunableRuns(before, limit = 100) {
       if (!Number.isFinite(before)) return [];
       return db.prepare(`
         SELECT id, workflow_id
         FROM runs
-        WHERE status IN ('done', 'failed', 'interrupted', 'cancelled', 'needs_input')
+        WHERE ${PRUNABLE}
           AND COALESCE(finished_at, created_at) < ?
-        ORDER BY created_at
-      `).all(before);
+        ORDER BY created_at LIMIT ?
+      `).all(before, Math.max(1, Math.min(100, Number(limit) || 100)));
     },
     deletePrunableRun(id, before) {
       if (!Number.isFinite(before)) return 0;
       return db.prepare(`
         DELETE FROM runs
         WHERE id = ?
-          AND status IN ('done', 'failed', 'interrupted', 'cancelled', 'needs_input')
+          AND ${PRUNABLE}
           AND COALESCE(finished_at, created_at) < ?
       `).run(id, before).changes;
     },
@@ -647,7 +716,7 @@ export function openStore(dbPath) {
         if (Number.isFinite(runBefore)) {
           result.runs = db.prepare(`
             DELETE FROM runs
-            WHERE status IN ('done', 'failed', 'interrupted', 'cancelled', 'needs_input')
+            WHERE ${PRUNABLE}
               AND COALESCE(finished_at, created_at) < ?
           `).run(runBefore).changes;
         }
