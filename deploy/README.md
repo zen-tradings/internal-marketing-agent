@@ -516,8 +516,8 @@ reviewed change.
 Back up `/var/lib/zen-content-hub/runs.db` together with its `-wal` and `-shm`
 files using a SQLite-aware snapshot or backup command. Keep only one application
 instance; the local SQLite queue is not a multi-replica coordination system.
-On startup, terminal runs and their isolated artifact directories older than
-`RUN_RETENTION_DAYS` are removed. Back up the data directory before reducing
+On startup and hourly, up to 100 eligible terminal runs and their isolated artifact directories older than
+`RUN_RETENTION_DAYS` are removed. Unfinished notifications, deliveries, remote operations and frozen publication intents protect the parent run. Back up the data directory before reducing
 that value.
 
 Install the included SQLite-aware daily snapshot timer:
@@ -545,3 +545,16 @@ automatically pruned. Inventory them after live verification, preserve the
 active directory and the rollback releases required by the current retention
 decision, and remove only explicit reviewed paths. Never use a recursive
 wildcard that could match `/opt/zen-content-hub`.
+
+
+## Instance ownership, migrations and guarded rollback
+
+The service acquires a SQLite OS lock in `<real DB_PATH>.instance-lock` before opening the task store or recovering work. The sidecar intentionally remains after shutdown; never delete it. It lives beside the database so systemd `PrivateTmp` and manual invocations share ownership. Symlink aliases resolve to one database; hard-linked databases are rejected. The lock protects only releases that implement it, so stop the old release before the first cutover.
+
+Schema versions are recorded in `schema_migrations` and `PRAGMA user_version` (current: 2). Version 1 records the legacy baseline, version 2 adds frozen publication intents and remote payloads. Upgrades run in one transaction and preserve existing columns and rows. Old readers remain structurally compatible; old recovery behavior is **not** compatible with unresolved new publication records. Do not delete migrations or downgrade `user_version` manually.
+
+Before a manual rollback, stop the sole service and use the new release's `npm run check:rollback -- --db /var/lib/zen-content-hub/runs.db`. Active/review runs, unresolved operations, unconfirmed frozen intents, pending deliveries and notifications block rollback. The activation error trap uses this guard before restarting the old release; if reconciliation is needed it leaves the service stopped and preserves both release directories. Never restore an older database over a newer one merely to clear this guard: doing so could erase evidence of remote sends and produce duplicates.
+
+CI installs pinned Python dependencies, Chromium and Poppler, then runs `check:runtime-offline`, `check:backup-restore` and the full `check`. Release staging runs the same offline acceptance before the backup and switch. The runtime test disables fixture network access, generates and reads a real PDF, renders PNGs, and exercises both Python workers. The restoration drill uses synthetic records, including an ambiguous write and pending outboxes; it does not establish production backup recoverability or off-host protection.
+
+`npm run check:production-inventory` is a separate read-only inventory. It validates DigitalOcean metadata for the configured target, checks service resource counters and the latest local backup manifest, and attempts the existing doctl account's Droplet backup listing. A missing CLI/account or empty listing is not evidence of an off-host backup. Record provider backup timestamps or independent off-host transfer/restore evidence before declaring disaster recovery verified.

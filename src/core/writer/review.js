@@ -2,7 +2,6 @@ import { cleanReferenceTitle } from '../analysis-v2.js';
 import { completeReviewJson } from './model-client.js';
 import { extractArticleUrls, matchResearchSources, normalizeArticle, hasTitleFrontmatter } from './shared.js';
 
-
 export async function reviewAndRepairArticle({ article, input, research, workflow, writer, fetchFn, sourcePolicy }) {
   const allowed = research.filter((source) => source?.url).map((source) => ({
     title: source.title || '',

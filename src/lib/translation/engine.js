@@ -3,8 +3,7 @@ import path from 'node:path';
 import { createTranslationCheckpoint } from './checkpoint.js';
 import { throwIfTaskCancelled } from '../task-cancellation.js';
 import { TRANSLATION_BATCH_MAX_CHARS, TRANSLATION_BATCH_MAX_ITEMS, TRANSLATION_SHORT_UNIT_MAX_ITEMS, TRANSLATION_SHORT_UNIT_AVERAGE_CHARS, REPAIR_BATCH_MAX_CHARS, REPAIR_BATCH_MAX_ITEMS, CHECKPOINT_WRITE_THROTTLE_MS, translationUnits, applyTranslations, parseJsonPayload, safeError, report, writeJsonAtomic } from './shared.js';
-import { hasExpectedTranslationSet, assessBatchTranslations, assessTranslationUnit, preferredTranslation, isReviewableEquivalenceError, normalizeBatchHighlights, protectInvariantText, restoreInvariantText } from './validation.js';
-
+import { hasExpectedTranslationSet, assessBatchTranslations, preferredTranslation, isReviewableEquivalenceError, normalizeBatchHighlights, protectInvariantText, restoreInvariantText } from './validation.js';
 
 export async function translateDocument({
   source,

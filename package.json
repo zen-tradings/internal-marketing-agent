@@ -42,7 +42,11 @@
     "check:dependencies": "npm audit --omit=dev --audit-level=high",
     "check": "npm run check:syntax && npm run check:architecture && npm test && npm run check:dependencies",
     "test": "node --test test/*.test.js test/golden/*.test.js",
-    "test:update-golden": "node scripts/update-render-golden.mjs"
+    "test:update-golden": "node scripts/update-render-golden.mjs",
+    "check:runtime-offline": "node scripts/check-runtime-offline.mjs",
+    "check:backup-restore": "node scripts/check-backup-restore.mjs",
+    "check:production-inventory": "node scripts/check-production-inventory.mjs",
+    "check:rollback": "node scripts/check-rollback.mjs"
   },
   "dependencies": {
     "@antv/infographic": "^0.2.19",

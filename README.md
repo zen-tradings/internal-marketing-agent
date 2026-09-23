@@ -370,3 +370,16 @@ Retention runs at startup and hourly, in batches of at most 100 runs. Unsent not
 - 所有不可信网络下载经 `src/lib/safe-fetch.js`；HTTP 重试、超时和正文生命周期分别集中在 `fetch-retry.js`、`http-timeout.js`、`response-lifecycle.js`。
 - 第三方微信发布器的全局替换只在 `src/lib/adapters/wechat-publisher.js` 安装。发布结果、冻结内容、远端操作状态和 checkpoint 使用 `publication-contracts.js` 的 Zod 契约。
 - 架构检查跟踪实际 ESM 导入图，拒绝循环依赖、基础库反向依赖业务层、业务模块导入启动入口，以及关闭 TLS 校验等高风险写法。此重构不改变固定模板或编辑策略。
+
+### 单实例、数据库与运维验收
+
+启动在恢复队列之前取得与真实数据库路径绑定的 SQLite 独占实例锁（独立 `.instance-lock` 文件）；符号链接别名共享同一把锁，进程退出后由操作系统释放。不要手工删除锁文件，不支持数据库硬链接或多进程扩容。旧版本没有该保护，切换版本时仍须停掉唯一旧实例。
+
+数据库以 `schema_migrations` 记录版本，当前为 2；升级是事务内的增量变更，拒绝打开高于代码支持版本的数据库。`/health` 的 `recovery` 字段提供最老排队时间、待核对操作、未完成投递和通知滞留时间，不包含正文或凭据。中断的已确认发布恢复为成功；已尝试而未完成的普通发布进入 `needs_review`，不会被直译自动恢复盲目重发。
+
+- `npm run check:runtime-offline`：本地 Python、Chromium、Poppler 的真实文件验收；无需业务凭据，测试中阻断网络。
+- `npm run check:backup-restore`：在临时目录构建和恢复合成备份，验证数据库、checkpoint、待补发记录和哈希；不接触生产数据。
+- `npm run check:production-inventory`：仅从 `deploy/target.env` 定位目标，验证 Droplet metadata 后读取运行与备份信息；可用时通过现有 doctl 账号核对云备份。
+- `npm run check:rollback -- --db /absolute/path/runs.db`：只读检查旧版本回滚是否安全；须先停止服务。有未完成操作或补发时禁止自动回滚启动旧代码。
+
+Linux CI 和部署的独立 release 验证包含离线运行时验收及恢复演练。生产部署仍只用既定 DigitalOcean 流程，由维护者安排切换。实施记录与未验证项见 [工程加固交付记录](docs/ENGINEERING_HARDENING.md)。

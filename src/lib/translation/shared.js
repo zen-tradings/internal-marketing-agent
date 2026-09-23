@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 
-
 // Single active translation source: retain document structure and visual assets while replacing only translatable units.
 export const DOCUMENT_VERSION = 5;
 export const CHECKPOINT_VERSION = 6;

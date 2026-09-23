@@ -1,7 +1,6 @@
 import { RESOURCE_TELEMETRY } from '../resource-governor.js';
 import { fetchWithRetry } from '../../lib/fetch-retry.js';
 
-
 export const DEFAULT_SYSTEM_PROMPT = `你是 Zen Trading 公众号分析师。你会基于系统提供的调研素材写中文金融分析文章。
 
 严格要求:

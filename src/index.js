@@ -1,10 +1,10 @@
-import { runWithRetry, openingDigestPublishContext, makeHandler, cleanupRunArtifacts } from './core/task-handler.js';
+import { pathToFileURL } from 'node:url';
+import { acquireInstanceLock } from './core/instance-lock.js';
+import { makeHandler, cleanupRunArtifacts } from './core/task-handler.js';
 export { runWithRetry, openingDigestPublishContext, makeHandler, cleanupRunArtifacts } from './core/task-handler.js';
 import { pruneHistory } from './core/retention.js';
 
 import dotenv from 'dotenv';
-
-
 
 import { loadConfig } from './config/index.js';
 import { installResourceGovernor, installRuntimeConfig, isDryRun } from './config/runtime.js';
@@ -14,18 +14,14 @@ import { createResourceGovernor } from './core/resource-governor.js';
 import { runWriter } from './core/runner.js';
 import { createNotifier } from './core/notifier.js';
 import { deliverOrQueueNotification, flushNotificationOutbox } from './core/notification-outbox.js';
-import { flushDiscordDeliveryOutbox, queueDiscordDelivery } from './core/delivery-outbox.js';
-import {
-  flushOpeningDigestWechatOutbox,
-  queueOpeningDigestWechatDelivery,
-} from './core/opening-digest-wechat-outbox.js';
-import { formatQdiiSlackMessages, qdiiSourcesForWriter, runQdiiQuery } from './core/qdii.js';
+import { flushDiscordDeliveryOutbox } from './core/delivery-outbox.js';
+import { flushOpeningDigestWechatOutbox } from './core/opening-digest-wechat-outbox.js';
+import { runQdiiQuery } from './core/qdii.js';
 import { registerSlack } from './triggers/slack.js';
 import { reconcileCronWorkflows, registerCron, validateCronConfiguration } from './triggers/cron.js';
 import { isSlackAppConnected, isTransientSocketModeError } from './lib/slack-resilience.js';
 
 import { startHealthServer, stopHealthServer } from './lib/health.js';
-
 
 import wechatWorkflow from './workflows/wechat.js';
 import earningsWorkflow from './workflows/earnings.js';
@@ -70,11 +66,15 @@ export async function start() {
     fetchFn: globalThis.fetch,
   }));
   validateCronConfiguration({ workflows: WORKFLOWS, timezone: config.cronTimezone });
-  const store = openStore(config.dbPath);
+  const instanceLock = acquireInstanceLock(config.dbPath);
+  process.once('exit', () => instanceLock.release());
+  let store;
+  try { store = openStore(config.dbPath); } catch (error) { instanceLock.release(); throw error; }
   pruneHistory({ store, workflows: WORKFLOWS, config });
   // Long translations persist chunk checkpoints and can safely resume after restart.
   // Other workflows remain interrupted pending explicit confirmation to avoid duplicate drafts.
   store.recoverPublications();
+  store.recoverInterruptedPublications();
   const recoveredTranslations = store.recoverRunningWorkflow('translate');
   if (recoveredTranslations) console.log(`[hub] 启动:自动恢复 ${recoveredTranslations} 个直译任务`);
   const interrupted = store.markInterrupted();
@@ -185,6 +185,7 @@ export async function start() {
         queue: queueStatus,
         resources: governor.stats(),
         deliveries: store.deliveryOutboxStats(),
+        recovery: store.recoveryHealth(),
         slackConnected,
         shuttingDown,
         ready: !shuttingDown && !queueStatus.stopped && slackConnected,
@@ -312,7 +313,7 @@ export async function start() {
   console.log('⚡ Zen Content Hub 已启动');
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   start().catch((error) => {
     console.error('[hub] 启动失败:', error?.stack || error);
     process.exit(1);

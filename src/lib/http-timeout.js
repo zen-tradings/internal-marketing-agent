@@ -11,24 +11,35 @@ export async function fetchWithTimeout(fetchFn, resource, options = {}, {
   });
   const signals = [options.signal, signal, controller.signal].filter(Boolean);
   const requestSignal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => {
-      controller.abort(timeoutError);
-      reject(timeoutError);
-    }, timeoutMs);
+  let onAbort;
+  const aborted = new Promise((_, reject) => {
+    onAbort = () => reject(requestSignal.reason);
+    if (requestSignal.aborted) onAbort();
+    else requestSignal.addEventListener('abort', onAbort, { once: true });
   });
+  const timer = setTimeout(() => controller.abort(timeoutError), timeoutMs);
+  const cleanup = () => {
+    clearTimeout(timer);
+    requestSignal.removeEventListener('abort', onAbort);
+  };
   try {
     const response = await Promise.race([
-      Promise.resolve().then(() => {
-        if (requestSignal?.aborted) throw requestSignal.reason;
-        return fetchFn(resource, { ...options, signal: requestSignal });
+      Promise.resolve().then(async () => {
+        if (requestSignal.aborted) throw requestSignal.reason;
+        const result = await fetchFn(resource, { ...options, signal: requestSignal });
+        // An injected transport may ignore cancellation and resolve late. Close
+        // that response too, so abandoning an attempt cannot leak its body.
+        if (requestSignal.aborted) {
+          try { await result?.body?.cancel?.(requestSignal.reason); } catch {}
+          throw requestSignal.reason;
+        }
+        return result;
       }),
-      timeout,
+      aborted,
     ]);
-    return manageResponseBody(response, { signal: requestSignal, onDone: () => clearTimeout(timer) });
+    return manageResponseBody(response, { signal: requestSignal, onDone: cleanup });
   } catch (error) {
-    clearTimeout(timer);
+    cleanup();
     if (controller.signal.aborted && !options.signal?.aborted && !signal?.aborted) throw timeoutError;
     throw error;
   }

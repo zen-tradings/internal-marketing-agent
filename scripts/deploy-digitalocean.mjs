@@ -329,7 +329,13 @@ restore_on_error() {
       sudo rm -f "$backup_helper" || true
     fi
   fi
-  if [ "$switch_started" -eq 1 ]; then sudo systemctl start zen-content-hub || true; fi
+  if [ "$switch_started" -eq 1 ]; then
+    if [ -f "$failed/scripts/check-rollback.mjs" ] && sudo -u zenbot /usr/bin/node "$failed/scripts/check-rollback.mjs" --db /var/lib/zen-content-hub/runs.db; then
+      sudo systemctl start zen-content-hub || true
+    else
+      printf 'rollback_blocked=unresolved-publication-state; service remains stopped for reconciliation\n' >&2
+    fi
+  fi
   if [ "$switch_started" -eq 0 ] && [ -d "$stage" ]; then sudo rm -rf "$stage" || true; fi
   exit "$status"
 }
@@ -381,6 +387,10 @@ sudo -u zenbot env \
   node "$stage/scripts/check-opening-digest-python.mjs" </dev/null
 phase=stage-validation
 sudo -u zenbot npm --prefix "$stage" run check </dev/null
+
+phase=offline-acceptance
+sudo -u zenbot env QDII_PYTHON_PATH="$stage/.venv/bin/python" node "$stage/scripts/check-runtime-offline.mjs" </dev/null
+sudo -u zenbot node "$stage/scripts/check-backup-restore.mjs" </dev/null
 
 phase=backup
 if [ -f "$backup_helper" ]; then

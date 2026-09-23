@@ -392,7 +392,7 @@ function importSource(output, source, { cutoff, now, busyTimeoutMs }) {
     `);
     for (const row of input.prepare(`
       SELECT status, COUNT(*) AS count FROM runs
-      WHERE status IN ('queued', 'running', 'needs_input', 'interrupted')
+      WHERE status IN ('queued', 'running', 'needs_input', 'interrupted', 'needs_review')
       GROUP BY status
     `).all()) {
       insertQueue.run(source.serverId, safeDimension(row.status, RUN_STATUSES), Number(row.count));
@@ -415,6 +415,8 @@ function importOutboxMetrics(input, output, serverId) {
     SELECT COUNT(*) AS count FROM delivery_outbox WHERE state = 'pending'
   `).get();
   insert.run(serverId, 'delivery', 'pending', Number(pendingDeliveries.count));
+  const reviews = input.prepare("SELECT COUNT(*) AS count FROM delivery_outbox WHERE state = 'needs_review'").get();
+  if (reviews.count) insert.run(serverId, 'delivery', 'needs_review', Number(reviews.count));
 }
 
 function withReadModel(readModelPath, { maxStalenessMs = 15 * 60 * 1000, now = Date.now() } = {}, callback) {

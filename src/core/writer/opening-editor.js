@@ -5,7 +5,6 @@ import { completeReviewJson } from './model-client.js';
 import { extractArticleUrls, sourceExcerptLimitFor, normalizeArticle, hasTitleFrontmatter } from './shared.js';
 import { describeFetchError } from '../../lib/fetch-retry.js';
 
-
 export const OPENING_SEVERE_CATEGORIES = new Set([
   'core_fact_contradiction', 'fabricated_number_or_date', 'wrong_link',
   'unsupported_core_causality', 'wrong_entity_classification', 'release_status_error',

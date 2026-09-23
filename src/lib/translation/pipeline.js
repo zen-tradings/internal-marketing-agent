@@ -6,7 +6,6 @@ import { translateDocument } from './engine.js';
 import { renderTranslatedDocument, buildDocumentManifest, removeRepeatedSourceMetadata } from './render.js';
 import { validateTranslationArtifact, assertSourceDocumentComplete } from './validation.js';
 
-
 export async function generateStructuredTranslation({
   input,
   sourceUrl: explicitSourceUrl,

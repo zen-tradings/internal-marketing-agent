@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import { DOCUMENT_BLOCK_TYPES, translationUnits, translatedUnitText } from './shared.js';
 
-
 export function validateTranslationArtifact({ source, translated, article }) {
   const errors = [];
   const warnings = [...new Set(translated.validationWarnings || [])];

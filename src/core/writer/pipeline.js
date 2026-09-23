@@ -18,7 +18,6 @@ import { refineOpeningDigestDraft, normalizeOpeningDigestCitations, planOpeningD
 import { reviewAndRepairArticle, canonicalizeTerminalReferences } from './review.js';
 import { describeFetchError, fetchWithRetry } from '../../lib/fetch-retry.js';
 
-
 export async function runWriter({
   workflow,
   input,

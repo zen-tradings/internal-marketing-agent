@@ -44,3 +44,5 @@
 - Linux/DigitalOcean 部署、备份与健康检查见 `deploy/README.md`。
 
 - 通用翻译能力在 `src/lib/translation/`；基础库不得反向依赖业务装配层。`translation-source-text.js` 和 `core/runner.js` 仅保留兼容导出。第三方微信全局方法替换只允许在 `lib/adapters/wechat-publisher.js`。
+
+- 启动恢复前必须取得与真实数据库路径绑定的实例锁；不得删除 `.instance-lock` 文件。数据库只做有版本记录的增量迁移，旧版本回滚必须通过 `check:rollback`，不得丢弃未确认发布状态。Linux release 验证必须包括 `check:runtime-offline` 和 `check:backup-restore`。

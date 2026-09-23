@@ -9,7 +9,6 @@ import { TRACE_WRITE_THROTTLE_MS, writeResearchTrace } from './trace.js';
 import { searchExaV2 } from './research.js';
 import { describeFetchError } from '../../lib/fetch-retry.js';
 
-
 export async function runAnalysisV2({
   workflow,
   input,

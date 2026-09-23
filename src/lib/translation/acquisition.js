@@ -10,7 +10,6 @@ import { assertPdfResponse, hasPdfSignature } from './pdf.js';
 import { sourceDocumentFromHtml, sourceDocumentFromMarkdown, sourceDocumentFromPdf } from './structure.js';
 import { renderWithBrowser, inspectEmbeddedChartFrames } from './browser.js';
 
-
 export async function acquireSourceDocument({
   sourceUrl,
   workDir,

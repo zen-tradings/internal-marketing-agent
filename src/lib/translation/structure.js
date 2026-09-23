@@ -11,7 +11,6 @@ import { readPdfInfo, assertPdfResponse, runCommand } from './pdf.js';
 import { assertSourceDocumentComplete } from './validation.js';
 import { resolveAssetUrl, localizeFigureAssets, localizeTableAssets, tableHtmlFromRows } from './assets.js';
 
-
 export async function sourceDocumentFromHtml({
   html,
   sourceUrl,

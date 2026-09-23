@@ -6,7 +6,6 @@ import { cancellationErrorFromSignal, throwIfTaskCancelled } from '../task-cance
 import { linearUploadAuthHeaders } from '../linear.js';
 import { DEFAULT_LIMITS, escapeHtml, limitsFor, positive } from './shared.js';
 
-
 export function resolveAssetUrl(value, documentUrl) {
   if (!value) return '';
   if (/^data:/i.test(value)) return value;

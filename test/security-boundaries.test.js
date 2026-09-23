@@ -97,3 +97,22 @@ test('dry-run selects isolated database and artifact directories', () => {
   assert.equal(config.dbPath, '/state/runs.db.dry-run.db');
   assert.equal(config.workDir, '/state/work/dry-run');
 });
+
+test('cancellation before headers rejects promptly and closes a late response', async () => {
+  const controller = new AbortController();
+  let resolveFetch, cancelled = false;
+  const request = fetchWithTimeout(() => new Promise(resolve => { resolveFetch = resolve; }), 'https://example.com', { signal: controller.signal }, { timeoutMs: 5000 });
+  await new Promise(resolve => setImmediate(resolve));
+  const reason = new Error('cancelled by caller'); controller.abort(reason);
+  await assert.rejects(request, error => error === reason);
+  resolveFetch(new Response(new ReadableStream({ cancel() { cancelled = true; } })));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(cancelled, true);
+});
+
+test('body errors release the production OpenRouter permit', async () => {
+  const governor = createResourceGovernor({ openrouterConcurrency: 1, fetchFn: async () => new Response(new ReadableStream({ pull(controller) { controller.error(new Error('stream failed')); } })) });
+  const response = await fetchWithTimeout(governor.fetch, 'https://openrouter.ai/api/v1/chat/completions');
+  await assert.rejects(response.text(), /stream failed/);
+  assert.equal(governor.stats().openrouter.active, 0);
+});

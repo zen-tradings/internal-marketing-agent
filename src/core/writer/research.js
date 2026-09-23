@@ -5,7 +5,6 @@ import { LEGAL_OFFICIAL_SOURCES, EDITORIAL_SEARCH_POLICY, assignSourceIds, stric
 import { startTrace, finishTrace, failTrace } from './trace.js';
 import { describeFetchError, fetchWithRetry } from '../../lib/fetch-retry.js';
 
-
 export async function searchExaV2({
   taskContract,
   searchPlan,

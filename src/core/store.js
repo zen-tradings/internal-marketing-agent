@@ -1,3 +1,4 @@
+import { migrateStore } from './store-schema.js';
 import { retainSlackMessages } from '../lib/slack-thread-context.js';
 import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
@@ -6,169 +7,11 @@ import path from 'node:path';
 
 const PRUNABLE = `status IN ('done', 'failed', 'interrupted', 'cancelled', 'needs_input')
   AND NOT EXISTS (SELECT 1 FROM notification_outbox n WHERE n.run_id = runs.id AND n.sent_at IS NULL)
+  AND NOT EXISTS (SELECT 1 FROM run_deliveries d WHERE d.run_id = runs.id AND d.status IN ('pending', 'queued', 'needs_review'))
   AND NOT EXISTS (SELECT 1 FROM delivery_outbox d WHERE d.run_id = runs.id AND d.state IN ('pending', 'needs_review'))
   AND NOT EXISTS (SELECT 1 FROM remote_operations o WHERE o.run_id = runs.id AND o.state IN ('prepared', 'attempting', 'ambiguous', 'needs_review'))
   AND NOT EXISTS (SELECT 1 FROM publication_intents p WHERE p.run_id = runs.id AND p.state != 'confirmed')`;
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS runs (
-  id TEXT PRIMARY KEY,
-  workflow_id TEXT NOT NULL,
-  source TEXT NOT NULL,
-  input TEXT NOT NULL,
-  status TEXT NOT NULL,
-  stage TEXT,
-  title TEXT,
-  media_id TEXT,
-  remote_id TEXT,
-  output_kind TEXT,
-  slack_response_ts TEXT,
-  schedule_key TEXT,
-  error TEXT,
-  notify_json TEXT,
-  priority INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL,
-  started_at INTEGER,
-  finished_at INTEGER,
-  next_retry_at INTEGER,
-  last_reminded_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
-CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at);
-
-CREATE TABLE IF NOT EXISTS publication_intents (
-  run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
-  payload_json TEXT NOT NULL,
-  payload_sha256 TEXT NOT NULL,
-  state TEXT NOT NULL DEFAULT 'prepared',
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS remote_operations (
-  run_id TEXT NOT NULL,
-  operation TEXT NOT NULL,
-  operation_key TEXT NOT NULL UNIQUE,
-  payload_sha256 TEXT NOT NULL,
-  before_ids_json TEXT NOT NULL DEFAULT '[]',
-  attempt_count INTEGER NOT NULL DEFAULT 0,
-  state TEXT NOT NULL,
-  remote_id TEXT,
-  last_error TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (run_id, operation),
-  FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_remote_operations_state ON remote_operations(state, updated_at);
-
-CREATE TABLE IF NOT EXISTS run_deliveries (
-  run_id TEXT NOT NULL,
-  destination TEXT NOT NULL,
-  status TEXT NOT NULL,
-  media_id TEXT,
-  title TEXT,
-  error TEXT,
-  details_json TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (run_id, destination),
-  FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_run_deliveries_run ON run_deliveries(run_id);
-
-CREATE TABLE IF NOT EXISTS notification_outbox (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  run_id TEXT NOT NULL,
-  method TEXT NOT NULL,
-  notify_json TEXT NOT NULL,
-  payload_json TEXT NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0,
-  next_attempt_at INTEGER NOT NULL DEFAULT 0,
-  last_error TEXT,
-  created_at INTEGER NOT NULL,
-  sent_at INTEGER,
-  UNIQUE(run_id, method),
-  FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_notification_outbox_pending
-  ON notification_outbox(sent_at, next_attempt_at, created_at);
-
-CREATE TABLE IF NOT EXISTS delivery_outbox (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  run_id TEXT NOT NULL,
-  destination TEXT NOT NULL,
-  title TEXT,
-  payload_json TEXT NOT NULL,
-  payload_sha256 TEXT NOT NULL,
-  next_message_index INTEGER NOT NULL DEFAULT 0,
-  message_ids_json TEXT NOT NULL DEFAULT '[]',
-  attempts INTEGER NOT NULL DEFAULT 0,
-  next_attempt_at INTEGER NOT NULL DEFAULT 0,
-  last_error TEXT,
-  state TEXT NOT NULL DEFAULT 'pending',
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  finished_at INTEGER,
-  UNIQUE(run_id, destination),
-  FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_delivery_outbox_pending
-  ON delivery_outbox(destination, state, next_attempt_at, created_at);
-
-CREATE TABLE IF NOT EXISTS slack_threads (
-  thread_key TEXT PRIMARY KEY,
-  channel_id TEXT NOT NULL,
-  thread_ts TEXT NOT NULL,
-  workflow_id TEXT NOT NULL,
-  messages_json TEXT NOT NULL,
-  last_run_id TEXT,
-  prompt_revision INTEGER NOT NULL DEFAULT 1,
-  clarification_json TEXT,
-  updated_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_slack_threads_updated ON slack_threads(updated_at);
-
-CREATE TABLE IF NOT EXISTS slack_events (
-  event_key TEXT PRIMARY KEY,
-  created_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_slack_events_created ON slack_events(created_at);
-
-CREATE TABLE IF NOT EXISTS opening_digest_oic_captures (
-  session_date TEXT PRIMARY KEY,
-  captured_at TEXT NOT NULL,
-  status TEXT NOT NULL,
-  error TEXT
-);
-
-CREATE TABLE IF NOT EXISTS opening_digest_iv_history (
-  session_date TEXT NOT NULL,
-  ticker TEXT NOT NULL,
-  rank INTEGER NOT NULL,
-  ivx30 REAL NOT NULL,
-  ivx_change_pct REAL NOT NULL,
-  ivx_point_change REAL,
-  total_option_volume INTEGER NOT NULL,
-  PRIMARY KEY (session_date, ticker),
-  FOREIGN KEY (session_date) REFERENCES opening_digest_oic_captures(session_date) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_opening_digest_iv_ticker_date
-  ON opening_digest_iv_history(ticker, session_date DESC);
-
-CREATE TABLE IF NOT EXISTS opening_digest_editorial_history (
-  session_date TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL,
-  headline TEXT NOT NULL,
-  stance TEXT NOT NULL,
-  confidence TEXT NOT NULL,
-  thesis TEXT NOT NULL,
-  change_summary TEXT NOT NULL,
-  signposts_json TEXT NOT NULL DEFAULT '[]',
-  published_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_opening_digest_editorial_published
-  ON opening_digest_editorial_history(session_date DESC);
-`;
 
 export function openStore(dbPath) {
   if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -176,20 +19,7 @@ export function openStore(dbPath) {
   db.pragma('foreign_keys = ON');
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
-  db.exec(SCHEMA);
-  ensureColumn(db, 'slack_threads', 'prompt_revision', 'INTEGER NOT NULL DEFAULT 1');
-  ensureColumn(db, 'slack_threads', 'clarification_json', 'TEXT');
-  ensureColumn(db, 'runs', 'next_retry_at', 'INTEGER');
-  ensureColumn(db, 'runs', 'last_reminded_at', 'INTEGER');
-  ensureColumn(db, 'runs', 'remote_id', 'TEXT');
-  ensureColumn(db, 'runs', 'output_kind', 'TEXT');
-  ensureColumn(db, 'runs', 'slack_response_ts', 'TEXT');
-  ensureColumn(db, 'runs', 'schedule_key', 'TEXT');
-  ensureColumn(db, 'runs', 'priority', 'INTEGER NOT NULL DEFAULT 0');
-  ensureColumn(db, 'remote_operations', 'payload_json', 'TEXT');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_runs_queue_order ON runs(status, priority DESC, created_at ASC)');
-  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_workflow_schedule
-    ON runs(workflow_id, schedule_key) WHERE schedule_key IS NOT NULL`);
+  try { migrateStore(db); } catch (error) { db.close(); throw error; }
   return {
     createRun({ id, workflowId, source, input, notify, scheduleKey, priority = 0 }) {
       return db.prepare(
@@ -368,6 +198,18 @@ export function openStore(dbPath) {
       `).run(String(error || '').slice(0, 1000), now, now, id);
       return db.prepare('SELECT * FROM delivery_outbox WHERE id = ?').get(id);
     },
+    recoveryHealth(now = Date.now()) {
+      const age = (value) => value == null ? null : Math.max(0, now - Number(value));
+      const queued = db.prepare("SELECT MIN(created_at) AS oldest FROM runs WHERE status = 'queued'").get();
+      const operations = db.prepare("SELECT COUNT(*) AS count, MIN(updated_at) AS oldest FROM remote_operations WHERE state IN ('attempting', 'ambiguous', 'needs_review')").get();
+      const notifications = db.prepare('SELECT COUNT(*) AS count, MIN(created_at) AS oldest FROM notification_outbox WHERE sent_at IS NULL').get();
+      const deliveries = db.prepare("SELECT COUNT(*) AS count, MIN(created_at) AS oldest FROM delivery_outbox WHERE state IN ('pending', 'needs_review')").get();
+      const runs = db.prepare("SELECT COUNT(*) AS count FROM runs WHERE status = 'needs_review'").get();
+      return { oldestQueuedAgeMs: age(queued.oldest), needsReviewRuns: runs.count,
+        unresolvedOperations: operations.count, oldestUnresolvedOperationAgeMs: age(operations.oldest),
+        pendingNotifications: notifications.count, oldestNotificationAgeMs: age(notifications.oldest),
+        unfinishedDeliveries: deliveries.count, oldestDeliveryAgeMs: age(deliveries.oldest) };
+    },
     deliveryOutboxStats() {
       const rows = db.prepare('SELECT state, COUNT(*) AS count FROM delivery_outbox GROUP BY state').all();
       const counts = Object.fromEntries(rows.map((row) => [row.state, Number(row.count)]));
@@ -417,6 +259,26 @@ export function openStore(dbPath) {
         return { title: payload.name, mediaId };
       })();
     },
+    recoverInterruptedPublications() {
+      return db.transaction(() => {
+        let confirmed = 0, needsReview = 0;
+        for (const run of db.prepare("SELECT * FROM runs WHERE status = 'running'").all()) {
+          if (db.prepare("SELECT 1 FROM publication_intents WHERE run_id = ? AND state = 'prepared'").get(run.id)) continue;
+          let method, payload;
+          if (run.media_id) {
+            db.prepare("UPDATE runs SET status = 'done', error = NULL, finished_at = ? WHERE id = ?").run(Date.now(), run.id);
+            method = 'success'; payload = { title: run.title || '已创建草稿', mediaId: run.media_id }; confirmed++;
+          } else if (db.prepare('SELECT 1 FROM remote_operations WHERE run_id = ? AND attempt_count > 0').get(run.id)) {
+            const error = '进程在发布操作完成前退出，已停止自动重发，请核对远端操作记录';
+            db.prepare("UPDATE runs SET status = 'needs_review', stage = 'needs_review', error = ?, finished_at = ? WHERE id = ?").run(error, Date.now(), run.id);
+            method = 'needsReview'; payload = { error, runId: run.id }; needsReview++;
+          } else continue;
+          db.prepare(`INSERT OR IGNORE INTO notification_outbox (run_id, method, notify_json, payload_json, created_at)
+            VALUES (?, ?, ?, ?, ?)`).run(run.id, method, run.notify_json || '{}', JSON.stringify(payload), Date.now());
+        }
+        return { confirmed, needsReview };
+      })();
+    },
     recoverPublications() {
       return db.prepare(`UPDATE runs SET status = 'queued' WHERE status IN ('running', 'interrupted', 'done')
         AND id IN (SELECT run_id FROM publication_intents WHERE state = 'prepared')`).run().changes;
@@ -441,11 +303,12 @@ export function openStore(dbPath) {
       return db.prepare('SELECT * FROM remote_operations WHERE run_id = ? AND operation = ?').get(runId, operation);
     },
     incrementRemoteOperationAttempt(runId, operation) {
-      db.prepare(`
+      const claim = db.prepare(`
         UPDATE remote_operations
         SET attempt_count = attempt_count + 1, state = 'attempting', updated_at = ?
         WHERE run_id = ? AND operation = ? AND (attempt_count = 0 OR state = 'rejected') AND remote_id IS NULL
       `).run(Date.now(), runId, operation);
+      if (claim.changes !== 1) return undefined;
       return db.prepare('SELECT * FROM remote_operations WHERE run_id = ? AND operation = ?').get(runId, operation);
     },
     updateRemoteOperation(runId, operation, patch = {}) {
@@ -739,11 +602,7 @@ function safeJsonArray(value) {
   catch { return []; }
 }
 
-function ensureColumn(db, table, column, definition) {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
-  if (columns.some((item) => item.name === column)) return;
-  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-}
+
 
 function requeueAndClearNotifications(db, sql, id) {
   return db.transaction(() => {

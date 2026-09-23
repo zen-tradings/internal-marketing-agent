@@ -7,7 +7,6 @@ import { JSDOM } from 'jsdom';
 import { cancellationErrorFromSignal, throwIfTaskCancelled } from '../task-cancellation.js';
 import { EMBEDDED_CHART_MIN_WIDTH, EMBEDDED_CHART_MIN_HEIGHT, EMBEDDED_CHART_MAX_WIDTH, EMBEDDED_CHART_MAX_HEIGHT, EMBEDDED_CHART_MAX_PIXELS, EMBEDDED_CHART_MIN_PNG_BYTES, DEFAULT_LIMITS, titleAnchoredContentRoot, richestArticle, normalizedHeading, metadata, cleanText } from './shared.js';
 
-
 export async function renderWithBrowser({
   sourceUrl,
   workDir,

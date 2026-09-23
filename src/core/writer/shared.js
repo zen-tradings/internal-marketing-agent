@@ -5,7 +5,6 @@ import { excludedMediaSources, independentReportingSources } from '../../workflo
 import { referenceUrlKey } from '../analysis-v2.js';
 import { positiveNumber } from './model-client.js';
 
-
 export const ANALYSIS_V2_SYSTEM_PROMPT = `你是 Zen Trading 微信分析写作模型。
 
 优先级:

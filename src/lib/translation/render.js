@@ -1,6 +1,5 @@
 import { escapeHtml, cleanText, clamp } from './shared.js';
 
-
 export function renderTranslatedDocument(document) {
   const translatedTitle = normalizeTranslatedTitle(document.translatedTitle || document.title || '原文直译');
   const lines = [

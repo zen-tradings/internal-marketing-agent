@@ -32,36 +32,36 @@ export function createResourceGovernor({
   }
 
   function wrapTransport(transport) {
-  async function governedFetch(resource, options = {}) {
-    const url = requestUrl(resource);
-    const signal = options?.signal;
-    if (isExaSearchUrl(url)) await exaSearch.wait(signal);
-    if (!isOpenRouterUrl(url)) return transport(resource, options);
+    async function governedFetch(resource, options = {}) {
+      const url = requestUrl(resource);
+      const signal = options?.signal;
+      if (isExaSearchUrl(url)) await exaSearch.wait(signal);
+      if (!isOpenRouterUrl(url)) return transport(resource, options);
 
-    const onTelemetry = options?.[RESOURCE_TELEMETRY];
-    const fetchOptions = onTelemetry ? { ...options } : options;
-    if (onTelemetry) delete fetchOptions[RESOURCE_TELEMETRY];
-    const fetchOpenRouter = async () => {
-      const queuedAt = now();
-      const release = await resources.get('openrouter').acquire(signal);
-      safeTelemetry(onTelemetry, {
-        resource: 'openrouter',
-        queueWaitMs: Math.max(0, now() - queuedAt),
-      });
-      try {
-        return manageResponseBody(await transport(resource, fetchOptions), { signal, onDone: release });
-      } catch (error) { release(); throw error; }
-    };
+      const onTelemetry = options?.[RESOURCE_TELEMETRY];
+      const fetchOptions = onTelemetry ? { ...options } : options;
+      if (onTelemetry) delete fetchOptions[RESOURCE_TELEMETRY];
+      const fetchOpenRouter = async () => {
+        const queuedAt = now();
+        const release = await resources.get('openrouter').acquire(signal);
+        safeTelemetry(onTelemetry, {
+          resource: 'openrouter',
+          queueWaitMs: Math.max(0, now() - queuedAt),
+        });
+        try {
+          return manageResponseBody(await transport(resource, fetchOptions), { signal, onDone: release });
+        } catch (error) { release(); throw error; }
+      };
 
-    const first = await fetchOpenRouter();
-    if (![429, 503].includes(Number(first?.status))) return first;
-    const retryMs = retryAfterMilliseconds(first?.headers?.get?.('retry-after'), now());
-    if (retryMs === null) return first;
-    await first.body?.cancel?.();
-    await cancellableSleep(Math.min(retryMs, 60_000), signal, sleep);
-    return fetchOpenRouter();
-  }
-  return decorateFetchTransport(governedFetch, transport, (next) => wrapTransport(rebindFetchTransport(transport, next)));
+      const first = await fetchOpenRouter();
+      if (![429, 503].includes(Number(first?.status))) return first;
+      const retryMs = retryAfterMilliseconds(first?.headers?.get?.('retry-after'), now());
+      if (retryMs === null) return first;
+      await first.body?.cancel?.();
+      await cancellableSleep(Math.min(retryMs, 60_000), signal, sleep);
+      return fetchOpenRouter();
+    }
+    return decorateFetchTransport(governedFetch, transport, (next) => wrapTransport(rebindFetchTransport(transport, next)));
   }
   const governedFetch = wrapTransport(fetchFn);
 

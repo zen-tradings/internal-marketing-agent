@@ -1,8 +1,7 @@
 import { wechatRequestContext, wechatPublisher } from './adapters/wechat-publisher.js';
 export { isAnimatedGif, reencodeAnimatedGif } from './adapters/wechat-publisher.js';
 import { validateLocalImage, registerPublicationAssets } from './publication-assets.js';
-import fs from 'node:fs';
-import path from 'node:path';
+
 import { JSDOM } from 'jsdom';
 import { prepareRenderContext, publishToWechatDraft } from '@wenyan-md/core/wrapper';
 import {

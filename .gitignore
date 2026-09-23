@@ -16,3 +16,6 @@ coverage/
 output/
 tmp/
 deploy/target.env
+
+*.instance-lock
+*.instance-lock-journal
