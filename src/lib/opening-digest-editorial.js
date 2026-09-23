@@ -53,9 +53,9 @@ Return strict JSON only:
   "materiality":{"breadth":"","surprise":"","persistence":"","evidence_strength":""},
   "priced_expectation":{"status":"supported|not_observed","text":"","source_ids":[]},
   "incremental_information":"",
-  "supporting_evidence":[{"point":"","source_ids":[]}],
-  "contrary_evidence":[{"point":"","source_ids":[]}],
-  "transmission_chain":[{"from":"","to":"","mechanism":"","source_ids":[]}],
+  "supporting_evidence":[{"point":"","evidence_grade":"official-data|wire-report|market-commentary|price-observation-only","observation_time":"ET timestamp of the observation or empty","source_ids":[]}],
+  "contrary_evidence":[{"point":"","evidence_grade":"official-data|wire-report|market-commentary|price-observation-only","observation_time":"","source_ids":[]}],
+  "transmission_chain":[{"from":"","to":"","mechanism":"","alternative_explanations":["plausible alternative readings that cannot yet be excluded"],"source_ids":[]}],
   "signposts":[{"observable":"","source_ids":[]}],
   "selected_source_ids":[],
   "change_from_prior":{"changed":false,"summary":""},
@@ -67,6 +67,11 @@ Rules:
 - Broad U.S. market drivers outrank sector drivers; sector drivers outrank isolated company moves.
 - Check at least one plausible contrary explanation. If evidence conflicts, choose neutral and say there is no dominant signal.
 - Facts, causal mechanisms, expectations, contrary explanations, and signposts must cite existing source_ids. Never invent a number, ticker, date, time, level, cause, market expectation, or data release result. Do not create a scenario section or named base/counter scenarios.
+- Grade every evidence item: official-data (a government agency, exchange, or issuer primary release), wire-report (independent wire/press reporting), market-commentary (analysis or quote from a strategist), or price-observation-only (a timestamped price with no accompanying explanation). Never upgrade a price observation into a causal grade.
+- Record each evidence item's observation_time in ET when the source states one; leave it empty when the source does not state a time. When two supplied observations describe the same market variable at different times, both belong in the plan with their times, and the conflict must appear in contrary_evidence.
+- Give each transmission_chain item at least one alternative_explanations entry unless the mechanism is backed by official data; an empty list is not allowed for wire-report or weaker grades.
+- The structured attribution snapshot is a timestamped observation of the current market state. Plan the narrative around it: premarket or earlier source observations must be labeled as earlier in time, and a dominant theme that contradicts the snapshot must not be selected.
+- Signposts must include at least one observable upcoming event scheduled within the next 48 hours when a supplied source reports one (macro data, policy decisions, summits, or trade talks); omit this only when no supplied source reports one.
 - If the supplied material does not observe what was priced, use priced_expectation.status=not_observed and leave text empty.
 - OIC Top 20 data shows only observed option volume/IVX for names appearing in that table. It does not prove direction, investor intent, market breadth, or the cause of a price move.
 - The fixed 72-name universe is not the whole market. Describe it only as tracked-universe participation or dispersion.
@@ -87,8 +92,14 @@ ${JSON.stringify(sources)}`;
 export function normalizeOpeningDigestPlan(raw, research = [], history = []) {
   const ids = new Set(research.map((source) => source.openingDigestSourceId).filter(Boolean));
   const sourceIds = (value, limit = 6) => [...new Set((Array.isArray(value) ? value : []).map(String).filter((id) => ids.has(id)))].slice(0, limit);
+  const grades = new Set(['official-data', 'wire-report', 'market-commentary', 'price-observation-only']);
   const evidence = (value, limit) => (Array.isArray(value) ? value : []).map((item) => ({
-    point: clean(item?.point, 500), source_ids: sourceIds(item?.source_ids),
+    point: clean(item?.point, 500),
+    evidence_grade: grades.has(String(item?.evidence_grade || '').toLowerCase())
+      ? String(item.evidence_grade).toLowerCase()
+      : 'wire-report',
+    observation_time: clean(item?.observation_time, 40),
+    source_ids: sourceIds(item?.source_ids),
   })).filter((item) => item.point && item.source_ids.length).slice(0, limit);
   const selected = sourceIds(raw?.selected_source_ids, 10);
   const fallbackSelected = research
@@ -116,7 +127,9 @@ export function normalizeOpeningDigestPlan(raw, research = [], history = []) {
     supporting_evidence: evidence(raw?.supporting_evidence, 5),
     contrary_evidence: evidence(raw?.contrary_evidence, 3),
     transmission_chain: (Array.isArray(raw?.transmission_chain) ? raw.transmission_chain : []).map((item) => ({
-      from: clean(item?.from, 120), to: clean(item?.to, 120), mechanism: clean(item?.mechanism, 300), source_ids: sourceIds(item?.source_ids),
+      from: clean(item?.from, 120), to: clean(item?.to, 120), mechanism: clean(item?.mechanism, 300),
+      alternative_explanations: cleanArray(item?.alternative_explanations, 3, 240),
+      source_ids: sourceIds(item?.source_ids),
     })).filter((item) => item.from && item.to && item.mechanism && item.source_ids.length).slice(0, 4),
     signposts: (Array.isArray(raw?.signposts) ? raw.signposts : []).map((item) => ({
       observable: clean(item?.observable, 240), source_ids: sourceIds(item?.source_ids),

@@ -28,6 +28,12 @@ Build 2-3 evidence chains using What happened → Why it matters → What confir
 
 Use only supplied research links. Keep links adjacent to supported facts. Never append numbered citation or footnote markers such as 【2】, 【3】【4】, [2], or [2, 3], and never emit the † glyph in visible copy; facts are attributed only through the inline markdown links you already include. A supplied price move may be reported as a timestamped price fact, but it cannot establish a catalyst. When no supplied source establishes a cause, write one factual price sentence only: omit a Reason clause entirely, and never comment that a cause is missing, unknown, or unasserted. Do not invent market expectations, price levels, breadth, gamma, positioning, causes, macro values, earnings dates, release outcomes, or conference-call times. A co-occurring price move and OIC/IV signal does not establish causality or investor direction. The 72-name tracked universe is not the whole market; call its pattern tracked-universe participation or dispersion, never market breadth. Use ET in visible copy, not UTC. Follow the run-phase guidance above exactly; only an explicitly identified off-cycle pre-open TEST may use the word premarket.
 
+Causal language follows three calibrated tiers. Use a strong causal verb (drove, pushed, lifted, reflects) only when the claim is backed by official data or by at least two independent supplied sources. With a single wire source, use hedged language (is consistent with, likely supported by, points to) and state the transmission mechanism in its own sentence. When a price move and a potential driver merely coincide with no supplied mechanism, write that they coincided and use no directional causal verb. Never write that a factor directly supports or directly caused something unless a supplied source states that link.
+
+Do not assert market-structure conditions such as absent or exhausted buyers, a lack of incremental demand, positioning, or flows unless a supplied source actually observes them; describe rotation between names or groups instead. When reporting that something surpassed, outpaced, or exceeded a comparable entity or record, state the comparison basis supplied by the source (for example, the same initial launch window) or omit the comparison.
+
+The attribution snapshot capture time is the narrative now. Describe the market state as of that time; label earlier source observations with their own timestamps, and when an earlier observation conflicts with the snapshot, follow the snapshot without narrating the conflict.
+
 The schedule is inserted later as Earnings ahead, so do not create that heading or repeat a merely upcoming earnings date as a catalyst. Do not use evergreen background, stale disclosure, unconfirmed rumors, or price-target-only notes as today's incremental information.
 
 Return Markdown only with this frontmatter:
@@ -79,7 +85,9 @@ export default {
         context.asOf || new Date(),
         context.editorialContext?.artifact?.earningsCalendar,
       ),
-      extraQueryLimit: 10,
+      // Eleven fixed lanes plus the earnings verification query; bounded so the earnings
+      // verification lane is never sliced off.
+      extraQueryLimit: 12,
       // Ten search lanes can return far more material than a 3-5 item digest needs.
       // Keep every source/link available while bounding each excerpt so generation and
       // severe-only review remain comfortably inside the global prompt limit.

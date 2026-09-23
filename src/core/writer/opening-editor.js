@@ -10,13 +10,14 @@ export const OPENING_SEVERE_CATEGORIES = new Set([
   'unsupported_core_causality', 'wrong_entity_classification', 'release_status_error',
 ]);
 
-export async function refineOpeningDigestDraft({ article, research, workflow, writer, fetchFn }) {
+export async function refineOpeningDigestDraft({ article, research, workflow, writer, fetchFn, extraWarnings = [], attributionRepair = false }) {
   const before = auditOpeningDigestInsight(article);
-  if (!before.warnings.length) return { article, trace: { attempted: false, before, after: before, applied: false } };
+  const warnings = [...new Set([...before.warnings, ...extraWarnings])];
+  if (!warnings.length) return { article, trace: { attempted: false, before, after: before, applied: false, extraWarnings: [] } };
   try {
     const selected = openingCompactionSources(research, article);
     const response = await completeReviewJson({
-      prompt: `Repair only the structural and analytical-quality issues in this Zen Opening Digest. Keep the same evidence-bound viewpoint and causal strength. Do not add facts, causes, numbers, tickers, dates, times, URLs, expectations, market levels, or advice. Preserve every existing URL and immutable token. Return strict JSON {"revised_markdown":"complete Markdown with frontmatter"}.\n\nIssues:${JSON.stringify(before.warnings)}\n\nAllowed sources:${JSON.stringify(selected)}\n\nDraft:\n${article}`,
+      prompt: `Repair only the structural and analytical-quality issues in this Zen Opening Digest. Keep the same evidence-bound viewpoint and causal strength. Do not add facts, causes, numbers, tickers, dates, times, URLs, expectations, market levels, or advice. Preserve every existing URL and immutable token. You may delete an unsupported or conflicting assertion instead of rewriting it. Return strict JSON {"revised_markdown":"complete Markdown with frontmatter"}.\n\nIssues:${JSON.stringify(warnings)}\n\nAllowed sources:${JSON.stringify(selected)}\n\nDraft:\n${article}`,
       model: writer.reviewModel || writer.model,
       writer: { ...writer, temperature: 0 },
       fetchFn,
@@ -29,7 +30,13 @@ export async function refineOpeningDigestDraft({ article, research, workflow, wr
     const evidenceBoundaryRepair = before.warnings.some((warning) => /OIC\/IV|期权方向/.test(warning));
     const truncatedRecovery = before.stats.narrativeWords < 150
       && (before.stats.mattersCount < 2 || before.stats.observableSignpostCount < 3);
-    if (!truncatedRecovery && !evidenceBoundaryRepair
+    if (attributionRepair) {
+      // Attribution repair may delete flagged assertions (and their numbers/times) but must
+      // never add a token and must keep every remaining URL exactly.
+      const attributionIssues = attributionInvariantIssues(article, candidate);
+      if (attributionIssues.length) throw new Error(attributionIssues.join('; '));
+      if (candidate === article) throw new Error('refinement did not change the draft');
+    } else if (!truncatedRecovery && !evidenceBoundaryRepair
       && JSON.stringify(openingDraftInvariantSignature(article)) !== JSON.stringify(openingDraftInvariantSignature(candidate))) {
       throw new Error('refinement changed URLs, numbers, tickers, dates, or times');
     }
@@ -37,14 +44,42 @@ export async function refineOpeningDigestDraft({ article, research, workflow, wr
     const candidateUrlKeys = new Set(extractArticleUrls(candidate).map(referenceUrlKey));
     const missingUrls = extractArticleUrls(article).filter((url) => !candidateUrlKeys.has(referenceUrlKey(url)));
     const unfamiliarUrls = extractArticleUrls(candidate).filter((url) => !allowedUrls.has(referenceUrlKey(url)));
-    if (missingUrls.length) throw new Error(`refinement removed existing URLs:${missingUrls.join(', ')}`);
+    if (missingUrls.length && !attributionRepair) throw new Error(`refinement removed existing URLs:${missingUrls.join(', ')}`);
     if (unfamiliarUrls.length) throw new Error(`refinement added unapproved URLs:${unfamiliarUrls.join(', ')}`);
     const after = auditOpeningDigestInsight(candidate);
-    if (after.warnings.length >= before.warnings.length) throw new Error('refinement did not reduce quality issues');
-    return { article: candidate, trace: { attempted: true, applied: true, before, after } };
+    if (after.warnings.length > before.warnings.length) throw new Error('refinement introduced new structural issues');
+    if (before.warnings.length && after.warnings.length === before.warnings.length) {
+      throw new Error('refinement did not reduce quality issues');
+    }
+    return { article: candidate, trace: { attempted: true, applied: true, before, after, extraWarnings } };
   } catch (error) {
-    return { article, trace: { attempted: true, applied: false, before, after: before, diagnostic: describeFetchError(error).slice(0, 500) } };
+    return { article, trace: { attempted: true, applied: false, before, after: before, diagnostic: describeFetchError(error).slice(0, 500), extraWarnings } };
   }
+}
+
+// Attribution repair relaxes the strict invariant: it may delete flagged assertions together
+// with their numbers, tickers, and times, but may never add a token not present in the draft.
+export function attributionInvariantIssues(original, candidate) {
+  const issues = [];
+  const count = (items) => items.reduce((map, item) => {
+    map.set(item, (map.get(item) || 0) + 1);
+    return map;
+  }, new Map());
+  const assertSubset = (originalItems, candidateItems, label) => {
+    const counts = count(originalItems);
+    for (const item of candidateItems) {
+      const remaining = counts.get(item) || 0;
+      if (remaining <= 0) issues.push(`attribution refinement added ${label}:${item}`);
+      else counts.set(item, remaining - 1);
+    }
+  };
+  const before = openingDraftInvariantSignature(original);
+  const after = openingDraftInvariantSignature(candidate);
+  assertSubset(before.urls, after.urls, 'URLs');
+  assertSubset(before.numbers, after.numbers, 'numbers');
+  assertSubset(before.tickers, after.tickers, 'tickers');
+  assertSubset(before.times, after.times, 'times');
+  return issues;
 }
 
 export function openingDraftInvariantSignature(value) {

@@ -193,9 +193,11 @@ test('opening digest research uses the prior regular close window', () => {
     status: 'ok', startDate: '2026-08-10', endDate: '2026-08-14',
     shortlist: [{ symbol: 'NVDA', company: 'NVIDIA' }],
   });
-  assert.equal(queries.length, 10);
+  assert.equal(queries.length, 11);
   assert.equal(queries.filter((query) => query.openingDigestKind === 'universe-news').length, 7);
   assert.equal(queries.filter((query) => query.openingDigestKind === 'earnings-verification').length, 1);
+  assert.equal(queries.filter((query) => query.openingDigestKind === 'macro').length, 2);
+  assert.match(queries.find((query) => query.kind === 'opening-digest-geopolitics').query, /US-China/);
   assert.ok(queries.slice(0, -1).every((query) => query.startPublishedDate === '2026-08-07T20:00:00.000Z'));
   assert.equal(queries.at(-1).startPublishedDate, undefined);
   assert.match(queries.at(-1).query, /2026-08-10 through 2026-08-14/);
@@ -282,18 +284,27 @@ test('universe context emits prompt sources and a reusable OIC artifact without 
       startDate: '2026-08-10', endDate: '2026-08-14', candidates: [], shortlist: [],
       listingChecks: [], sources: [], diagnostics: [],
     }),
+    collectMetrics: async () => [
+      { label: 'WTI', symbol: 'CL=F', value: 90.57, prior: 95.78, changePct: -5.44, asOf: '2026-08-10T14:00:00.000Z' },
+      { label: '10Y UST', symbol: '^TNX', value: 4.05, prior: 4.1, changePct: -1.22, asOf: '2026-08-10T14:00:00.000Z' },
+      { label: 'Gold', symbol: 'GC=F', value: 2600, prior: 2590, changePct: 0.39, asOf: '2026-08-10T14:00:00.000Z' },
+    ],
     history: {
       recordCapture: (entry) => recorded.push(entry),
       listHistory: () => ({ sessions: ['2026-08-10'], rows: [{ session_date: '2026-08-10', ticker: 'NVDA' }] }),
     },
   });
-  assert.equal(context.artifact.schemaVersion, 2);
+  assert.equal(context.artifact.schemaVersion, 3);
   assert.equal(context.artifact.quotes.coverage.available, 72);
+  assert.deepEqual(context.artifact.attributionSnapshot.metrics.map((metric) => metric.label), ['WTI', '10Y UST']);
   assert.equal(context.artifact.options.data.rows.length, 20);
   assert.deepEqual(context.sources.map((source) => source.openingDigestKind), ['universe-price', 'universe-iv']);
   assert.equal(context.sources[0].text, 'META (Meta Platforms; tracked group: cloud-data-centers-software) was +6.00% at 10:15:00 AM EDT, versus the prior regular close. This observation establishes no catalyst or causal explanation.');
   assert.match(context.sources[0].text, /no catalyst or causal explanation/i);
   assert.match(context.promptText, /not a full-universe IV scan/);
+  assert.match(context.promptText, /attribution snapshot/i);
+  assert.match(context.promptText, /WTI: 90\.57 \(-5\.44% versus prior close\)/);
+  assert.match(context.promptText, /prefer the snapshot and label the source's earlier observation time/);
   assert.equal(recorded[0].status, 'success');
 });
 

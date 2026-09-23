@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { captureTrendingOptionsTable, validateTrendingOptionsData } from './options-volume.js';
 import { easternDateKey } from './us-equity-calendar.js';
 import { collectOpeningDigestEarnings } from './opening-digest-earnings.js';
+import { attributionMetrics, collectOpeningMetrics } from './opening-digest-metrics.js';
 
 export const OPENING_DIGEST_UNIVERSE_GROUPS = Object.freeze([
   group('cloud-data-centers-software', [
@@ -80,17 +81,22 @@ export async function collectOpeningDigestUniverseContext({
   history,
   captureOptions = captureTrendingOptionsTable,
   collectEarnings = collectOpeningDigestEarnings,
+  collectMetrics = defaultCollectAttributionMetrics,
   quoteConcurrency = 8,
   quoteTimeoutMs = 8000,
 } = {}) {
   const dateKey = easternDateKey(asOf);
   const diagnostics = [];
-  const [quotes, options, earnings] = await Promise.all([
+  const [quotes, options, earnings, metrics] = await Promise.all([
     collectUniverseQuotes({ fetchFn, asOf, signal, concurrency: quoteConcurrency, timeoutMs: quoteTimeoutMs }),
     collectUniverseOptions({ config, asOf, captureOptions, history }),
     collectEarnings({
       config, fetchFn, asOf, signal,
       trackedTickers: OPENING_DIGEST_UNIVERSE.map((item) => item.ticker),
+    }),
+    collectMetrics({ fetchFn, asOf }).then(attributionMetrics).catch((error) => {
+      diagnostics.push(`Opening Digest attribution snapshot 采集失败:${error.message}`);
+      return [];
     }),
   ]);
   const {
@@ -104,12 +110,17 @@ export async function collectOpeningDigestUniverseContext({
     ...(options.triggers.length ? [optionsSource(options)] : []),
     ...earningsSources,
   ];
+  const attributionSnapshot = {
+    capturedAt: asOf.toISOString(),
+    metrics,
+  };
   const artifact = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     dateKey,
     universeHash: OPENING_DIGEST_UNIVERSE_HASH,
     capturedAt: asOf.toISOString(),
     quotes,
+    attributionSnapshot,
     options: options.prepared,
     optionSignals: {
       universeMatches: options.matches,
@@ -131,6 +142,16 @@ export async function collectOpeningDigestUniverseContext({
       universeSize: OPENING_DIGEST_UNIVERSE.length,
       quoteCoverage: quotes.coverage,
       priceMovers: quotes.movers,
+      attributionSnapshot: {
+        capturedAt: attributionSnapshot.capturedAt,
+        metrics: attributionSnapshot.metrics.map((metric) => ({
+          label: metric.label, symbol: metric.symbol || null,
+          value: Number.isFinite(metric.value) ? metric.value : null,
+          changePct: Number.isFinite(metric.changePct) ? metric.changePct : null,
+          asOf: metric.asOf || null,
+          unavailable: metric.unavailable === true,
+        })),
+      },
       oicUniverseMatches: options.matches,
       ivTriggers: options.triggers,
       ivHistory: options.history,
@@ -145,8 +166,13 @@ export async function collectOpeningDigestUniverseContext({
       },
       diagnostics,
     },
-    promptText: universePromptText({ quotes, options, earningsCalendar }),
+    promptText: universePromptText({ quotes, options, earningsCalendar, attributionSnapshot }),
   };
+}
+
+async function defaultCollectAttributionMetrics({ fetchFn, asOf }) {
+  const metrics = await collectOpeningMetrics({ fetchFn, timeoutMs: 10000, now: () => asOf });
+  return attributionMetrics(metrics);
 }
 
 export async function collectUniverseQuotes({
@@ -359,7 +385,15 @@ function optionsSource(options) {
   };
 }
 
-function universePromptText({ quotes, options, earningsCalendar }) {
+function universePromptText({ quotes, options, earningsCalendar, attributionSnapshot = null }) {
+  const snapshotLines = (attributionSnapshot?.metrics || [])
+    .map((metric) => metric.unavailable || !Number.isFinite(metric.value)
+      ? `- ${metric.label}: unavailable`
+      : `- ${metric.label}: ${formatSnapshotValue(metric.value)} (${metric.changePct === undefined || !Number.isFinite(metric.changePct) ? 'change unavailable' : `${metric.changePct >= 0 ? '+' : ''}${metric.changePct.toFixed(2)}% versus prior close`}), as of ${metric.asOf || attributionSnapshot.capturedAt}`);
+  const snapshotBlock = attributionSnapshot ? `【Opening Digest attribution snapshot】
+Captured at: ${attributionSnapshot.capturedAt}. Treat this capture time as "now" for market-state narrative.
+${snapshotLines.join('\n')}
+Snapshot discipline: these are timestamped observations, not catalysts; they establish no cause, direction, or expectation. When a supplied news observation predates this snapshot and conflicts with it, prefer the snapshot and label the source's earlier observation time. Never narrate a market state that contradicts these values, and never comment that a conflict exists.` : '';
   return `【Opening Digest tracked-universe signals】
 Universe size: ${OPENING_DIGEST_UNIVERSE.length}. Price coverage: ${quotes.coverage.available}/${quotes.coverage.requested}.
 Price movers at or above 5% versus prior regular close: ${JSON.stringify(quotes.movers)}
@@ -369,7 +403,8 @@ IV limitation: this is not a full-universe IV scan; it only covers tracked ticke
 Tracked-universe limitation: these 72 names are not a broad-market breadth sample; describe only their participation or dispersion.
 Earnings calendar status: ${earningsCalendar.status || 'unavailable'}. Verification shortlist: ${JSON.stringify(earningsCalendar.shortlist || [])}
 The Earnings ahead section is rendered deterministically after writing. Do not create that heading, repeat its schedule as a catalyst, or infer an exact conference-call time from Yahoo BMO/AMC timing.
-Selection rules: prioritize material tracked-universe events; a price-only mover may be used as a timestamped fact, without causal interpretation or commentary about the absence of one; combine standalone IV signals into at most one catalyst; allow at most one genuinely material macro catalyst; accept explicit upgrades/downgrades but not price-target-only notes or unconfirmed rumors.`;
+Selection rules: prioritize material tracked-universe events; a price-only mover may be used as a timestamped fact, without causal interpretation or commentary about the absence of one; combine standalone IV signals into at most one catalyst; allow at most one genuinely material macro catalyst; accept explicit upgrades/downgrades but not price-target-only notes or unconfirmed rumors.
+${snapshotBlock ? `\n${snapshotBlock}\n` : ''}`;
 }
 
 function group(id, tuples) {
@@ -385,6 +420,11 @@ function easternQuoteTime(value) {
       timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short',
     }).format(new Date(value));
   } catch { return String(value || ''); }
+}
+
+function formatSnapshotValue(value) {
+  const digits = Number(value) >= 1000 ? 0 : 2;
+  return Number(value).toLocaleString('en-US', { maximumFractionDigits: digits, minimumFractionDigits: digits });
 }
 function numeric(value) { return Number(String(value ?? '').replace(/[%,$]/g, '').replaceAll(',', '').trim()); }
 function signed(value) { return `${value >= 0 ? '+' : ''}${Number(value).toFixed(2)}`; }

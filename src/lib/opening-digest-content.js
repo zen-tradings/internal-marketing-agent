@@ -312,6 +312,13 @@ export function openingDigestResearchQueries(asOf = new Date(), earningsCalendar
       query: `US markets macro data Federal Reserve Treasury yields oil dollar economic releases ${date} market open`,
       systemPrompt: 'Return current-window macro, rates, currency, commodity, and policy catalysts for the US equity open. Prefer primary releases and independently reported market-moving developments.',
     },
+    {
+      ...common,
+      kind: 'opening-digest-geopolitics',
+      openingDigestKind: 'macro',
+      query: `US equity market geopolitical supply catalysts ${date} Middle East oil supply Hormuz US-China trade summit tariffs semiconductors critical minerals`,
+      systemPrompt: 'Return current-window geopolitical and cross-border supply developments that can move US equities today: energy supply disruptions or openings, US-China trade or technology-policy talks, summits, tariffs, export controls, and critical-mineral actions. Prefer independently reported, specific developments over commentary.',
+    },
     ...groupQueries,
     ...(earningsVerification ? [earningsVerification] : []),
   ];

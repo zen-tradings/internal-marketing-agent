@@ -619,7 +619,7 @@ async function readPreparedOptions(articlePath, current) {
   const artifactPath = path.join(path.dirname(articlePath), 'opening-digest-universe.json');
   try {
     const artifact = JSON.parse(await fs.readFile(artifactPath, 'utf8'));
-    if (![1, 2].includes(artifact?.schemaVersion) || artifact?.dateKey !== easternDateKey(current)
+    if (![1, 2, 3].includes(artifact?.schemaVersion) || artifact?.dateKey !== easternDateKey(current)
       || !artifact?.options?.data || !artifact?.options?.capturedAt) return null;
     return {
       data: validateTrendingOptionsData(artifact.options.data),

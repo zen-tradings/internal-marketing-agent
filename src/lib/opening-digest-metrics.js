@@ -3,6 +3,15 @@ const METRICS = [
   ['2Y UST', 'UST_TREASURY_2Y'], ['10Y UST', '^TNX'], ['DXY', 'DX-Y.NYB'], ['WTI', 'CL=F'], ['Gold', 'GC=F'],
 ];
 
+// Attribution-relevant subset injected into the Opening Digest writer context so the
+// narrative and the published Market snapshot describe the same market state.
+export const OPENING_DIGEST_ATTRIBUTION_LABELS = Object.freeze(['SPY', 'QQQ', 'WTI', '10Y UST', 'DXY', 'VIX']);
+
+export function attributionMetrics(metrics = []) {
+  return (Array.isArray(metrics) ? metrics : [])
+    .filter((metric) => OPENING_DIGEST_ATTRIBUTION_LABELS.includes(metric?.label));
+}
+
 export async function collectOpeningMetrics({ fetchFn = globalThis.fetch, timeoutMs = 10000, now = () => new Date() } = {}) {
   const result = await Promise.all(METRICS.map(async ([label, symbol]) => {
     try {

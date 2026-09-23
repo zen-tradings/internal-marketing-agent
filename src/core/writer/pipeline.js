@@ -9,6 +9,8 @@ import { sourceRequestHeadersForAttachment, translationAttachment } from '../use
 import { AnalysisNeedsInputError, contentPolicyForPrompt, isAnalysisV2Enabled } from '../analysis-v2.js';
 import { easternDateKey } from '../../lib/us-equity-calendar.js';
 import { auditOpeningDigestInsight, normalizeOpeningDigestPlan, openingDigestEditorialState, openingDigestPlanPromptText, openingDigestSelectedResearch, openingDigestSourceIds } from '../../lib/opening-digest-editorial.js';
+import { auditOpeningDigestAttribution } from '../../lib/opening-digest-attribution.js';
+import { buildOpeningDigestEvidenceLedger, openingDigestEvidenceSources } from '../../lib/opening-digest-evidence.js';
 import { completeArticle, summarizeInferenceTelemetry, positiveNumber } from './model-client.js';
 import { LEGAL_TASK_RE, extractUrls, sourceForTrace, sourcePriorityTier, openingDigestSelectionSummary, buildUserPrompt, sourcePolicyFor, validateArticleSourceContract, citationValidationSummary, sourceExcerptLimitFor, normalizeArticle, hasTitleFrontmatter } from './shared.js';
 import { TRACE_WRITE_THROTTLE_MS, writeResearchTrace } from './trace.js';
@@ -373,9 +375,32 @@ export async function runWriter({
       throw new Error('OpenRouter 输出缺少 title frontmatter');
     }
     if (workflow.id === 'opening-digest' && workflow.editorialPlanning === true) {
-      const refined = await refineOpeningDigestDraft({ article, research: generationResearch, workflow, writer, fetchFn });
+      const attributionBefore = auditOpeningDigestAttribution({
+        article,
+        snapshot: editorialContext?.artifact?.attributionSnapshot || null,
+        asOf: researchAsOf,
+      });
+      const refined = await refineOpeningDigestDraft({
+        article,
+        research: generationResearch,
+        workflow,
+        writer,
+        fetchFn,
+        extraWarnings: attributionBefore.warnings,
+        attributionRepair: attributionBefore.warnings.length > 0,
+      });
       article = refined.article;
       trace.openingDigestRefinement = refined.trace;
+      const attributionAfter = auditOpeningDigestAttribution({
+        article,
+        snapshot: editorialContext?.artifact?.attributionSnapshot,
+        asOf: researchAsOf,
+      });
+      trace.openingDigestAttributionAudit = {
+        before: attributionBefore,
+        after: attributionAfter,
+        refineApplied: refined.trace?.applied === true,
+      };
     }
     if (workflow.factReview && !sourcePolicy.skipResearch) {
       const reviewed = workflow.factReviewPolicy === 'severe-only'
@@ -439,6 +464,29 @@ export async function runWriter({
       trace.contentMode = 'editorial';
       trace.openingDigestInsightAudit = auditOpeningDigestInsight(article);
       openingDigestState = openingDigestEditorialState(article, openingDigestPlan);
+      try {
+        const evidence = buildOpeningDigestEvidenceLedger({
+          article,
+          research: generationResearch,
+          snapshot: editorialContext?.artifact?.attributionSnapshot || null,
+          plan: openingDigestPlan,
+        });
+        const evidencePath = path.join(workflow.workDir, 'opening-digest-evidence.json');
+        fs.writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
+        const evidenceSourcesPath = path.join(workflow.workDir, 'evidence-sources.json');
+        fs.writeFileSync(evidenceSourcesPath, `${JSON.stringify(
+          openingDigestEvidenceSources(generationResearch, { excerptChars: appliedExcerptChars, writer }),
+          null,
+          2,
+        )}\n`, { mode: 0o600 });
+        trace.openingDigestEvidenceLedger = {
+          evidencePath,
+          evidenceSourcesPath,
+          ...evidence.summary,
+        };
+      } catch (error) {
+        trace.openingDigestEvidenceLedger = { diagnostic: describeFetchError(error).slice(0, 300) };
+      }
     }
     trace.finishedAt = new Date().toISOString();
     trace.citationValidation = citationValidationSummary(article, research, sourcePolicy);

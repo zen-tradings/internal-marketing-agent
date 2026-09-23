@@ -86,5 +86,21 @@ if (trace.factReview) {
     console.log(`- [${issue.severity || '-'} / ${issue.action || '-'}] ${issue.article_quote || issue}`);
   }
 }
+if (trace.openingDigestAttributionAudit) {
+  const before = trace.openingDigestAttributionAudit.before || {};
+  const after = trace.openingDigestAttributionAudit.after || {};
+  console.log(`\n归因审计 (refine ${trace.openingDigestAttributionAudit.refineApplied ? '已应用' : '未应用'}):`);
+  console.log(`- 修复前: ${JSON.stringify(before.stats || {})} / ${((before.warnings || []).length)} 条`);
+  console.log(`- 修复后: ${JSON.stringify(after.stats || {})} / ${((after.warnings || []).length)} 条`);
+  for (const warning of after.warnings || []) console.log(`- [遗留] ${warning}`);
+}
+if (trace.openingDigestEvidenceLedger) {
+  const ledger = trace.openingDigestEvidenceLedger;
+  console.log('\n证据链留痕:');
+  console.log(`- 论断 ${ledger.claimCount || 0} 条,其中带来源链接 ${ledger.linkedClaimCount || 0} 条`);
+  if (ledger.evidencePath) console.log(`- ledger: ${ledger.evidencePath}`);
+  if (ledger.evidenceSourcesPath) console.log(`- 来源摘录: ${ledger.evidenceSourcesPath}`);
+  if (ledger.diagnostic) console.log(`- 诊断: ${ledger.diagnostic}`);
+}
 if (trace.needsInput) console.log(`\n等待确认: ${trace.needsInput.question || trace.error || '是'}`);
 if (trace.error) console.log(`\n任务错误: ${trace.error}`);
