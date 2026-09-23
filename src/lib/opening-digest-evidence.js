@@ -47,8 +47,11 @@ export function buildOpeningDigestEvidenceLedger({ article, research = [], snaps
           .map((key) => byUrl.get(key));
         const snapshotRefs = [];
         for (const [label, metric] of snapshotByLabel) {
-          if (String(sentence).includes(formatValue(metric.value))
-            || (Number.isFinite(metric.changePct) && String(sentence).includes(formatPct(metric.changePct)))) {
+          const referenced = [...String(sentence).matchAll(/(\d+(?:\.\d+)?)/g)]
+            .some((match) => Number.isFinite(Number(match[1]))
+              && (Math.abs(Number(match[1]) - metric.value) < 0.01
+                || (Number.isFinite(metric.changePct) && Math.abs(Math.abs(metric.changePct) - Number(match[1])) < 0.01)));
+          if (referenced) {
             snapshotRefs.push({ label, value: metric.value, changePct: Number.isFinite(metric.changePct) ? metric.changePct : null, asOf: metric.asOf || null });
           }
         }
@@ -121,13 +124,4 @@ function normalizeEvidenceUrl(value) {
     url.pathname = url.pathname.replace(/\/+$/, '') || '/';
     return url.toString();
   } catch { return String(value || '').trim(); }
-}
-
-function formatValue(value) {
-  const digits = Number(value) >= 1000 ? 0 : 2;
-  return Number(value).toLocaleString('en-US', { maximumFractionDigits: digits, minimumFractionDigits: digits });
-}
-
-function formatPct(value) {
-  return `${value >= 0 ? '+' : ''}${Number(value).toFixed(2)}%`;
 }

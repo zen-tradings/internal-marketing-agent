@@ -102,6 +102,32 @@ test('surpassing comparisons require a stated comparable basis', () => {
   assert.equal(qualified.stats.comparisonBasisIssues, 0);
 });
 
+test('yield levels, cross-commodity moves and snapshot-sourced numbers do not warn', () => {
+  const snapshot = {
+    capturedAt: '2026-09-23T11:26:00.031Z',
+    metrics: [
+      { label: 'WTI', value: 90.2, changePct: -4.64 },
+      { label: '10Y UST', value: 4.947, changePct: -0.7 },
+      { label: 'VIX', value: 14.18, changePct: -4.64 },
+      { label: 'SPY', value: 678.9, changePct: 1.55 },
+      { label: 'QQQ', value: 610.2, changePct: 2.77 },
+    ],
+  };
+  const audit = auditOpeningDigestAttribution({
+    article: article([
+      'Treasury yields eased in tandem, with the 10-year at 4.947% as of 3 a.m. ET.',
+      'Brent crude [fell 0.8% to $98.49](https://example.com/oil) while Saudi Arabia restarted its East-West Pipeline.',
+      'VIX stood at 14.18 as of 7:10 a.m. ET, down 4.64%.',
+      'The snapshot shows WTI at 90.20, down 4.64%, as of 7:15 a.m. ET.',
+      'S&P Global reported the flash composite PMI slipped to 53.6 from 54.6.',
+    ].join(' ')),
+    snapshot,
+    asOf: AS_OF,
+  });
+  assert.equal(audit.stats.snapshotConflicts, 0);
+  assert.equal(audit.stats.causalStrengthIssues, 0);
+});
+
 test('attribution repair invariant allows deletion but forbids new tokens', () => {
   const original = article('Oil rebounded for 4 days. [A sourced line](https://example.com/a) stays.');
   const deletion = article('[A sourced line](https://example.com/a) stays.');

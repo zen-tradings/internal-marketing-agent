@@ -16,7 +16,7 @@ const VARIABLE_RULES = [
   { key: 'WTI', match: /\b(?:oil|crude|wti|brent)\b/i },
   { key: '10Y UST', match: /\b(?:10-year|ten-year|treasury yields?|long[- ]end (?:yields?|rates?)|bond yields?)\b/i },
   { key: 'DXY', match: /\b(?:dollar|dxy)\b/i },
-  { key: 'SPY', match: /\bS&P\b/i },
+  { key: 'SPY', match: /\bS&P\b(?!\s+Global\b)/i },
   { key: 'QQQ', match: /\bNasdaq\b/i },
   { key: 'VIX', match: /\b(?:VIX|volatility index)\b/i },
 ];
@@ -31,6 +31,14 @@ const BUYER_FLOW_RE = /\b(?:lacks?|lack of|absen(?:t|ce of)|exhaust(?:ed|ion)|no
 const SURPASS_RE = /\b(?:surpass(?:es|ed)?|outpac(?:es|ed)|exceed(?:s|ed)?|overtook|overtak(?:en|ing))\b/i;
 const COMPARABLE_BASIS_RE = /\b(?:comparabl|same (?:initial )?(?:launch )?window|first \d+ days?|initial \d+|during its first|launch window|comparable period)\b/i;
 const PERCENT_RE = /(-?\d+(?:\.\d+)?)\s*%/;
+// Only percentages attached to a direction word or an explicit sign count as changes; a bare
+// percentage is a level (a 10-year yield at 4.947%) and must never be compared with a snapshot change.
+const CHANGE_UP_RE = /\b(?:up|rose|climbed|gained|jumped|surged|rallied|advanced|strengthened)\s+(?:about\s+|roughly\s+|around\s+|some\s+)?(?:by\s+)?(\d+(?:\.\d+)?)\s*%/gi;
+const CHANGE_DOWN_RE = /\b(?:down|fell|dropped|slipped|eased|declined|weakened|retreated|tumbled)\s+(?:about\s+|roughly\s+|around\s+|some\s+)?(?:by\s+)?(\d+(?:\.\d+)?)\s*%/gi;
+const SIGNED_PERCENT_RE = /[-+]\s?(\d+(?:\.\d+)?)\s*%/g;
+const SNAPSHOT_REF_RE = /\bsnapshot\b/i;
+const NUMBER_RE = /(\d+(?:\.\d+)?)/g;
+const SNAPSHOT_MATCH_TOLERANCE = 0.01;
 // Do not split a sentence right after a.m./p.m.; those periods are part of a timestamp.
 // A lookbehind alone is defeated by backtracking (\s* can match empty), so neutralize the
 // meridiem tokens before splitting and restore them afterwards.
@@ -73,16 +81,18 @@ export function auditOpeningDigestAttribution({ article, snapshot = null, asOf =
               warnings.push(`归因冲突:正文对 ${metric.label} 的方向与 ${snapshot?.capturedAt || '快照'} 时点快照(${signedPct(metric.changePct)})不一致,且未标注更早观察时点:${trimmed}`);
             }
           }
-          const percent = PERCENT_RE.exec(sentence);
-          if (percent && !hasEarlierLabel) {
-            const value = Number(percent[1]);
-            if (Number.isFinite(value) && Math.sign(value) !== 0
-              && Math.sign(value) !== Math.sign(metric.changePct)) {
-              stats.snapshotConflicts += 1;
-              warnings.push(`归因冲突:正文引用 ${metric.label} 变动 ${value}% 与快照 ${signedPct(metric.changePct)} 相反:${trimmed}`);
+          const changes = sentenceChanges(sentence);
+          if (changes.length && !hasEarlierLabel) {
+            for (const change of changes) {
+              if (Math.sign(change) !== 0 && Math.sign(change) !== Math.sign(metric.changePct)) {
+                stats.snapshotConflicts += 1;
+                warnings.push(`归因冲突:正文引用 ${metric.label} 变动 ${signedPct(change)} 与快照 ${signedPct(metric.changePct)} 相反:${trimmed}`);
+              }
             }
           }
-          if (!hasLink && PERCENT_RE.test(sentence)) {
+          if (!hasLink && PERCENT_RE.test(sentence)
+            && !SNAPSHOT_REF_RE_TEST(sentence)
+            && !sentenceNumbersMatchSnapshot(sentence, metrics)) {
             stats.causalStrengthIssues += 1;
             warnings.push(`归因无源:正文对 ${metric.label} 引用变动数值但句内无来源链接:${trimmed}`);
           }
@@ -120,6 +130,22 @@ function sentenceDirection(sentence) {
   if (up === down) return 'none';
   return up ? 'up' : 'down';
 }
+
+function sentenceChanges(sentence) {
+  const changes = [];
+  for (const match of sentence.matchAll(CHANGE_UP_RE)) changes.push(Number(match[1]));
+  for (const match of sentence.matchAll(CHANGE_DOWN_RE)) changes.push(-Number(match[1]));
+  for (const match of sentence.matchAll(SIGNED_PERCENT_RE)) changes.push(Number(match[1]));
+  return changes.filter((value) => Number.isFinite(value) && value !== 0);
+}
+
+function sentenceNumbersMatchSnapshot(sentence, metrics) {
+  const numbers = [...sentence.matchAll(NUMBER_RE)].map((match) => Number(match[1]));
+  return [...metrics.values()].some((metric) => numbers.some((number) => Math.abs(number - metric.value) < SNAPSHOT_MATCH_TOLERANCE
+    || (Number.isFinite(metric.changePct) && Math.abs(Math.abs(metric.changePct) - number) < SNAPSHOT_MATCH_TOLERANCE)));
+}
+
+function SNAPSHOT_REF_RE_TEST(sentence) { return SNAPSHOT_REF_RE.test(sentence); }
 
 function timeToMinutes(hourText, minuteText, meridiem) {
   let hour = Number(hourText);

@@ -48,7 +48,7 @@ export async function refineOpeningDigestDraft({ article, research, workflow, wr
     if (unfamiliarUrls.length) throw new Error(`refinement added unapproved URLs:${unfamiliarUrls.join(', ')}`);
     const after = auditOpeningDigestInsight(candidate);
     if (after.warnings.length > before.warnings.length) throw new Error('refinement introduced new structural issues');
-    if (before.warnings.length && after.warnings.length === before.warnings.length) {
+    if (!attributionRepair && after.warnings.length === before.warnings.length) {
       throw new Error('refinement did not reduce quality issues');
     }
     return { article: candidate, trace: { attempted: true, applied: true, before, after, extraWarnings } };
