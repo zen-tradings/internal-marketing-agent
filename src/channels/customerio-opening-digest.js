@@ -1,3 +1,4 @@
+import { FrozenPublication } from '../lib/publication-contracts.js';
 import { performRemoteOperation, needsReview } from '../lib/remote-operation.js';
 import { assertLivePublication } from '../config/runtime.js';
 import fs from 'node:fs/promises';
@@ -209,6 +210,7 @@ export function makeChannel({
           const bundle = { schemaVersion: 1, name, email: payload, destinations,
             scheduledAt: target.getTime() > current.getTime() + CUSTOMERIO_MIN_SCHEDULE_LEAD_MS ? Math.floor(target.getTime() / 1000) : null,
             timezone: digest.timezone || 'America/New_York', existingRemoteId: newsletterId || null };
+          FrozenPublication.parse(bundle);
           publicationJournal.prepare(bundle);
           releaseCustomerio();
           return await withFrozenPublication(bundle, { publicationJournal, remoteOperations, runId, cio, digest, fetchFn, sleep, onCreated });
@@ -355,6 +357,7 @@ export function makeChannel({
 }
 
 async function withFrozenPublication(bundle, { publicationJournal, remoteOperations, runId, cio, digest, fetchFn, sleep, onCreated }) {
+  FrozenPublication.parse(bundle);
   // Configuration drift must not silently change the frozen recipient contract.
   if (Number(bundle.email.subscription_topic_id) !== Number(digest.subscriptionTopicId)
     || Number(bundle.email.recipients.and[0].or[0].segment.id) !== Number(digest.segmentId)) {

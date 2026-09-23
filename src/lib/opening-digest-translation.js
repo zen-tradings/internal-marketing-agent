@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { assessTranslationUnit } from '../workflows/translation-source-text.js';
+import { assessTranslationUnit } from './translation/validation.js';
 
 export const OPENING_DIGEST_TRANSLATION_VERSION = 21;
 export const OPENING_DIGEST_SAFE_HEADLINE = '今日开市要点';

@@ -361,3 +361,12 @@ Generation retries never wrap publication. Real writes have a durable operation 
 Formal Opening Digest freezes the email and derived payloads before writing to Customer.io. Email confirmation, run completion, activation of child outboxes and the success notification commit in one SQLite transaction. Startup resumes frozen publication intents without regenerating content. Missing historical frozen payloads never authorize deriving new content from an already-sent email. Derived delivery review/failure leaves the successful email done.
 
 Retention runs at startup and hourly, in batches of at most 100 runs. Unsent notifications, pending/review deliveries, unresolved operations and publication intents protect their parent run and artifacts. Slack context retains the original prompt and attachments plus the last eleven follow-ups; legacy threads missing their root must submit a new complete task.
+
+### 核心模块边界
+
+- `src/index.js` 负责装配、连接和生命周期；任务执行及生成重试在 `src/core/task-handler.js`。
+- `src/core/writer/` 分离模型客户端、研究、事实审查、Opening Digest 编辑和编排；`core/runner.js` 保留旧导入接口。
+- `src/lib/translation/` 分离文档获取、结构解析、浏览器、资产、翻译执行、校验、checkpoint 和渲染；原工作流文件保留兼容导出。
+- 所有不可信网络下载经 `src/lib/safe-fetch.js`；HTTP 重试、超时和正文生命周期分别集中在 `fetch-retry.js`、`http-timeout.js`、`response-lifecycle.js`。
+- 第三方微信发布器的全局替换只在 `src/lib/adapters/wechat-publisher.js` 安装。发布结果、冻结内容、远端操作状态和 checkpoint 使用 `publication-contracts.js` 的 Zod 契约。
+- 架构检查跟踪实际 ESM 导入图，拒绝循环依赖、基础库反向依赖业务层、业务模块导入启动入口，以及关闭 TLS 校验等高风险写法。此重构不改变固定模板或编辑策略。

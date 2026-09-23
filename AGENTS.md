@@ -11,7 +11,7 @@
 
 ## 结构与硬约束
 
-- `src/index.js` 装配 Slack、队列、工作流和渠道；`src/core/` 存放队列、SQLite、写作和通知。
+- `src/index.js` 装配 Slack、队列、工作流和渠道；`src/core/` 存放队列、SQLite、写作和通知；`core/task-handler.js` 执行任务，`core/writer/` 按模型、研究、审查与编排分工。
 - `src/workflows/` 定义任务；常规 `src/channels/` 只创建草稿，`customerio-opening-digest.js` 是受控发送/排期例外；`src/lib/` 放门禁、渲染和网络保护；环境变量由 `src/config/index.js` 统一解析并在启动时校验。
 - 每个任务只能写入自己的工作流隔离目录 `WORK_DIR/<workflow>/runs/<readable-run-id>-<hash>/`（`wechat` 直接以 `WORK_DIR` 为工作流基目录），不得复用全局 `article.md` 或 checkpoint；路径必须由 `runWorkDir()` 计算，不能手拼。
 - 外部文章、PDF、图片等不可信 URL 必须通过 `safeFetchResource()`：禁止私网地址，逐跳校验重定向，并限制单文件与任务总下载量。认证后的 Notion/Linear 只解析允许名单 URL 再打固定官方 API，不得先抓浏览器页；仅 `uploads.linear.app` 可跳过本机 Fake-IP DNS pinning，跨域重定向仍必须剥掉 Authorization。
@@ -42,3 +42,5 @@
 - DigitalOcean 的 `/opt/zen-content-hub` 是带 `.deploy-commit` 的现役不可变发布目录，不保证含 `.git`；先在独立 release 目录安装并验证，再单实例切换，旧目录保留为显式 rollback。
 - 生产部署只能通过 `npm run deploy:digitalocean` 执行；目标必须来自 gitignored 的 `deploy/target.env`，并通过 DigitalOcean metadata 确认为 Droplet。禁止根据本机 SSH alias、历史 VPS 名或私网地址猜测生产主机。
 - Linux/DigitalOcean 部署、备份与健康检查见 `deploy/README.md`。
+
+- 通用翻译能力在 `src/lib/translation/`；基础库不得反向依赖业务装配层。`translation-source-text.js` 和 `core/runner.js` 仅保留兼容导出。第三方微信全局方法替换只允许在 `lib/adapters/wechat-publisher.js`。

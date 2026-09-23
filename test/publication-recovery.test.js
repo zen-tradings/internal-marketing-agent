@@ -29,7 +29,7 @@ test('ambiguous remote writes are recorded and never blindly repeated after rest
 
 function frozenBundle() {
   return { schemaVersion: 1, name: 'Zen Opening Digest · 2026-09-23', scheduledAt: null, timezone: 'America/New_York', existingRemoteId: null,
-    email: { name: 'Zen Opening Digest · 2026-09-23', body: '<p>Frozen content</p>', subscription_topic_id: 3,
+    email: { name: 'Zen Opening Digest · 2026-09-23', body: '<p>Frozen content</p>', subject: 'Frozen subject', subscription_topic_id: 3,
       recipients: { and: [{ or: [{ segment: { id: 19 } }] }] } },
     destinations: [{ destination: 'discord', title: 'frozen', payload: { schemaVersion: 1, messages: [{ embeds: [{ description: 'frozen' }], allowed_mentions: { parse: [] } }] } }],
   };

@@ -1,3 +1,4 @@
+import { RemoteOperationState } from './publication-contracts.js';
 import crypto from 'node:crypto';
 
 export function stableJson(value) {
@@ -26,6 +27,7 @@ export async function performRemoteOperation({ operations, runId, operation, pay
   let record = operations.get(operation);
   const payloadSha256 = crypto.createHash('sha256').update(stableJson(payload)).digest('hex');
   if (!record) record = operations.prepare({ operation, operationKey: `${operation}:v1:${runId}`, payloadSha256, payload, beforeIds: await snapshot() });
+  RemoteOperationState.parse(record.state);
   if (record.remote_id) return String(record.remote_id);
   if (record.payload_sha256 !== payloadSha256) throw needsReview(`${operation}: 冻结请求与当前内容不一致，已停止继续创建`);
   const confirm = remoteId => {

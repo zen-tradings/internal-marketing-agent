@@ -4,12 +4,9 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { isGoogleDocUrl } from '../lib/google-docs.js';
 import { isLinearIssueUrl } from '../lib/linear.js';
-import {
-  acquireSourceDocument,
-  assertPdfPageLimit,
-  assertPdfResponse,
-  safeFetchResource,
-} from '../workflows/translation-source-text.js';
+import { acquireSourceDocument } from '../lib/translation/acquisition.js';
+import { assertPdfPageLimit, assertPdfResponse } from '../lib/translation/pdf.js';
+import { safeFetchResource } from '../lib/safe-fetch.js';
 
 const MAX_SLACK_ATTACHMENTS = 4;
 const MAX_GITHUB_FILES = 10;

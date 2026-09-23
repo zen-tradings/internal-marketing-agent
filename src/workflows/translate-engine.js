@@ -1,4 +1,4 @@
-import { generateStructuredTranslation } from './translation-source-text.js';
+import { generateStructuredTranslation } from '../lib/translation/pipeline.js';
 
 export async function generateStrictTranslation({
   input,

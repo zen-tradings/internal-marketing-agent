@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { JSDOM } from 'jsdom';
-import { hasPdfSignature, safeFetchResource } from '../workflows/translation-source-text.js';
+import { hasPdfSignature } from '../lib/translation/pdf.js';
+import { safeFetchResource } from '../lib/safe-fetch.js';
 import { throwIfTaskCancelled } from '../lib/task-cancellation.js';
 
 const FUND_CODE_RE = /(?<!\d)(\d{6})(?!\d)/g;
