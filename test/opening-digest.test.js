@@ -481,6 +481,27 @@ test('opening metrics keeps nine fixed slots and replaces invalid or missing dat
   assert.equal(validateOpeningMetrics([]).length, 9);
 });
 
+test('opening ETF changes never skip a missing previous-session bar', async () => {
+  const timestamps = [
+    Date.parse('2026-09-21T13:30:00Z') / 1000,
+    Date.parse('2026-09-22T13:30:00Z') / 1000,
+    Date.parse('2026-09-23T13:30:00Z') / 1000,
+  ];
+  const fetchFn = async (url) => String(url).includes('home.treasury.gov')
+    ? { ok: true, async text() { return 'Date,2 Yr\n09/22/2026,4.19\n'; } }
+    : { ok: true, async json() { return { chart: { result: [{
+      meta: { regularMarketTime: timestamps[2] }, timestamp: timestamps,
+      indicators: { quote: [{ close: [741.47, null, 742.53] }] },
+    }] } }; } };
+  const metrics = await collectOpeningMetrics({ fetchFn });
+  for (const label of ['SPY', 'QQQ', 'IWM']) {
+    const metric = metrics.find((item) => item.label === label);
+    assert.equal(metric.value, 742.53);
+    assert.equal(metric.prior, undefined);
+    assert.equal(metric.changePct, undefined);
+  }
+});
+
 test('structured options validation remains strict inside the optional section', () => {
   assert.deepEqual(validateTrendingOptionsData(OPTIONS_DATA), OPTIONS_DATA);
   const badRank = structuredClone(OPTIONS_DATA);
@@ -719,6 +740,26 @@ test('Discord 只在正式 cron 邮件成功后把同一冻结英文 payload 加
     onDeferredDelivery: async (delivery) => { queued.push(delivery); return { state: 'pending' }; },
   });
   assert.equal(queued.length, 1);
+});
+
+test('formal correction gets a distinct non-TEST identity and retains cron derivative rules', async () => {
+  const requests = [];
+  const { channel } = standardChannel({ requests });
+  const enabled = config();
+  enabled.discord = { openingDigestEnabled: true };
+  const queued = [];
+  await channel.publish({
+    articlePath: '/tmp/article.md', config: enabled, source: 'cron', correctionId: '1',
+    onDeferredDelivery: async (delivery) => { queued.push(delivery); return { state: 'pending' }; },
+  });
+  const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
+  assert.equal(create.body.name, 'Zen Opening Digest · 2026-08-10 · Correction 1');
+  assert.match(create.body.subject, /^\[Correction 1\]/);
+  assert.equal(queued[0]?.destination, 'discord');
+  await assert.rejects(channel.publish({
+    articlePath: '/tmp/article.md', config: enabled, source: 'acceptance',
+    acceptanceId: 'acceptance-run-1234', correctionId: '1',
+  }), /更正版仅允许正式 cron/);
 });
 
 test('正式 cron 仅在 Customer.io 成功后持久排队微信，且队列保存原始冻结英文 payload', async () => {

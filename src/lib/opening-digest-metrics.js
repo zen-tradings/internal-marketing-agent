@@ -1,3 +1,5 @@
+import { easternDateKey, isUsEquitySession } from './us-equity-calendar.js';
+
 const METRICS = [
   ['SPY', 'SPY'], ['QQQ', 'QQQ'], ['IWM', 'IWM'], ['VIX', '^VIX'],
   ['2Y UST', 'UST_TREASURY_2Y'], ['10Y UST', '^TNX'], ['DXY', 'DX-Y.NYB'], ['WTI', 'CL=F'], ['Gold', 'GC=F'],
@@ -32,16 +34,40 @@ async function fetchMetric({ label, symbol, fetchFn, timeoutMs }) {
     const response = await fetchFn(endpoint, { signal: controller.signal, headers: { 'User-Agent': 'ZenOpeningDigest/1.0' } });
     if (!response.ok) throw new Error(`quote ${response.status}`);
     const quote = (await response.json())?.chart?.result?.[0];
-    const closes = quote?.indicators?.quote?.[0]?.close?.filter(Number.isFinite) || [];
-    if (closes.length < 1) throw new Error('quote missing close');
+    const closes = quote?.indicators?.quote?.[0]?.close || [];
+    const timestamps = quote?.timestamp || [];
+    if (!closes.length || !Number.isFinite(closes.at(-1))) throw new Error('quote missing close');
     const value = closes.at(-1);
-    const prior = closes.length > 1 ? closes.at(-2) : undefined;
+    const currentDate = Number.isFinite(timestamps.at(-1))
+      ? easternDateKey(new Date(timestamps.at(-1) * 1000)) : '';
+    const priorDate = Number.isFinite(timestamps.at(-2))
+      ? easternDateKey(new Date(timestamps.at(-2) * 1000)) : '';
+    const expectedPriorDate = ['SPY', 'QQQ', 'IWM'].includes(label)
+      ? previousEquitySessionDate(currentDate) : priorDate;
+    // Yahoo sometimes returns a null bar for the previous session. Skipping it
+    // silently turns a one-day move into a two-day move, so omit the change.
+    const prior = priorDate === expectedPriorDate && Number.isFinite(closes.at(-2))
+      ? closes.at(-2) : undefined;
     return {
       label, symbol, value, prior,
       changePct: Number.isFinite(prior) && prior !== 0 ? ((value - prior) / prior) * 100 : undefined,
+      priorDate: Number.isFinite(prior) ? priorDate : undefined,
+      ...(['SPY', 'QQQ', 'IWM'].includes(label) && !Number.isFinite(prior)
+        ? { sourceNote: 'ETF day change omitted because the previous trading-day close is unavailable from the quote feed.' }
+        : {}),
       asOf: new Date((quote?.meta?.regularMarketTime || quote?.timestamp?.at(-1) || Math.floor(Date.now() / 1000)) * 1000).toISOString(),
     };
   } finally { clearTimeout(timer); }
+}
+
+function previousEquitySessionDate(dateKey) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return '';
+  const day = new Date(`${dateKey}T12:00:00Z`);
+  for (let offset = 0; offset < 10; offset++) {
+    day.setUTCDate(day.getUTCDate() - 1);
+    if (isUsEquitySession(day)) return easternDateKey(day);
+  }
+  return '';
 }
 
 async function fetchTreasuryTwoYear({ label, fetchFn, timeoutMs, asOf }) {
