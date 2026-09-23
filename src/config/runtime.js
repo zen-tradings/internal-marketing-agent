@@ -31,3 +31,12 @@ export function runtimeFetch(fetchFn = globalThis.fetch) {
   if (!activeResourceGovernor || fetchFn !== globalThis.fetch) return fetchFn;
   return activeResourceGovernor.fetch;
 }
+
+// Explicit config wins; fallback supports small injectable callers and maintenance tools.
+export function isDryRun(config = activeConfig) {
+  return config?.dryRun ?? /^(1|true|yes|on)$/i.test(process.env.HUB_DRY_RUN || '');
+}
+
+export function assertLivePublication(config) {
+  if (isDryRun(config)) throw new Error('演练模式禁止真实发布或补发');
+}

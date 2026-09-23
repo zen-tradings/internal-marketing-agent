@@ -1,3 +1,4 @@
+import { assertLivePublication } from '../config/runtime.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -37,6 +38,7 @@ export function makeChannel({
     templateId: CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID,
     templateLocked: true,
     async publish({ articlePath, config, workflow, source = 'manual', existingRemoteId = '', existingDeliveries = [], onCreated, onDelivery, onDeferredDelivery, contentMode = 'editorial', acceptanceId = '' }) {
+      assertLivePublication(config);
       const cio = config.customerio || {};
       const digest = config.openingDigest || {};
       assertDigestConfig(cio, digest);

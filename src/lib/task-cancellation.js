@@ -26,6 +26,14 @@ export function isTaskCancelled(error, signal) {
 const FETCH_BASE_TRANSPORT = Symbol('zen.fetchBaseTransport');
 const FETCH_REBIND_TRANSPORT = Symbol('zen.fetchRebindTransport');
 
+export function decorateFetchTransport(wrapped, base, rebind) {
+  Object.defineProperties(wrapped, {
+    [FETCH_BASE_TRANSPORT]: { value: base?.[FETCH_BASE_TRANSPORT] || base },
+    [FETCH_REBIND_TRANSPORT]: { value: rebind },
+  });
+  return wrapped;
+}
+
 export function withTaskCancellation(fetchFn, signal) {
   if (!signal) return fetchFn;
   const wrapped = (resource, options = {}) => {

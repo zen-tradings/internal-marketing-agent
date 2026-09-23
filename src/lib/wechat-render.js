@@ -1,3 +1,4 @@
+import { validateLocalImage, registerPublicationAssets } from './publication-assets.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -236,9 +237,15 @@ export async function renderAndPublishWithFinalFooter(inputContent, options, get
   }
   validatePreparedWechatHtml(gzhContent.content, {
     absoluteDirPath,
+    trustedAssetPaths: options.trustedAssetPaths,
     finalSurveyPath: options.finalSurveyPath,
     finalFooterPath: options.finalFooterPath,
   });
+  const assets = await registerPublicationAssets(gzhContent.content, gzhContent.cover, {
+    absoluteDirPath, trustedAssetPaths: options.trustedAssetPaths, signal: options.signal, fetchFn: options.fetchFn,
+  });
+  gzhContent.content = assets.content;
+  gzhContent.cover = assets.cover;
   const data = await wechatRequestContext.run({
     timeoutMs: options.timeoutMs || 30000,
     signal: options.signal,
@@ -279,6 +286,7 @@ export function normalizeCodeBreaks(html) {
 
 export function validatePreparedWechatHtml(html, {
   absoluteDirPath,
+  trustedAssetPaths = [],
   finalSurveyPath,
   finalFooterPath,
 } = {}) {
@@ -332,21 +340,11 @@ export function validatePreparedWechatHtml(html, {
       errors.push(`第 ${index + 1} 张图片仍是未本地化的外部 URL:${src}`);
       continue;
     }
-    if (/^asset:/i.test(src)) continue;
-    if (/^(?:data:|\/\/)/i.test(src)) {
-      errors.push(`第 ${index + 1} 张图片使用不受支持的内联或协议相对地址:${src.slice(0, 120)}`);
-      continue;
-    }
     if (/^https?:/i.test(src)) continue;
-    const resolved = pathForHtmlAsset(src, absoluteDirPath);
-    if (!resolved || !fsExists(resolved)) {
-      errors.push(`第 ${index + 1} 张本地图片不存在:${src}`);
-      continue;
-    }
-    const unsupportedFormat = unsupportedWechatImageFormat(resolved);
-    if (unsupportedFormat) {
-      errors.push(`第 ${index + 1} 张本地图片为微信不支持的 ${unsupportedFormat} 格式:${src}`);
-    }
+    try {
+      validateLocalImage(src, { absoluteDirPath, trustedAssetPaths });
+    } catch (error) { errors.push(`第 ${index + 1} 张图片:${error.message}`); }
+
   }
   for (const [index, table] of [...document.querySelectorAll('table')].entries()) {
     const rows = [...table.querySelectorAll('tr')];
@@ -430,54 +428,6 @@ export function normalizeListMarkers(html) {
     }
   }
   return document.body.innerHTML;
-}
-
-function pathForHtmlAsset(src, absoluteDirPath) {
-  if (!absoluteDirPath) return undefined;
-  try {
-    const decoded = decodeURIComponent(String(src).split(/[?#]/)[0]);
-    return decoded.startsWith('/') ? decoded : path.resolve(absoluteDirPath, decoded);
-  } catch {
-    return undefined;
-  }
-}
-
-function fsExists(filename) {
-  try { return fs.existsSync(filename) && fs.statSync(filename).size > 0; }
-  catch { return false; }
-}
-
-function unsupportedWechatImageFormat(filename) {
-  let descriptor;
-  try {
-    descriptor = fs.openSync(filename, 'r');
-    const header = Buffer.alloc(512);
-    const length = fs.readSync(descriptor, header, 0, header.length, 0);
-    const bytes = header.subarray(0, length);
-    // Trust binary signatures before inspecting textual formats. Some valid
-    // PNGs carry XMP/JUMBF metadata containing embedded SVG markup near the
-    // beginning of the file; searching the raw binary for `<svg` misclassifies
-    // those images even though WeChat can consume them normally.
-    if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
-      return undefined;
-    }
-    if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return undefined;
-    if (['GIF87a', 'GIF89a'].includes(bytes.subarray(0, 6).toString('ascii'))) return undefined;
-    if (bytes.length >= 12
-      && bytes.subarray(0, 4).toString('ascii') === 'RIFF'
-      && bytes.subarray(8, 12).toString('ascii') === 'WEBP') {
-      return 'WebP';
-    }
-    const text = bytes.toString('utf8').replace(/^\uFEFF/, '').trimStart();
-    if (/^(?:<\?xml[^>]*>\s*)?(?:<!doctype\s+svg[^>]*>\s*)?<svg(?:\s|>)/i.test(text)) return 'SVG';
-  } catch {
-    return undefined;
-  } finally {
-    if (descriptor !== undefined) {
-      try { fs.closeSync(descriptor); } catch {}
-    }
-  }
-  return undefined;
 }
 
 function effectiveEmFontSize(node) {

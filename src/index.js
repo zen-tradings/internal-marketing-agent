@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from './config/index.js';
-import { installResourceGovernor, installRuntimeConfig } from './config/runtime.js';
+import { installResourceGovernor, installRuntimeConfig, isDryRun } from './config/runtime.js';
 import { openStore } from './core/store.js';
 import { createQueue } from './core/queue.js';
 import { createResourceGovernor } from './core/resource-governor.js';
@@ -252,7 +252,7 @@ export function makeHandler(deps) {
 
         // With HUB_DRY_RUN enabled, force every declared workflow channel to mock for local/CI end-to-end rehearsal
         // without touching the live WeChat API. Use strict truthiness so 0, false, and empty strings do not enable it.
-        const DRY = /^(1|true|yes|on)$/i.test(process.env.HUB_DRY_RUN || '');
+        const DRY = isDryRun(config);
         const channelId = DRY ? 'mock' : runtimeWorkflow.channel;
         const channel = channels[channelId];
         if (!channel?.publish) throw stageError('config', `未知发布渠道:${channelId || '(empty)'}`);
@@ -501,7 +501,7 @@ export async function start() {
     runQdiiQuery: (args) => runQdiiQuery({ ...args, fetchFn: governor.fetch }),
   };
   deps.kickDeliveryOutbox = () => {
-    if (shuttingDown || deliveryFlushPromise) return deliveryFlushPromise;
+    if (isDryRun(config) || shuttingDown || deliveryFlushPromise) return deliveryFlushPromise;
     const terminalWarning = (method, message) => async ({ row, error, attempts }) => {
       const run = store.getRun(row.run_id);
       let notify = {};

@@ -1,3 +1,4 @@
+import { isDryRun } from '../config/runtime.js';
 import crypto from 'node:crypto';
 import {
   inspectDiscordWebhook,
@@ -37,7 +38,7 @@ export async function flushDiscordDeliveryOutbox({
   onTerminalFailure,
 } = {}) {
   const discord = config?.discord || {};
-  if (!discord.openingDigestEnabled || typeof store?.listPendingDeliveryOutbox !== 'function') {
+  if (isDryRun(config) || !discord.openingDigestEnabled || typeof store?.listPendingDeliveryOutbox !== 'function') {
     return { delivered: 0, retried: 0, failed: 0, messages: 0 };
   }
   let delivered = 0;

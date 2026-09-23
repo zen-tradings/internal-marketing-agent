@@ -1,3 +1,4 @@
+import { assertLivePublication } from '../config/runtime.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -91,6 +92,7 @@ export function makeChannel({
       resumeFromCheckpoint = false,
       contentPolicy = {},
     }) {
+      assertLivePublication(config);
       let title, markdown;
       try { ({ title, markdown } = await readArticle(articlePath)); }
       catch (e) { const err = new Error(`读取文章失败:${e.message}`); err.stage = 'render'; throw err; }
@@ -294,6 +296,7 @@ export function makeChannel({
           mathBrowserExecutablePath: config.translation?.browserExecutablePath,
           // Pillow runs in the QDII venv; used only when WeChat rejects a high-frame GIF with errcode -1.
           gifReencodePythonPath: config.qdii?.pythonPath,
+          trustedAssetPaths: [assetsConfig.headerImage, assetsConfig.surveyImage, assetsConfig.footerImage].filter(Boolean),
           finalSurveyPath: assetsConfig.surveyImage,
           finalFooterPath: assetsConfig.footerImage,
           onMathCjkEquation: (count) => (notifier && notify

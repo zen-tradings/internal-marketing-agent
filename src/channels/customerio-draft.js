@@ -1,3 +1,4 @@
+import { assertLivePublication } from '../config/runtime.js';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import {
@@ -37,6 +38,7 @@ export function makeChannel({
       remoteOperations,
       signal,
     }) {
+      assertLivePublication(config);
       const cio = config.customerio || {};
       if (!cio.appApiKey) throw publishError('缺少 CUSTOMERIO_APP_API_KEY');
       const audience = resolveAudience(cio);

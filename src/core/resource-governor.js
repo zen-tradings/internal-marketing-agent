@@ -1,4 +1,5 @@
-import { cancellationErrorFromSignal, throwIfTaskCancelled } from '../lib/task-cancellation.js';
+import { manageResponseBody } from '../lib/response-lifecycle.js';
+import { cancellationErrorFromSignal, throwIfTaskCancelled, decorateFetchTransport, rebindFetchTransport } from '../lib/task-cancellation.js';
 
 // Internal fetch option used to report time spent waiting for a governed resource.
 // It is removed before the request reaches undici or an injected fetch implementation.
@@ -30,11 +31,12 @@ export function createResourceGovernor({
     finally { release(); }
   }
 
+  function wrapTransport(transport) {
   async function governedFetch(resource, options = {}) {
     const url = requestUrl(resource);
     const signal = options?.signal;
     if (isExaSearchUrl(url)) await exaSearch.wait(signal);
-    if (!isOpenRouterUrl(url)) return fetchFn(resource, options);
+    if (!isOpenRouterUrl(url)) return transport(resource, options);
 
     const onTelemetry = options?.[RESOURCE_TELEMETRY];
     const fetchOptions = onTelemetry ? { ...options } : options;
@@ -46,17 +48,22 @@ export function createResourceGovernor({
         resource: 'openrouter',
         queueWaitMs: Math.max(0, now() - queuedAt),
       });
-      try { return await fetchFn(resource, fetchOptions); }
-      finally { release(); }
+      try {
+        return manageResponseBody(await transport(resource, fetchOptions), { signal, onDone: release });
+      } catch (error) { release(); throw error; }
     };
 
     const first = await fetchOpenRouter();
     if (![429, 503].includes(Number(first?.status))) return first;
     const retryMs = retryAfterMilliseconds(first?.headers?.get?.('retry-after'), now());
     if (retryMs === null) return first;
+    await first.body?.cancel?.();
     await cancellableSleep(Math.min(retryMs, 60_000), signal, sleep);
     return fetchOpenRouter();
   }
+  return decorateFetchTransport(governedFetch, transport, (next) => wrapTransport(rebindFetchTransport(transport, next)));
+  }
+  const governedFetch = wrapTransport(fetchFn);
 
   return {
     run,

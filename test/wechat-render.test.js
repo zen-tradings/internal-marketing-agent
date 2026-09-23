@@ -35,8 +35,8 @@ test('微信最终 HTML:尾图移动到脚注和来源之后且只出现一次',
 });
 
 test('微信最终 HTML:调研图与社群封底固定为最后两张且顺序不可交换', () => {
-  const survey = 'asset:zen-survey-qr.jpg';
-  const footer = 'asset:zen-footer-qr.png';
+  const survey = path.resolve('assets/zen-survey-qr.jpg');
+  const footer = path.resolve('assets/zen-footer-qr.png');
   const html = `<section><p><img src="${footer}"></p><p>正文</p><p><img src="${survey}"></p><section class="footnotes">脚注</section></section>`;
   const output = appendFinalTailImages(html, { surveyPath: survey, footerPath: footer });
   const document = new JSDOM(`<body>${output}</body>`).window.document;
@@ -51,12 +51,14 @@ test('微信最终 HTML:调研图与社群封底固定为最后两张且顺序�
   assert.doesNotThrow(() => validatePreparedWechatHtml(output, {
     finalSurveyPath: survey,
     finalFooterPath: footer,
+    trustedAssetPaths: [survey, footer],
   }));
 
   root.insertBefore(tail[1], tail[0]);
   assert.throws(() => validatePreparedWechatHtml(document.body.innerHTML, {
     finalSurveyPath: survey,
     finalFooterPath: footer,
+    trustedAssetPaths: [survey, footer],
   }), /固定社群封底不是最终节点|固定调研图必须紧邻社群封底并位于其前/);
 });
 
@@ -147,7 +149,7 @@ test('微信最终 HTML:Wenyan 自动脚注与手工引用重复时只保留最�
 
 test('微信最终 HTML:校验乱码、空表格、坏图和本地图片存在性', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-wechat-html-'));
-  fs.writeFileSync(path.join(dir, 'ok.png'), Buffer.from([1, 2, 3]));
+  fs.writeFileSync(path.join(dir, 'ok.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
   assert.deepEqual(
     validatePreparedWechatHtml('<p><img src="ok.png"></p><table><tr><td>A</td></tr></table>', { absoluteDirPath: dir }),
     { images: 1, tables: 1 },

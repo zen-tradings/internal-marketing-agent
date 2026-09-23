@@ -117,6 +117,8 @@ A safe rehearsal performs real research and writing without creating a WeChat dr
 HUB_DRY_RUN=1 npm start
 ```
 
+Dry-run uses `DB_PATH + .dry-run.db` and `WORK_DIR/dry-run`, and disables real publication and background delivery flushing. Existing real runs and outboxes are not restored, pruned, or consumed by a rehearsal. Research/model calls and Slack rehearsal notifications can still use live services.
+
 Run persistently on macOS:
 
 ```bash
@@ -347,3 +349,7 @@ Newsletter first classifies content. Market, sector, company, earnings, and data
 Run `npm run check:customerio` for a read-only check of live counts across all three stages, current drafts, and missing configuration.
 
 See [`docs/NEWSLETTER_ROLLOUT.md`](docs/NEWSLETTER_ROLLOUT.md) for the complete staged testing, review, and expansion procedure.
+
+### Network and publication asset boundaries
+
+The resource governor and cancellation decorators preserve DNS pinning. HTTP deadlines and OpenRouter permits remain active until the response body finishes, errors, or is cancelled. All local publication images must have PNG/JPEG/GIF signatures and resolve inside the run directory, except explicitly configured fixed template assets. Symlink escapes and encoded traversal are rejected. Accepted WeChat CDN images are safely downloaded before entering the third-party publisher, and the run records a publication asset manifest.

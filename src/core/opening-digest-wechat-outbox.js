@@ -1,3 +1,4 @@
+import { isDryRun } from '../config/runtime.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -40,7 +41,7 @@ export async function flushOpeningDigestWechatOutbox({
   onTerminalFailure,
   onDelivered,
 } = {}) {
-  if (!config?.openingDigest?.wechatEnabled || typeof store?.listPendingDeliveryOutbox !== 'function') {
+  if (isDryRun(config) || !config?.openingDigest?.wechatEnabled || typeof store?.listPendingDeliveryOutbox !== 'function') {
     return { delivered: 0, retried: 0, failed: 0 };
   }
   let delivered = 0;

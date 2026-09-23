@@ -35,8 +35,13 @@ export function loadConfig(env = process.env) {
   if (discordOpeningDigestEnabled && !discordWebhookUrl) {
     throw new Error('DISCORD_OPENING_DIGEST_ENABLED=true 时必须配置 DISCORD_OPENING_DIGEST_WEBHOOK_URL');
   }
-  const workDir = env.WORK_DIR || '/srv/zen/wechat';
-  const dbPath = env.DB_PATH || path.resolve(env.HOME || '.', 'zen-content-hub', 'runs.db');
+  const dryRun = booleanFlag(env.HUB_DRY_RUN);
+  let workDir = env.WORK_DIR || '/srv/zen/wechat';
+  let dbPath = env.DB_PATH || path.resolve(env.HOME || '.', 'zen-content-hub', 'runs.db');
+  if (dryRun) {
+    workDir = path.join(workDir, 'dry-run');
+    dbPath = `${dbPath}.dry-run.db`;
+  }
   if (production) {
     if (!slackAllowedUserIds.length) throw new Error('生产环境必须配置 SLACK_ALLOWED_USER_IDS');
     if (!slackAllowedChannelIds.length) throw new Error('生产环境必须配置 SLACK_ALLOWED_CHANNEL_IDS');
@@ -56,6 +61,7 @@ export function loadConfig(env = process.env) {
   return {
     workDir,
     dbPath,
+    dryRun,
     maxConcurrency,
     maxQueueSize: positiveIntegerOrThrow(env.MAX_QUEUE_SIZE, 100, 'MAX_QUEUE_SIZE'),
     resources,

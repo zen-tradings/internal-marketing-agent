@@ -1,3 +1,4 @@
+import { assertLivePublication } from '../config/runtime.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -34,6 +35,7 @@ export function makeWechatOpeningDigestChannel({
       payload, translation, config, acceptance = false, runId = '', existingRemoteId = '',
       onCreated, remoteOperations,
     }) {
+      assertLivePublication(config);
       assertOpeningDigestWechatPayloadClean(payload);
       const activeApi = api || createWechatApi({ timeoutMs: config.wechat.timeoutMs });
       const translatedHeadline = translationMap(translation).get('headline')?.text || payload.article.headline || '开市数据可用，判断暂缺';

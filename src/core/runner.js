@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from '../lib/http-timeout.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { renderQuarterlyCharts } from '../lib/quarterly-chart.js';
@@ -3211,11 +3212,10 @@ export async function fetchWithRetry(fetchFn, url, options, opts = {}) {
   } = opts;
   let lastErr;
   for (let i = 0; i < attempts; i++) {
-    const controller = timeoutMs ? new AbortController() : undefined;
-    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
     try {
-      const reqOptions = controller ? { ...options, signal: controller.signal } : options;
-      const response = await fetchFn(url, reqOptions);
+      const response = timeoutMs
+        ? await fetchWithTimeout(fetchFn, url, options, { timeoutMs })
+        : await fetchFn(url, options);
       if (!retryStatuses.includes(response?.status) || i === attempts - 1) return response;
       try { await response.body?.cancel?.(); } catch {}
       const retryAfterMs = retryAfterDelay(response);
@@ -3225,8 +3225,6 @@ export async function fetchWithRetry(fetchFn, url, options, opts = {}) {
       if (!isTransientNetworkError(e)) throw e; // Preserve non-transient error identity, including AbortError.
       if (i === attempts - 1) break;
       await sleep(backoffMs[Math.min(i, backoffMs.length - 1)]);
-    } finally {
-      if (timer) clearTimeout(timer);
     }
   }
   const err = new Error(`网络请求失败(重试 ${attempts} 次后放弃): ${describeFetchError(lastErr)}`);

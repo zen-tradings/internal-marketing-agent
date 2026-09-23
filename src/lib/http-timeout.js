@@ -1,3 +1,5 @@
+import { manageResponseBody } from './response-lifecycle.js';
+
 export async function fetchWithTimeout(fetchFn, resource, options = {}, {
   timeoutMs = 30000,
   signal,
@@ -5,7 +7,7 @@ export async function fetchWithTimeout(fetchFn, resource, options = {}, {
 } = {}) {
   const controller = new AbortController();
   const timeoutError = Object.assign(new Error(`${label} 请求超时(${timeoutMs}ms)`), {
-    code: 'ETIMEDOUT',
+    code: 'ETIMEDOUT', name: 'AbortError',
   });
   const signals = [options.signal, signal, controller.signal].filter(Boolean);
   const requestSignal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
@@ -17,17 +19,17 @@ export async function fetchWithTimeout(fetchFn, resource, options = {}, {
     }, timeoutMs);
   });
   try {
-    return await Promise.race([
+    const response = await Promise.race([
       Promise.resolve().then(() => {
         if (requestSignal?.aborted) throw requestSignal.reason;
         return fetchFn(resource, { ...options, signal: requestSignal });
       }),
       timeout,
     ]);
+    return manageResponseBody(response, { signal: requestSignal, onDone: () => clearTimeout(timer) });
   } catch (error) {
+    clearTimeout(timer);
     if (controller.signal.aborted && !options.signal?.aborted && !signal?.aborted) throw timeoutError;
     throw error;
-  } finally {
-    clearTimeout(timer);
   }
 }
