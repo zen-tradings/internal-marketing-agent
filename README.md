@@ -1,385 +1,164 @@
 # Zen Content Hub
 
-Zen Content Hub is a single-instance, long-running content orchestration service. Users assign tasks in natural language through Slack, and the service routes them to a QDII data reply, a WeChat Official Account draft, or a Customer.io Newsletter draft. It supports local development on macOS and 24/7 production operation under systemd on Linux/DigitalOcean.
+Route Slack requests to WeChat drafts, Customer.io newsletter drafts, or QDII holdings replies.
+Research and translation workflows read linked sources and attachments before they create a draft. A
+protected Opening Digest workflow can send or schedule an email, then create a WeChat draft and
+deliver a Discord post.
 
-## Pipeline
+You can run the service on macOS for development or as one systemd process on Linux. The service
+stores tasks and delivery state in SQLite.
 
-```text
-Slack direct-message prompt / channel @Bot / PDF or text attachment / cron
-  → message/edit debounce, per-thread revision mutex, SQLite priority enqueue, single-instance concurrency control
-  → translation: scope detection → structured HTML/PDF → bounded two-lane chunk translation, per-request telemetry, and integrity gates
-  → WeChat Analysis V2: original prompt → TaskContract → SearchPlan → EvidenceMatrix → evidence-led editorial brief
-  → user PDF/Notion/Google Docs/Linear/GitHub/URL + latest primary sources + preferred sources + open cross-checking
-  → general tasks use the LatePost method; macro tasks combine Global Macro leadership with LatePost evidence discipline
-  → general, translation, Opening Digest, and options-strategy copy use GLM 5.3 Flash → GLM 5.2 sentence-level fact audit → deterministic citations
-  → central template gate → fixed WeChat layout / fixed Customer.io Newsletter template
-  → ordinary channels create drafts only; `opening-digest` is the controlled send/schedule exception and may create a Chinese WeChat draft and queue a Discord feed after email succeeds
-  → QDII uses Slack replies as the primary result; failed terminal notifications enter the SQLite outbox for idempotent delivery after reconnection
-```
+## See what each request produces
 
-Node.js controls the pipeline. `OPENROUTER_MODEL` in `.env` selects the general writing model; production defaults to `z-ai/glm-5.3-flash`. `OPENING_DIGEST_MODEL` may independently override the English Opening Digest model and defaults to the same GLM 5.3 Flash model. `OPENROUTER_TRANSLATION_MODEL` and `OPTIONS_STRATEGY_MODEL` are explicit writing-role overrides and also default to GLM 5.3 Flash.
+| Workflow | Ask for | Result |
+| --- | --- | --- |
+| `wechat` | A general article, or an unprefixed request | WeChat draft |
+| `macro` | Cross-asset macro analysis | WeChat draft |
+| `company` | Company financial or competitive analysis | WeChat draft |
+| `earnings` | An earnings preview or review | WeChat draft |
+| `sector` | Industry or sector analysis | WeChat draft |
+| `morning` | A short morning brief | WeChat draft |
+| `translate` | A faithful translation of the first link | WeChat draft |
+| `email` | A newsletter or email | Customer.io draft |
+| `qdii` | Holdings for a six-digit QDII fund code | Slack reply |
+| `opening-digest` | The U.S. market opening digest | Protected Customer.io email |
 
-`OPENROUTER_ROUTER_MODEL`, `OPENROUTER_PLANNER_MODEL`, and `OPENROUTER_REVIEW_MODEL` control routing, top-level task/evidence planning, and sentence-level fact review. Production uses `moonshotai/kimi-k3` for planning and direction, and GLM 5.2 for routing, auditing, and Opening Digest compression. `OPENROUTER_TRANSLATION_MODEL` independently selects the structured-translation model and inherits the general model when unset. `OPENROUTER_REASONING_EFFORT` and each role-specific `*_REASONING_EFFORT` are independent: body writing and Kimi planning use `high`; GLM routing and review use `none`; structured translation has its own quality-gated setting and defaults to `OPENROUTER_TRANSLATION_REASONING_EFFORT=high`. Live A/B acceptance found that `low` and `medium` were faster but produced truncated blocks, so they are not production defaults. `OPENROUTER_MAX_TOKENS` is the shared reasoning-plus-output budget for analysis and JSON-role requests; structured translation uses its own `OPENROUTER_TRANSLATION_MAX_TOKENS` budget (default 24000) so reasoning tokens cannot starve visible output into `finish_reason=length` truncation, which is the mechanism behind the earlier low/medium truncation findings. Responses that finish with `finish_reason=length` while carrying visible content are never silently accepted: writing hard-fails, and translation batches retry once, then deterministically split into smaller batches.
+You can use a workflow prefix such as `macro:`, `translate:`, or `email:`. You can also describe the
+task in natural language. The bot uses the full Slack request and accepts supported links, PDFs, and
+text attachments. It writes WeChat articles and translations in Simplified Chinese by default. It
+writes newsletters and QDII replies in English unless you request another language.
 
-Concrete options-strategy requests use the independent `options-strategy` model profile. `OPTIONS_STRATEGY_MODEL` defaults to the pinned `z-ai/glm-5.3-flash` OpenRouter ID with `high` effort, a 32,000-token reasoning-plus-output budget, and a 15-minute timeout. For V2 WeChat analysis, this profile owns planning, evidence selection, and body writing while the configured review model remains unchanged; Newsletter and morning workflows have no planner/evidence stage, so only their writer changes. Pure IV, Greeks, options-flow, volume, open-interest, OIC-table, and general options-market analysis stay on the normal profile. Translation, Opening Digest, and QDII never use this profile. A profile failure stops the task instead of silently falling back to the general writer.
+Ordinary WeChat and Customer.io workflows create drafts only. The Opening Digest is a controlled
+exception. A formal cron run sends or schedules email to its protected audience. After email
+succeeds, enabled WeChat delivery creates a Chinese draft. Enabled Discord delivery uses the same
+frozen content for formal cron runs only. A manual Slack run uses an isolated test audience and
+never posts to Discord.
 
-Versioned writing skills are loaded from this repository and injected at runtime; they are not tied to a specific model. Exa is used only for search and content retrieval. `alphaxiv.org` is a built-in preferred search domain; this project does not connect to AlphaXiv MCP.
+## Set up your local instance
 
-## Repository layout
-
-```text
-src/
-├── index.js                 Service entry point and dependency assembly
-├── config/index.js          Environment configuration
-├── core/                    Queue, SQLite, research/writing, notifications
-├── mcp/                     Aggregate-only production read model and read-only MCP server
-├── triggers/                Slack and cron triggers
-├── workflows/               Article types, prompts, preferred sources
-├── channels/                WeChat, Customer.io, and mock draft channels
-└── lib/                     Gates, fixed images, covers, rendering input
-
-skills/
-├── latepost-ai-writer/      Versioned Chinese AI/business/technology writing method, archetypes, and checklist
-└── global-macro-strategy-writer/  Cross-asset macro method, three archetypes, and 368-sample index
-
-scripts/
-├── install-launchd.sh       Install the local persistent service
-├── uninstall-launchd.sh     Uninstall the local persistent service
-├── status.mjs               Inspect task status
-├── research-trace.mjs       Inspect Exa queries and selected sources
-├── check-openrouter.mjs     Validate OpenRouter configuration
-├── check-egress.mjs         Read-only external API connectivity checks
-├── check-customerio.mjs     Read-only Newsletter audience and remote-state checks
-├── check-discord.mjs        Read-only Discord webhook target check; never posts
-├── check-translation.mjs    Generate a local structured-translation acceptance draft
-├── requeue-translation.mjs  Safely recover failed translations with checkpoints
-├── requeue-analysis-gate.mjs Safely recover V2 analyses blocked by legacy code gates
-├── check-documents.mjs      Read-only private Notion / Google Docs / Linear acceptance checks
-├── google-docs-oauth.mjs    Generate a local Google Docs refresh token
-├── auth-oic-session.mjs     Refresh the Opening Digest OIC browser session
-├── run-opening-digest-acceptance.mjs Run isolated Opening Digest production acceptance
-├── run-macro-acceptance.mjs Run local macro acceptance
-├── deploy-digitalocean.mjs  Run DigitalOcean preflight and immutable deployment
-├── build-mcp-read-model.mjs Build the sanitized production MCP read model
-├── start-mcp-server.mjs     Serve the loopback-only read-only MCP endpoint
-├── preview-newsletter.mjs   Generate a local Newsletter HTML preview
-├── preview-opening-digest.mjs Generate local Customer.io/WeChat/Discord Opening Digest previews
-├── eval-newsletter.mjs      Offline newsletter quality rubric (optional --judge LLM pass)
-├── eval-run.mjs             Offline eval harness: labeled cases, meta-eval (FN/FP), --mutate defect-injection recall
-├── eval-harvest.mjs         Convert a real run directory into a labeled eval case (JSONL line)
-├── eval-value.mjs           Offline value metrics: strategy expectancy, reader feedback, edit distance
-└── update-render-golden.mjs Update rendering golden files
-
-deploy/
-├── zen-content-hub.service Linux systemd service template
-├── zen-content-hub-backup* SQLite/runtime-asset backup script, unit, and timer
-├── zen-content-hub-mcp*    Isolated exporter, MCP, tunnel, and audit-log units
-└── README.md               DigitalOcean deployment, update, and backup guide
-```
-
-See [`docs/GUIDE.md`](docs/GUIDE.md) for a more detailed code map.
-
-## Installation and configuration
-
-The service requires Node.js 22 or later plus OpenRouter, Slack, and WeChat Official Account credentials. QDII queries also require Python 3.11+. Original analysis requires Exa; translation does not. Local text extraction from analytical PDFs requires Poppler's `pdfinfo` and `pdftotext`. Scanned-document OCR and structure-preserving PDF translation require Datalab. Newsletter workflows also require a Customer.io App API key.
-
-The Slack App must include `files:read` in its Bot Token Scopes. Without it, message events still include PDF names and private URLs, but downloads return the Slack login page. After adding the scope, reinstall the App in the workspace and update the production `SLACK_BOT_TOKEN`. The service validates the real PDF signature before invoking Poppler or Datalab and reports the permission issue instead of misclassifying login HTML as a damaged PDF.
+Use Node.js 22 or later. Configure OpenRouter, Slack, and WeChat credentials for the core service.
+Add Exa for original research and a Customer.io App API key for newsletter workflows. Use Python
+3.11+ for QDII holdings. Install Poppler to read searchable PDFs and configure Datalab for scanned
+PDFs or structured PDF translation.
 
 ```bash
 npm ci
-npm run setup:qdii
 cp .env.example .env
 ```
 
-After populating `.env`, run:
+Set `WORK_DIR` and `DB_PATH` to writable local paths. Fill in the credentials you need in `.env`.
+Keep `.env`, task databases, and generated content out of Git. Run `npm run setup:qdii` if you
+enable QDII holdings.
+
+Give your Slack app the `files:read` Bot Token scope before you use private Slack attachments.
+Reinstall the app after you change its scopes. Without this scope, Slack can return a login page
+instead of an attached PDF.
+
+For private Notion pages, Google Docs, or Linear issues, configure read-only access and share each
+source with the integration. Follow the [private document setup guide](docs/private-documents.md). A
+task stops if it cannot read a private source you supplied.
+
+## Run and check the service
+
+Run the required check before you start or deploy changed code:
 
 ```bash
 npm run check
-npm run check:openrouter
-npm run check:earnings-calendar
 ```
 
-`check:earnings-calendar` performs a live Yahoo/yfinance earnings-calendar connectivity and schema check. It is not part of the default offline `npm run check`.
+This checks syntax and architecture, runs offline tests, and audits production dependencies for
+high-severity issues. The dependency audit needs access to the npm registry. Run live connection
+checks when you configure or change the corresponding service:
 
-The service does not restrict public IP addresses, maintain an egress-IP allowlist, or block startup, research, or publishing because an IP changed, an IP lookup failed, or proxy variables are present. External requests use the host and Node.js runtime's normal network configuration. Real DNS, TLS, timeout, and target-API failures remain ordinary network errors. `npm run check:egress` is a read-only connectivity check and is not a runtime gate.
+```bash
+npm run check:openrouter
+npm run check:documents -- "<private-document-url>"
+npm run check:customerio
+```
 
-## Running the service
-
-Start directly:
+Start one local instance:
 
 ```bash
 npm start
 ```
 
-A safe rehearsal performs real research and writing without creating a WeChat draft:
+Use a rehearsal when you want to exercise research and writing without creating a real draft or
+sending an email:
 
 ```bash
 HUB_DRY_RUN=1 npm start
 ```
 
-Dry-run uses `DB_PATH + .dry-run.db` and `WORK_DIR/dry-run`, and disables real publication and background delivery flushing. Existing real runs and outboxes are not restored, pruned, or consumed by a rehearsal. Research/model calls and Slack rehearsal notifications can still use live services.
+A rehearsal uses a separate database and task directory. It can still call research and model
+services and send Slack notifications. Stop any launchd or systemd instance that uses the same Slack
+tokens before you start a manual instance. Two instances can consume the same Slack messages.
 
-Run persistently on macOS:
+For persistent macOS runs and logs, follow the [developer guide](docs/GUIDE.md). Code and `.env`
+changes take effect only after you check and restart the service.
 
-```bash
-scripts/install-launchd.sh
-launchctl print gui/$(id -u)/com.zentrading.content-hub | head
-tail -f ~/Library/Logs/zen-content-hub/out.log
-```
+## Send and inspect a Slack task
 
-Restart after code or `.env` changes:
+Send the bot a direct message or mention it in an allowed channel. In production, set
+`SLACK_ALLOWED_USER_IDS`, `SLACK_ALLOWED_CHANNEL_IDS`, and `SLACK_RATE_LIMIT_PER_MINUTE` before
+accepting requests.
 
-```bash
-launchctl kickstart -k gui/$(id -u)/com.zentrading.content-hub
-```
+For example, send `macro: Explain how a rate decision could affect equities and bonds` or
+`translate: Translate the first 5 pages of https://example.com/paper.pdf`. A bare link starts WeChat
+analysis; it does not request translation. To cancel, send `stop the current task` in the original
+task thread. The bot will not force-stop a task after a remote draft creation may have started.
 
-Do not run a launchd instance and a manual instance at the same time; they would consume Slack messages twice.
-
-### Persistent Linux / DigitalOcean service
-
-The repository includes a systemd service template, minimum directory layout, health checks, updates, and SQLite/runtime-asset recovery-unit backups. See [`deploy/README.md`](deploy/README.md). The recommended locations are `/opt/zen-content-hub` for code, `/var/lib/zen-content-hub` for runtime data, and `/etc/zen-content-hub/zen-content-hub.env` for secrets.
-
-Health endpoints are disabled by default. Enable them with `HEALTH_HOST=127.0.0.1` and `HEALTH_PORT=8787`:
+Inspect task status or the sources selected for a run:
 
 ```bash
-curl --fail http://127.0.0.1:8787/health
-curl --fail http://127.0.0.1:8787/ready
-```
-
-`/health` means the process and local state are readable. `/ready` additionally requires an active Slack Socket Mode connection. Both expose only aggregate queue, resource-gate, and delivery-outbox counts (`active`, `pending`, `waiting`, and limits), never task text, user/channel IDs, webhook URLs, or credentials. A transient Slack outage does not block persisted tasks: success, failure, cancellation, clarification, and core QDII replies enter the SQLite outbox and are delivered according to the task's current terminal state after reconnection. Formal Opening Digest WeChat and Discord derivatives also use the persistent delivery outbox. Stale notifications are discarded, and notification failures never rewrite a completed draft as failed.
-
-### ChatGPT production read-only MCP
-
-The optional MCP integration gives ChatGPT aggregate production business metrics without granting access to the production database itself. A low-priority timer reads a fixed 90-day window, maps every dimension through an allowlist, classifies failures into fixed categories, and atomically writes a separate read model. The MCP process can read only that model and can write only its JSONL audit log. It cannot access prompts, Slack messages, task IDs, titles, raw errors, recipient information, remote IDs, payloads, artifacts, API keys, or arbitrary SQL.
-
-Every tool advertises MCP `readOnlyHint: true`, `destructiveHint: false`, and `openWorldHint: false`. Results include `asOf` and `lagSeconds`; the service fails closed when the read model is stale, the audit log is unavailable, or a query exceeds its rate, concurrency, row, request, or response limit. It binds only to loopback. Production access should use OpenAI Secure MCP Tunnel, which keeps the server private and requires no inbound firewall port. See [`docs/production-readonly-mcp.md`](docs/production-readonly-mcp.md) for the security model, tools, installation, ChatGPT connection, audit procedure, and multi-server pattern.
-
-Production remains one Node.js process and one SQLite WAL database. The validated 1 vCPU/2 GB production host runs at `MAX_CONCURRENCY=2`; a third task stays queued. Opening Digest has non-preemptive queue priority. Browser work, WeChat writes, and Customer.io writes remain serialized; OpenRouter is capped at two in-flight calls, Exa Search at 8 QPS, and Slack posts at one per channel per second. The application default remains one task for unvalidated environments, and production startup rejects values above two.
-
-Code changes do not hot-reload. Package a specific CI-approved commit as an immutable release according to [`deploy/README.md`](deploy/README.md), run `npm ci && npm run check` in an independent release directory, verify the SQLite/runtime-asset recovery unit, and only then switch and restart the single systemd instance. Never overwrite `/opt/zen-content-hub` from a dirty local worktree.
-
-`RUN_RETENTION_DAYS` controls retention of terminal task records and their isolated run directories. `SLACK_THREAD_RETENTION_DAYS` controls thread context and event-deduplication records. Cleanup runs at startup. `cancelled` and `needs_input` use the same retention policy as other terminal states. Explicit cancellation removes the entire unfinished run directory; a task awaiting clarification keeps only `research-trace.json` and immediately removes other partial output. Back up the database and `/var/lib/zen-content-hub` before shortening retention.
-
-Inspect live Exa calls and the latest company research trace:
-
-```bash
-tail -f ~/Library/Logs/zen-content-hub/out.log
+npm run status
 npm run trace:research -- company
 ```
 
-## Slack natural-language entry point
-
-In a direct message, talk to the Bot like a normal AI assistant. Public channels require `@Bot` to avoid ingesting ordinary conversation. Under `NODE_ENV=production`, callers must be restricted with `SLACK_ALLOWED_USER_IDS` and `SLACK_ALLOWED_CHANNEL_IDS`, and rate-limited with `SLACK_RATE_LIMIT_PER_MINUTE`. New messages and final edits wait through a five-second quiet period by default; configure it with `SLACK_EDIT_DEBOUNCE_MS`.
-
-Tasks are persistently deduplicated by `channel + message_ts + revision`. Editing the original message or adding prompt details in its thread cancels, cleans, and replaces an unpublished earlier revision. The enqueue acknowledgement includes the complete request, exact model/entity version, link count, and revision number.
-
-Chinese and English instructions use the same router. The untruncated original Slack prompt is the highest authority for WeChat analysis requirements; workflow defaults cannot override its subject, comparison set, viewpoint, structure, length, or prohibitions. English is only the instruction language: WeChat and translation output remains Simplified Chinese by default, while Newsletter keeps its own language rules. A model-capability comparison remains general prompt-driven analysis even if it says `deep dive`; it does not trigger company financials, SEC, or value-chain research. A link is top-priority user material, not automatic translation intent. Only an explicit translation request enters the full translation workflow. Bare links and untyped tasks default to WeChat analysis.
-
-QDII equity holdings accept `QDII:`, `Fund:`, `Holdings:`, `基金查询：`, or natural language containing a six-digit fund code plus QDII/fund/holdings/`持仓`. The code and holdings intent must appear in the user's instruction; words or digits inside a source URL never select this data workflow. Requests to write an analysis post/article from a Linear issue or other linked source remain WeChat analysis, where the document body and tables are read as first-class user material. Without an explicit channel, a real QDII data query returns an English reply in the original Slack thread. `微信：` creates a Chinese WeChat draft by default, while `Newsletter:`, `Email:`, or `邮件：` creates an English Customer.io draft. An explicit language instruction overrides the default. The workflow produces both reply and draft only when both are explicitly requested. Ordinary Newsletter tasks remain draft-only.
-
-User URLs and Slack attachments are read in full before cross-checking against the latest official/primary and configured preferred sources. Expanded search is disabled only when the original prompt explicitly says to use only that link; the planner cannot invent an exclusive-source constraint. Slack-escaped URLs are restored during enqueue and extraction. If Exa returns a crawl error or empty result for one user page, the service performs one targeted recovery search using domain, path, campaign semantics, and task requirements, then records each URL state and recovery result in `research-trace.json`.
-
-PDFs, Notion, Google Docs, Linear issues, and GitHub repositories/files enter as first-class user sources but are not automatically treated as official facts. Private Slack files use the Bot token. Analytical PDFs use Datalab for structured parsing when available or Poppler for searchable text otherwise; scanned files fail explicitly without OCR. A task becomes `needs_input` only when user material and a primary source each carry clear evidence that conflicts on a core premise in a way that time or measurement cannot explain. The Bot asks one precise question in the original thread and does not repeat the conflict after an answer. Missing material, unverified models, and audit issues do not cause clarification loops; the system uses risk, impact, source, and confidence to choose a local repair or retain the issue for review.
-
-To stop work, send `@ZenBot 停止当前任务`, `停止进程`, `取消任务`, `stop the current task`, `cancel task`, or `abort this job` in the original task thread. Queued work is removed immediately. Running work aborts network requests, becomes `cancelled`, and deletes its own `runs/<run-id>/` directory while ZenBot remains online. A channel-level stop is accepted only when exactly one task matches; otherwise the Bot lists the matching runs and asks you to stop from the original thread. Once WeChat or Customer.io draft creation begins, the task is not force-killed because a remote draft may already exist without a locally persisted `media_id`; the Bot reports this state clearly. Ordinary workflows create drafts only. `opening-digest` follows its separate audience and send gates.
-
-## Workflows
-
-| ID | Slack prefixes | Purpose |
-|---|---|---|
-| `wechat` | `wechat:`, `微信：`, no prefix | General WeChat Official Account article |
-| `macro` | `macro:`, `宏观：`, natural language | Cross-asset macro event note, mechanism deep dive, or weekly review; WeChat draft only, no cron |
-| `earnings` | `earnings:`, `财报：` | Earnings preview/review; fixed framework fills gaps only when the prompt provides no structure |
-| `sector` | `sector:`, `行业：` | Sector analysis; fixed framework is fallback only |
-| `morning` | `morning:`, `晨报：` | 24–48-hour morning brief |
-| `translate` | `translate:`, `直译：`, `翻译：` | Faithfully translate the first link's structured content within the requested scope |
-| `company` | `company:`, `公司：`, `个股：`, `深度：` | Explicit company financial, competitive, or value-chain analysis; does not capture model/product comparisons |
-| `email` | `email:`, `邮件：` | Generate a versioned newsletter and create a Customer.io review draft |
-| `qdii` | `qdii:`, `fund:`, `holdings:`, `基金查询：`, natural language | Query mainland public-fund QDII equity holdings and reply in Slack; may supply WeChat/Newsletter evidence |
-
-These internal workflows are hidden behind rule-first, model-fallback natural-language routing. `macro` is selected automatically only when both a macro/cross-asset subject and analytical intent are present. It covers policy, economic data, rates, FX, liquidity, equities, commodities, credit, risk appetite, volatility, and digital assets. Company, earnings, and sector requests retain priority, and a mixed request chooses one complete workflow for the final question.
-
-Model-profile routing is independent of the destination workflow. Named options strategies and requests to construct, compare, recommend, hedge with, or evaluate an options strategy select `options-strategy`; ambiguous options analysis may use the existing GLM router, but a market-data-only request does not select the options-strategy profile. Without evidence containing a timestamp, expiry, strike, and quote basis, the draft may discuss only strategy type, conditions, risks, and invalidation—it must not estimate contracts, premiums, Greeks, probabilities, liquidity, or position size. Macro drafts retain their stricter ban on concrete buy/sell legs and trade instructions even when the options-strategy profile is selected.
-
-WeChat Analysis V2 freezes the original prompt into a `TaskContract`, derives English names, legal names, tickers, or regulatory aliases for Chinese entities, and produces up to `ANALYSIS_SEARCH_MAX_QUERIES` targeted searches (eight by default). Every task deterministically includes at least one Chinese and one English query, preferably two of each. Chinese company tasks also add official and industry searches for the English legal name; company workflows run quarterly-financial, regulatory-disclosure, and value-chain searches in parallel.
-
-Dynamic queries containing “latest”, “newly released”, or “current” default to the previous `ANALYSIS_RECENT_WINDOW_DAYS` days (60 by default). Static official product pages and historical material are not constrained by this window. Official domains only discover candidates: a source must also match publisher, page type, and target entity before entering primary evidence. Within the same evidence tier, prefer English sources and independent third-party reporting or research in any language. Government-funded, state-owned, and public-broadcast media are removed from search results, while primary regulator, exchange, and statistics-agency documents remain valid. A restricted-media URL supplied by the user remains context only and cannot act as cross-validation or a final citation. Extend the built-in lists with `EXA_EXCLUDED_MEDIA_DOMAINS` and `EXA_INDEPENDENT_MEDIA_DOMAINS`. Unsupported `x.com`/`twitter.com` domains are removed before Exa requests to prevent a 4xx failure of an entire search lane. Results are ranked and quota-limited by user source, primary source, professional preferred source, open source, language/independence, and publication date before becoming the request-by-request `EvidenceMatrix`.
-
-After the EvidenceMatrix, `wechat`, `sector`, `company`, and `earnings` use only the versioned `latepost-ai-writer` skill. `macro` loads both `global-macro-strategy-writer` and `latepost-ai-writer`: the macro skill owns fact/priced-expectation/incremental-information distinctions, cross-asset transmission, base and adverse scenarios, observation signals, and invalidation conditions. LatePost contributes evidence accounting, attribution, causal progression, fact auditing, and anti-fabrication discipline.
-
-One direct primary or original source may support a core fact. Without primary evidence, the article must narrow itself to verified facts, open questions, and observation conditions. Key observation levels must be reviewable. The auditor prioritizes direct evidence for key numbers, market pricing, and market reaction in up to five selected end sources. High-risk inferences may remain without blocking a draft, but Slack requests human review. Do not write buy/sell, price-target, entry, exit, stop-loss, or position-sizing instructions. Only reliable data may enter Markdown tables with measurement, timestamp, and source.
-
-No skill may override the original Slack prompt, source gates, user structure, workflow-specific method, or fixed output contract. Skill summaries, selected archetype, routing rationale, evidence boundary, final sources, and audit results are stored in `research-trace.json`. Skills do not apply to translation, morning briefs, or Newsletter, and may not make an article claim to represent a reference account or reproduce reference material.
-
-Run the complete macro research, writing, audit, and pre-render path locally without Slack. `--dry-run` forces the mock channel and never calls the WeChat draft API:
-
-```bash
-npm run accept:macro -- --dry-run
-```
-
-Translation follows one fixed structured pipeline. It recognizes Chinese and English scopes such as `前 11 页`, `第 3–8 页`, `第 2.1 节`, `从 Introduction 到 Conclusion`, `first 11 pages`, `pages 3–8`, and `translate the Introduction section only`. It translates the full source only when no scope is present. English instructions do not change the target language; English sources still translate to Simplified Chinese by default.
-
-arXiv prefers official HTML. Ordinary HTML preserves heading hierarchy, paragraphs, lists, quotations, original images and captions, tables, formulas, code, and references. Titled sandboxed `srcdoc` charts are lazy-loaded through the existing Chrome instance and captured in place as PNG; chart titles and explanations enter translation units, while external video remains as a source link. Notion prefers the official Markdown endpoint when `NOTION_API_TOKEN` is configured. Linear issues in the `zen-trading` workspace use the official GraphQL API when `LINEAR_API_KEY` is configured, and only the issue title and description are translated.
-
-Datalab converts PDFs to structured HTML. Sibling pagination containers are concatenated in original `data-page-id` order and never passed through single-article Readability selection. A completed result must have a valid quality score, a continuous container set exactly matching the requested pages, and bidirectional agreement between returned images and HTML references. Poppler's text layer is then cross-checked against Datalab source text. Missing pages, collapsed body coverage, or detached figures hard-fail before translation and publication. Slack success messages and traces use actual page-level coverage and never report content without page records as “0 pages.”
-
-alphaXiv links map by paper ID to the same official arXiv HTML/PDF while retaining the user URL for attribution. Bot detection relies on challenge-page structure/title or a short prompt page with no article body; paper text discussing CAPTCHA or `access denied` is not blocked.
-
-Translation replaces only translatable text nodes: titles, body, lists, figure captions, and table captions. Original image files, formulas, code, citation numbers, URLs, and reference structure remain unchanged. Image support is determined by actual signatures rather than extensions or binary metadata text. SVG/WebP assets are rasterized to PNG and immediately signature-checked; a valid PNG containing SVG metadata is not rejected.
-
-A translation can run up to `TRANSLATION_BATCH_CONCURRENCY=2` independent batches, while the global OpenRouter resource governor still enforces `OPENROUTER_CONCURRENCY=2` across every workflow. Normal batches keep the conservative 24-item/8,000-character limits; highly fragmented sources whose average unit is at most 120 characters adapt to 48 items without raising the character limit. Each OpenRouter attempt writes content-free telemetry to `research-trace.json`: phase/batch, item and character counts, queue wait, inference duration, status, generation ID, resolved model/provider, finish reason, usage tokens, reasoning tokens, and cost. Prompts and completions are never copied into this telemetry.
-
-Original table cells are not translated or rebuilt as Markdown/HTML. The table is rasterized directly into a high-resolution PNG and inserted in original order, avoiding WeChat font, wrapping, and width distortions. Titles do not gain a translation suffix. The opening contains exactly one source-information block with original title, author, site, and URL, but no date or translation scope; repeated paper-title-page author and affiliation lists are removed before the abstract.
-
-Body highlighting targets at least one phrase per roughly 200 Han characters and preferably two or three, prioritizing terminology, mechanisms, central claims, or key opening sentences; whole-paragraph bold is forbidden. Highlighting is degradable styling: malformed Markdown is safely removed without retranslation or blocking.
-
-Numeric validation is semantic. Equivalent forms of `zero/one`, compound English numbers, ordinals, K/M/B/T, thousands separators, percentages, and Chinese ten-thousand/hundred-million units pass. Percentage morphemes are not misread as the number 100. LaTeX macros, URLs, formula/citation placeholders, tickers, and model names are immutable tokens. Untranslated-text detection masks these tokens first; formula-only or citation-placeholder-only blocks use token equivalence and do not mistake a marker such as `ZEN_INLINE` for untranslated prose.
-
-Each block with an explicit number, immutable-token, missing-text, or untranslated-text problem receives at most two targeted repair rounds. A low-confidence numeric-format warning is retained for human review without spending two additional inference rounds. If an explicit number or immutable-token mismatch remains, the service selects the best complete translation, keeps the article clean, and records block ID, difference, source, candidates, and final choice in a Slack review notice and `research-trace.json`. Missing, duplicate, reordered, or visibly untranslated blocks still hard-fail, as do missing original images/table images/formulas or damaged assets. Each structurally valid text unit is checkpointed continuously (per-unit saves are throttled and flushed at every batch boundary), so another unit failing in the same batch does not discard completed work. Concurrent workers stop claiming new batches after the first error and wait for already-started work to settle before returning failure. Embedded text inside original images and table images is not OCRed, translated, or redrawn. Faithful translation takes priority over original-writing dash style; dollar signs before numbers no longer produce warnings, while all safety, integrity, fixed-template, and layout gates remain active.
-
-HTML translation does not require Datalab. DigitalOcean Chrome captures dynamic embedded charts under the existing same-origin isolation without adding third-party parsers or cross-domain access. PDF translation requires `DATALAB_API_KEY`; orchestration, asset persistence, fixed-template rendering, and draft creation remain on DigitalOcean, while Datalab only performs temporary PDF parsing. The current 2 GB Droplet does not need Marker/MinerU installed.
-
-Original analysis does not require Datalab when Poppler can extract a text layer. Scanned documents or tasks requiring chart/table/formula structure should configure Datalab. If a user document is blocked by its CDN, analysis tries exact search cache and URL-semantic recovery. For FCC PDFs it may derive a `DA` number from evidence and read the matching official TXT attachment from `docs.fcc.gov`, but only when institution, document number, and subject all match. If equivalence cannot be proved, the task stops instead of guessing a summary.
-
-Notion pages use the official Markdown endpoint when `NOTION_API_TOKEN` is configured. Private pages must also be shared with the integration through `Add connections` in Notion. Linear issues in `zen-trading` use a read-only `LINEAR_API_KEY`; the first release reads only the issue title and description and does not follow comments, attachments, child issues, or outbound links inside the description. Public Google Docs can export HTML directly. Private documents should configure `GOOGLE_DOCS_CLIENT_ID`, `GOOGLE_DOCS_CLIENT_SECRET`, and `GOOGLE_DOCS_REFRESH_TOKEN`; the service refreshes short-lived access tokens automatically, while legacy `GOOGLE_DOCS_ACCESS_TOKEN` is a compatibility fallback. Analysis and translation share this read-only authentication path. If a user-provided Notion, Google Doc, or Linear issue cannot be read, the task stops rather than ignoring the source and continuing search. Public GitHub repositories need no token; use a read-only `GITHUB_TOKEN` for private repositories or higher limits. See [`docs/private-documents.md`](docs/private-documents.md).
-
-All article, PDF, document-API, and redirected URLs reject private network addresses on every hop and are bounded by source size, PDF page count, and redirect count. When configuring a new source, browser, Notion, Google Docs, Linear, or GitHub integration, first run a real-link acceptance check with `HUB_DRY_RUN=1`. See `.env.example` for configuration examples.
-
-Generate an isolated temporary translation acceptance draft without starting Slack or requiring Slack/WeChat credentials. This calls OpenRouter but never the WeChat API; set `TRANSLATION_ACCEPTANCE_WORK_DIR` only when the artifacts must be retained at a specific local path:
-
-```bash
-npm run check:translation -- "翻译前 11 页 https://example.com/paper.pdf"
-```
-
-An operator may resume a failed translation using the original SQLite `runs.id`; do not use the hashed run-directory name:
-
-Candidate-roster deliverables such as `quant_expert_search/output/options_*.json` may instead be anonymized and 1:1 translated into a publishable Chinese reading article. `scripts/translate-evidence-local.mjs <options.json>` caches the OpenRouter evidence translation next to the source; `scripts/build-anon-options-article.mjs <options.json>` builds `*_anon_zh.md` with deterministic `从业者 NN` and industry-category company placeholders; and `scripts/publish-local-article.mjs <article.md>` publishes the finished article to the WeChat draft box using the current runtime credentials. These scripts are local/maintenance entry points and do not start the Slack consumer.
-
-```bash
-npm run requeue:translation -- <run-id>
-```
-
-The command accepts only failed or interrupted `translate` tasks with a valid checkpoint. It rejects tasks with a `media_id`, other workflows, and failure types outside its allowlist. After requeueing, restart the single instance through the deployment environment's normal mechanism so startup recovery continues from the checkpoint.
-
-V2 analyses historically blocked at `gate` by code-fence or four-space-code rules may use:
-
-```bash
-npm run requeue:analysis-gate -- <run-id>
-```
-
-This command accepts only historical `wechat`, `sector`, `company`, or `earnings` code-gate records, plus exact historical safe-rendering false positives for code line-break nodes. The task must have no `media_id` and must retain valid Slack notification metadata. All other states, gates, and published tasks are rejected. The command only changes the task to queued; it does not execute it directly.
-
-Original analysis prefers official sources, but relevance and entity matching outrank domain. The writing model receives only EvidenceMatrix-selected material rather than dozens of mixed sources. Fact auditing for the five V2 analysis workflows (`wechat`, `sector`, `company`, `earnings`, and `macro`) classifies each issue by `impact` (core/supporting/incidental), `risk` (high/low), `origin` (user request, user material, evidence, inference, or model addition), and `confidence`.
-
-Only high-confidence issues may be edited automatically. A model-added unsupported core or high-risk claim is locally qualified/replaced when direct evidence exists, otherwise removed. Removing a core sentence triggers one evidence-bound local rewrite attempt; if it still cannot stand, the workflow stops. Low-risk non-core issues, low/medium-confidence issues, explicit user premises, and labeled inferences remain in the article and are recorded for Slack/trace review. Premises from user URLs are attributed as project README/document statements; prompt-only premises are written as engineering assumptions, without mentioning Slack or “the user.” A second audit pass runs only when the first pass applied high-risk or core-impact edits or retained high-risk claims; it reviews only modified sentences and remaining high-risk facts and cannot cascade into a full rewrite. Legal V1, morning, and Newsletter do not use this tiered audit.
-
-WeChat body copy contains no citation footnotes or inline source links. The system deterministically appends one left-aligned sources section with up to five actually used references from the EvidenceMatrix. URLs are deduplicated after removing common tracking parameters, URL-shaped source titles display the domain, and gates count only real Markdown link targets—not label text or image assets.
-
-## Pre-publication processing
-
-### Fixed-template contract
-
-Every real draft created by the Bot must use a centrally registered fixed template. `src/lib/draft-template.js` is the only template registry. Ordinary WeChat and Customer.io use `zen-wechat/zen-trading@11` and `zen-customerio/zen-research@5`. Ordinary WeChat materializes list markers in final HTML so WeChat cannot drop CSS pseudo-element bullets or ordinals, preserves ordered-list start/value semantics for faithful translations, and normalizes loose-list paragraphs to the same effective size as body copy. Ordinary WeChat section headings are rasterized onto a clean copy of the original heading-card artwork (`01` plus a right-aligned English eyebrow and Chinese title) so WeChat cannot redraw inner borders. Since template v11, `$…$`/`$$…$$`/`\[…\]`/`\(…\)` formulas are protected before the markdown renderer, rasterized to transparent 3x PNG images via MathJax plus the shared Chromium, and hard-gated so no placeholder, MathJax artifact, or raw TeX command can reach a draft; CJK-bearing formulas raise a review warning instead of failing. The Chinese title matches the rendered body copy's visual size after the card is scaled to the article width, while the English eyebrow stays smaller. Chromium fits long bilingual copy inside locked top, right, and bottom safety margins, shrinking it only when necessary and rejecting a heading that still cannot fit at the minimum scale. Opening Digest uses `zen-wechat/zen-trading@9` and `zen-customerio/zen-research@8`; both templates include the fixed Discord community link below the digest body (plain text on WeChat, which forbids off-site hrefs). A real channel fails before any publishing API call if its template is unregistered, mismatched, or unlocked. Task text, workflows, and individual runs cannot choose another template. `mock` is dry-run only and is not a real draft channel.
-
-With `OPENING_DIGEST_WECHAT_ENABLED=true`, `opening-digest` first sends or schedules the English Customer.io email, then persists the same frozen quote, earnings-preview, copy, and OIC payload before deriving the Simplified Chinese WeChat draft. A dedicated planner first ranks current-window evidence by broad-market reach, increment, persistence, and source strength; tests a contrary explanation; selects at most ten sources; and compares the read with up to 20 prior formal editions. The writer then produces a thesis-first brief with an at-most-two-sentence Opening call, 2–3 evidence chains, cross-currents, and 3–5 observable signposts. The usual narrative target is 450–650 words, but sparse evidence is not padded. Before translation, the WeChat-only payload removes citation markers, parenthetical sources, Markdown targets, and bare source URLs while preserving semantically meaningful labels as plain text; email and Discord retain the original links. Customer.io and Discord show `Zen Opening Digest · date` as the fixed subtitle; WeChat uses `Zen Research 日报 · date` in the body, while its external article title is `动态标题（日报· YYYY-MM-DD）`. A dynamic title that remains invalid after repair falls back to `今日开市要点` without blocking a valid body. Isolated TEST drafts retain the `[测试]` prefix and use `MM-DD` in that suffix to remain within WeChat's 32-character limit.
-
-With `DISCORD_OPENING_DIGEST_ENABLED=true`, only the formal U.S.-equity-session cron run queues the same frozen English payload to the Incoming Webhook configured by `DISCORD_OPENING_DIGEST_WEBHOOK_URL`; manual Slack acceptance runs never post to Discord. The feed uses mention-free rich embeds for the nine-cell market snapshot, complete linked editorial copy, and all 20 OIC rows, splitting content deterministically to stay within Discord limits. `DISCORD_OPENING_DIGEST_CHANNEL_ID` optionally locks the webhook to `#newsletter-feed`. Each successful message ID is committed to SQLite before the next post. Read-only network failures and explicit rate-limit rejections survive restarts and honor `Retry-After`; an unknown POST result stops in `needs_review` to avoid duplicate messages; a terminal failure leaves the Customer.io result `done` and emits a dedicated Slack warning. Run `npm run check:discord` to verify the webhook and optional channel lock without posting a message. After the full offline check, `npm run acceptance:opening-digest -- --test-only` creates only the isolated TEST Customer.io email and its derived TEST WeChat draft; it never creates the formal cron identity or queues Discord.
-
-Before severe fact review, malformed analytical blocks receive one evidence-bound local refinement. Ordinary refinements revert if a link, number, ticker, date, or time changes. A clearly truncated draft, or a block that violates the OIC/options direction boundary, may be reconstructed only with already selected evidence: existing links must remain, every added link must match an allowed source, and the result still enters the severe fact audit. High-confidence core causal, entity-classification, release-status, number/date, contradiction, or link errors then use the existing two-round severe repair path. Ordinary quality defects remain trace-only degradations. The WeChat draft fixes `zen-wechat/zen-trading@9`, a nine-cell quote grid, and an OIC 20×8 two-row record block. A fixed plain-text Discord community invite (`https://discord.gg/EtNErjaN8`) sits below the body, before the survey and QR tail images. Each entry in the earnings preview is rendered as its own visual row on WeChat; the English email source remains unchanged. The WeChat sanitizer removes † citations whether or not they carry a URL, numeric markers including full-width digits, ASCII bracket footnotes such as `[2]`, and leftover empty brackets; residual markers do not add new hard-fail conditions beyond the existing gates. The editorial prompt forbids numbered citation and footnote markers in the source article. A verified WeChat delivery posts one Slack success notice (title and media ID) through the notification outbox, so it survives Slack downtime. Formal cron WeChat delivery retries transient translation/API failures up to eight times with bounded exponential backoff and survives process restarts. Draft creation snapshots recent IDs and permits one create request; an unconfirmed response is reconciled or moved to `needs_review`, never blindly recreated; once a `media_id` is known it is persisted immediately and never created again. Readback repairs update that same draft twice and perform a third read instead of delete/recreate. Terminal WeChat failure sends one precise warning and never changes the successful email result. `npm run retry:opening-digest-wechat -- <runs.id>` remains only for compatible historical pre-outbox translation failures.
-
-Formal Opening Digest Customer.io broadcasts keep the idempotent internal name `Zen Opening Digest · YYYY-MM-DD`; the recipient subject is `dynamic headline | Zen Opening Digest`. Manual Slack `opening-digest` triggers are isolated test runs and add a `[TEST]` prefix without a run ID in the recipient subject. Only a successful formal cron email records the structured headline, stance (`constructive|neutral|defensive`), confidence, thesis, change summary, and signposts; SQLite keeps the latest 20 formal trading-day editions, and manual tests never enter this history. The Customer.io internal name and cover asset keep a unique ID, and the WeChat title carries `[测试]`, so a test cannot discover, reuse, or overwrite the day's formal draft. Manual tests never enter `#newsletter-feed`; only weekday cron may create or reuse an unmarked formal Opening Digest and queue Discord delivery.
-
-Template redesigns must update the centralized implementation, increment registry versions, and synchronize channel tests, rendering goldens, and this README. Never bypass the template in one task. Titles, body, links, edition, and audience fill template slots without modifying the template itself.
-
-`src/channels/wechat-draft.js` runs these steps in order:
-
-1. Check title, suspected credentials, local paths, and format warnings. Code from a translation source or explicitly requested in the original prompt (including examples or ASCII diagrams) is deterministically authorized. The model cannot authorize code itself. Unauthorized code becomes a Slack review warning but does not block. Standalone four-space code becomes a `text` fence; existing fences, HTML `pre`, and nested lists remain unchanged.
-2. Check mobile readability of Markdown tables in original articles. Keep compact five-column tables. Split an unreadable wide table into narrow tables by retaining the first column and grouping three metrics, then run the final gate. Translation tables are already original-source PNGs and do not enter this rewrite.
-3. Inject `assets/zen-header-banner.gif` at the start of Markdown.
-4. For writing tasks other than translation, ask OpenRouter to plan up to `INFOGRAPHIC_MAX_IMAGES` images (template, data, insertion anchor), render them locally to SVG through `@antv/infographic` SSR in `tools/infographic-generator`, capture PNG with Playwright, and insert after the anchored heading or paragraph. Image text and numbers must come from the article. Planning, rendering, or anchor failures warn and skip only that image. Retries remove deterministically named `infographic-N.png` assets before regeneration. Disable globally with `INFOGRAPHIC_ENABLED=false`.
-5. Ask OpenRouter to extract cover fields, then render title and subtitle over the fixed white `assets/zen-cover-background.png` through `tools/cover-generator`, producing a 900×383 cover matching the source image. Set `COVER_GENERATOR_DIR` only for a replacement implementation. The browser uses `COVER_BROWSER_EXECUTABLE`, then the translation browser setting, then common Chromium/Chrome locations.
-6. Render body copy with `@wenyan-md/core` and fixed `assets/zen-trading.css`; code uses light highlighting with `macStyle:false`. Final HTML materializes list markers, normalizes list, citation, and source-information blocks to body font size, then blocks oversized non-heading text, duplicate source-information blocks, dangerous embedded nodes, and empty or structurally invalid code. Credential, local-path, and live-process-secret gates still apply to Markdown code.
-7. Append `assets/zen-survey-qr.jpg` and `assets/zen-footer-qr.png` in that order to final HTML. The survey must be the penultimate node and the community footer the final node, adjacent with nothing after them, before upload to WeChat. Override with `WECHAT_SURVEY_IMAGE` and `WECHAT_FOOTER_IMAGE`; both footer images must exist together.
-8. Upload images through `src/lib/wechat-render.js` with a content-hash dedup cache and bounded concurrency. When WeChat `material/add_material` rejects an animated GIF with `errcode -1` (it rejects high-frame-count GIFs before any size or quota check), the uploader re-encodes it once to at most 60 frames with the pinned Pillow runtime (`QDII_PYTHON_PATH`, sampled evenly with the total animation duration preserved) and retries; if re-encoding fails the original file is retried unchanged.
-
-Cover-field extraction falls back to template example data. Cover-file generation failure blocks publication.
-
-## Testing
-
-```bash
-npm run check
-```
-
-`npm run check` validates syntax, runs the complete test suite, and audits production dependencies at high severity. Tests use stubs or in-memory data and require no live business credentials. Golden tests lock rendering output. Update them only after confirming an intentional rendering change:
-
-```bash
-npm run test:update-golden
-```
-
-### Evaluation
-
-The offline eval harness answers three questions with three metrics:
-
-- **Metric A — correctness**: labeled fixture cases (`test/fixtures/eval-cases.jsonl`) replay the production routing, source-policy, citation-grounding, contract-gate, Opening Digest, options-strategy, and QDII-reconcile checks. Run with `npm run eval:run -- test/fixtures/eval-cases.jsonl`.
-- **Metric B — meta-eval**: is the auditor itself trustworthy? `--mutate` injects known defect classes (fabricated citation, secret leak, shifted breakeven, perturbed holding weight, …) into clean cases and measures checker recall; `--verdicts <file>` accumulates ground-truth-vs-verdict outcomes and `--meta <file>` reports false-negative / false-positive rates with Cohen's kappa. Fixture labels are a regression baseline; `npm run eval:harvest -- <run-dir>` converts real runs into independently labeled cases for honest calibration.
-- **Metric C — value**: `npm run eval:value` computes strategy expectancy vs. baseline, reader satisfied-rate, and editor edit distance over externally collected data (backtest outcomes, Customer.io click exports, draft-vs-sent pairs).
-
-## Extending the service
-
-- New article type: add `src/workflows/<name>.js` and register it in `src/index.js`.
-- New publishing channel: add `src/channels/<name>.js` with `publish()`, register it in `src/index.js`, and first register its fixed template in `src/lib/draft-template.js`. An unregistered real channel fails closed.
-- New scheduled task: add `cron:<expression>` to the workflow's `triggers`. Startup validates the expression and timezone. A fixed schedule that must catch up after restart also needs a stable business-date key and bounded catch-up window; a database uniqueness constraint prevents duplicate enqueueing.
-
-Preserve the contract that `runWriter()` creates `article.md` inside each task's isolated directory and that a successful publication persists `media_id` immediately for idempotency. Notifications are ancillary results: even through the durable outbox, a Slack delivery failure must not override a successfully created draft.
-
-### Customer.io Newsletter
-
-The Newsletter workflow uses the Customer.io App API and fixed `zen-customerio/zen-research@5` template to create a Newsletter Broadcast draft named `Zen Research日报 · YYYY-MM-DD`, using the task creation date. The remote name and email subject never receive a run suffix; the email subject and in-email `Vol. N` branding remain unchanged. Before creation, SQLite records the deterministic operation key `cio:newsletter:create:v1:<run-id>`, canonical payload hash, and same-name ID snapshot. An ambiguous response is recovered only from one verified new draft; otherwise the Bot stops in `needs_review` without issuing another create request. The write-ahead operation survives restarts. It never sets `send_now` or `scheduled_at`. Rendered HTML must carry the fixed template identifier or the Customer.io call is blocked.
-
-The desktop layout uses compact spacing. At widths up to 640px, shell horizontal padding becomes 4px and body/footer padding becomes 8px so data tables approach the card edges. The footer always displays `700 Leahy St, Redwood City, CA 94061` and company LinkedIn `https://www.linkedin.com/company/110921483`; neither environment variables nor a task may override them.
-
-Audience expansion is staged through `NEWSLETTER_AUDIENCE_STAGE=internal|pilot|full`: internal is `Newsletter · Internal Beta` (ID `17`), pilot is `Newsletter · Pilot` (ID `18`), and the full candidate group is `Valid Email Address` (ID `6`). The Bot reads each segment's live count and applies stage limits before creating a draft. `full` additionally requires `CUSTOMERIO_ALLOW_FULL_AUDIENCE=true`.
-
-All subsequent Customer.io Newsletters use the visible sender `Zen Trading <support@zentradings.com>`. Both the channel and read-only checker reject any other From address to prevent configuration drift.
-
-Every email ends with satisfied/not-satisfied links. With `CUSTOMERIO_NEWSLETTER_FEEDBACK_URL`, they append `rating` and `edition`; otherwise they fall back to a prefilled contact `mailto:`. Customer.io MCP is not part of the core publishing path, avoiding additional send permissions for automated tasks.
-
-Newsletter first classifies content. Market, sector, company, earnings, and data analysis are research content: they retain primary-source search and fact review but impose no minimum number of official links in body copy. Welcome emails, needs collection, Agent/product introductions, notices, invitations, and feature updates are relationship/notification content: they use only user material, perform no irrelevant market search, and require no official citation. An explicit request for official data or market analysis takes precedence and uses the research path.
-
-Run `npm run check:customerio` for a read-only check of live counts across all three stages, current drafts, and missing configuration.
-
-See [`docs/NEWSLETTER_ROLLOUT.md`](docs/NEWSLETTER_ROLLOUT.md) for the complete staged testing, review, and expansion procedure.
-
-### Network and publication asset boundaries
-
-The resource governor and cancellation decorators preserve DNS pinning. HTTP deadlines and OpenRouter permits remain active until the response body finishes, errors, or is cancelled. All local publication images must have PNG/JPEG/GIF signatures and resolve inside the run directory, except explicitly configured fixed template assets. Symlink escapes and encoded traversal are rejected. Accepted WeChat CDN images are safely downloaded before entering the third-party publisher, and the run records a publication asset manifest.
-
-### Publication recovery and retention
-
-Generation retries never wrap publication. Real writes have a durable operation record before their first request. A confirmed remote ID is reused; an unknown result is reconciled with read-only queries and otherwise becomes `needs_review`, with a durable Slack notice. This status must not be manually changed to queued. No automatic second create/send follows an ambiguous response.
-
-Formal Opening Digest freezes the email and derived payloads before writing to Customer.io. Email confirmation, run completion, activation of child outboxes and the success notification commit in one SQLite transaction. Startup resumes frozen publication intents without regenerating content. Missing historical frozen payloads never authorize deriving new content from an already-sent email. Derived delivery review/failure leaves the successful email done.
-
-Retention runs at startup and hourly, in batches of at most 100 runs. Unsent notifications, pending/review deliveries, unresolved operations and publication intents protect their parent run and artifacts. Slack context retains the original prompt and attachments plus the last eleven follow-ups; legacy threads missing their root must submit a new complete task.
-
-### 核心模块边界
-
-- `src/index.js` 负责装配、连接和生命周期；任务执行及生成重试在 `src/core/task-handler.js`。
-- `src/core/writer/` 分离模型客户端、研究、事实审查、Opening Digest 编辑和编排；`core/runner.js` 保留旧导入接口。
-- `src/lib/translation/` 分离文档获取、结构解析、浏览器、资产、翻译执行、校验、checkpoint 和渲染；原工作流文件保留兼容导出。
-- 所有不可信网络下载经 `src/lib/safe-fetch.js`；HTTP 重试、超时和正文生命周期分别集中在 `fetch-retry.js`、`http-timeout.js`、`response-lifecycle.js`。
-- 第三方微信发布器的全局替换只在 `src/lib/adapters/wechat-publisher.js` 安装。发布结果、冻结内容、远端操作状态和 checkpoint 使用 `publication-contracts.js` 的 Zod 契约。
-- 架构检查跟踪实际 ESM 导入图，拒绝循环依赖、基础库反向依赖业务层、业务模块导入启动入口，以及关闭 TLS 校验等高风险写法。此重构不改变固定模板或编辑策略。
-
-### 单实例、数据库与运维验收
-
-启动在恢复队列之前取得与真实数据库路径绑定的 SQLite 独占实例锁（独立 `.instance-lock` 文件）；符号链接别名共享同一把锁，进程退出后由操作系统释放。不要手工删除锁文件，不支持数据库硬链接或多进程扩容。旧版本没有该保护，切换版本时仍须停掉唯一旧实例。
-
-数据库以 `schema_migrations` 记录版本，当前为 2；升级是事务内的增量变更，拒绝打开高于代码支持版本的数据库。`/health` 的 `recovery` 字段提供最老排队时间、待核对操作、未完成投递和通知滞留时间，不包含正文或凭据。中断的已确认发布恢复为成功；已尝试而未完成的普通发布进入 `needs_review`，不会被直译自动恢复盲目重发。
-
-- `npm run check:runtime-offline`：本地 Python、Chromium、Poppler 的真实文件验收；无需业务凭据，测试中阻断网络。
-- `npm run check:backup-restore`：在临时目录构建和恢复合成备份，验证数据库、checkpoint、待补发记录和哈希；不接触生产数据。
-- `npm run check:production-inventory`：仅从 `deploy/target.env` 定位目标，验证 Droplet metadata 后读取运行与备份信息；可用时通过现有 doctl 账号核对云备份。
-- `npm run check:rollback -- --db /absolute/path/runs.db`：只读检查旧版本回滚是否安全；须先停止服务。有未完成操作或补发时禁止自动回滚启动旧代码。
-
-Linux CI 和部署的独立 release 验证包含离线运行时验收及恢复演练。生产部署仍只用既定 DigitalOcean 流程，由维护者安排切换。实施记录与未验证项见 [工程加固交付记录](docs/ENGINEERING_HARDENING.md)。
+If you need to recover a failed run, use the restricted commands in the
+[deployment guide](deploy/README.md). Do not edit SQLite task states by hand or retry an uncertain
+publish operation.
+
+## Find the code you need
+
+| To change | Start here |
+| --- | --- |
+| Service assembly and lifecycle | `src/index.js` |
+| Environment defaults and startup checks | `src/config/index.js` |
+| Slack and cron triggers | `src/triggers/` |
+| Task types and prompts | `src/workflows/` |
+| Queue, SQLite, research, writing, and notifications | `src/core/` |
+| WeChat and Customer.io draft channels | `src/channels/` |
+| Network gates, translation, and rendering | `src/lib/` |
+| Versioned writing methods | `skills/` |
+
+Register a new workflow in `src/index.js` after you add it under `src/workflows/`. Register a real
+draft channel and its locked template in `src/lib/draft-template.js`. A task cannot override a
+channel's template. Bump the template version and update rendering tests when you change its layout.
+
+Keep every run in its own directory through `runWorkDir()`. Pass untrusted URLs through
+`safeFetchResource()` so redirects, private addresses, and download limits receive the same checks.
+Record a remote write before you send it. If its result is uncertain, reconcile it with read-only
+calls or mark it `needs_review`; do not issue a second create or send request.
+
+Use the [developer guide](docs/GUIDE.md) for the detailed code map and extension points.
+
+## Deploy to production
+
+Run one process against one SQLite database. Set `MAX_QUEUE_SIZE` explicitly. On the validated 1
+vCPU / 2 GB host, use `MAX_CONCURRENCY=2`; do not exceed two. Protect production Slack access with
+user and channel allowlists.
+
+Deploy only through `npm run deploy:digitalocean`. Set the target in the untracked
+`deploy/target.env`; the deploy command verifies that it is a DigitalOcean Droplet. It stages and
+checks a separate release before switching the single systemd instance. Do not overwrite the active
+`/opt/zen-content-hub` release or restart the service before checks pass.
+
+Health endpoints are off by default. If you enable them, bind them to loopback. `/health` checks the
+process and local state; `/ready` also requires a Slack Socket Mode connection. Pending
+notifications survive Slack outages in SQLite.
+
+Follow the [deployment and recovery guide](deploy/README.md) for installation, backups, health
+checks, release activation, and rollback. Use the
+[newsletter rollout guide](docs/NEWSLETTER_ROLLOUT.md) for Customer.io audiences and Opening Digest
+acceptance. The optional [production read-only MCP guide](docs/production-readonly-mcp.md) explains
+how to expose aggregate metrics without exposing task content.
