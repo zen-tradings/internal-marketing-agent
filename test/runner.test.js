@@ -798,7 +798,7 @@ test('Opening Digest production planner selects evidence before the thesis-first
   config.writer.plannerModel = 'planner/model';
   const cleanDraft = `---
 title: Zen Opening Digest
-headline: Yields test tech conviction
+headline: Fed decision looms over narrow equity participation
 stance: neutral
 confidence: medium
 preheader: Cross-asset signals remain divided.
@@ -832,7 +832,7 @@ Firm yields constrain the read, while lower oil is a counter-current; the eviden
         supporting_evidence: [{ point: 'Firm yields are a constraint.', source_ids: ['OD1'] }],
         contrary_evidence: [{ point: 'Signals conflict.', source_ids: ['OD1'] }],
         selected_source_ids: ['OD1'], change_from_prior: { changed: false, summary: 'Initial baseline.' },
-        signposts: [{ observable: '10Y yield', source_ids: ['OD1'] }], headline_candidates: ['Yields test tech conviction'],
+        signposts: [{ observable: '10Y yield', source_ids: ['OD1'] }], headline_candidates: ['Fed decision looms over narrow equity participation'],
       }) } }] });
       return jsonResponse({ choices: [{ message: { content: cleanDraft } }] });
     },
@@ -840,7 +840,7 @@ Firm yields constrain the read, while lower oil is a counter-current; the eviden
   assert.equal(result.ok, true);
   assert.deepEqual(models, ['planner/model', 'm']);
   const written = fs.readFileSync(result.articlePath, 'utf8');
-  assert.match(written, /headline: Yields test tech conviction/);
+  assert.match(written, /headline: Fed decision looms over narrow equity participation/);
   assert.match(written, /\(\[Source\]\(https:\/\/example\.com\/a\)\)/);
   assert.doesNotMatch(written, /【https:/);
   const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));

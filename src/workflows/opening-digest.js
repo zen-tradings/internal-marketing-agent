@@ -39,7 +39,7 @@ The schedule is inserted later as Earnings ahead, so do not create that heading 
 Return Markdown only with this frontmatter:
 ---
 title: Zen Opening Digest
-headline: A specific 4-7 word headline, no more than 36 characters
+headline: An event-anchored professional headline naming today's single most market-moving or most distinctive development, 5-11 words, no more than 60 characters
 stance: constructive|neutral|defensive
 confidence: high|medium|low
 preheader: One specific sentence, no more than 140 characters
@@ -50,9 +50,11 @@ After frontmatter, write the at-most-two-sentence Opening call as one paragraph 
 ## What matters today
 Write 2-3 short paragraphs, each beginning with a bold judgment-led phrase.
 ## Evidence and cross-currents
-Write exactly two short paragraphs. The first paragraph presents the strongest supporting evidence for the opening call; the second presents the strongest contrary evidence or cross-current against it. Open each paragraph with a bold judgment-led phrase; do not use fixed labels such as "Supporting:" or "Constraining:". Inside each paragraph follow one line of reasoning: observed facts with inline links, then the transmission mechanism, then what it implies for the overall call. Keep each causal chain in its own sentence; do not stack several unrelated drivers into one sentence. The second paragraph must still be evidence-bound and cite supplied sources, never invented speculation. Do not add a third paragraph or a reconciling summary.
+Write exactly two short paragraphs. Together the two paragraphs must stay within roughly 60-75 visible English words (about 100 Chinese characters after translation); compress rather than pad. The first paragraph presents the strongest supporting evidence for the opening call; the second presents the strongest contrary evidence or cross-current against it. Open each paragraph with a bold judgment-led phrase; do not use fixed labels such as "Supporting:" or "Constraining:". Inside each paragraph follow one line of reasoning: observed facts with inline links, then the transmission mechanism, then what it implies for the overall call. Keep each causal chain in its own sentence; do not stack several unrelated drivers into one sentence. The second paragraph must still be evidence-bound and cite supplied sources, never invented speculation. Do not add a third paragraph or a reconciling summary.
 ## What to watch
-Write 3-5 observable, evidence-bound bullets. Do not give entry, exit, position, stop-loss, or take-profit instructions.`;
+Write 3-5 observable, evidence-bound bullets. Do not give entry, exit, position, stop-loss, or take-profit instructions.
+
+Headline rules (apply strictly): the headline must anchor today's single most market-moving or most distinctive development (a specific event, data release, policy decision, company result, or genuine surprise), written like a senior sell-side strategist's daily note title: precise, restrained, and accurate. NEVER write a routine recurring daily move as the headline subject — daily oil price gains or losses, day-to-day Treasury yield drift, or a generic index up/down day are all forbidden and make the headline repetitive and worthless. Exception: a genuine one-off event in oil or rates (for example an OPEC+ output decision, a CPI surprise, or an FOMC decision) may be named. Do not sensationalize and do not overstate causality.`;
 }
 
 export default {

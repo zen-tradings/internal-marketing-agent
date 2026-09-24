@@ -6,7 +6,15 @@ export const OPENING_DIGEST_REQUIRED_HEADINGS = Object.freeze([
   'Evidence and cross-currents',
   'What to watch',
 ]);
-export const OPENING_DIGEST_HEADLINE_MAX_CHARS = 36;
+export const OPENING_DIGEST_HEADLINE_MAX_CHARS = 60;
+export const OPENING_DIGEST_HEADLINE_MIN_WORDS = 5;
+export const OPENING_DIGEST_HEADLINE_MAX_WORDS = 11;
+export const OPENING_DIGEST_EVIDENCE_MAX_WORDS = 85;
+const ROUTINE_HEADLINE_RE = new RegExp([
+  '\\b(?:oil|crude|wti|brent)\\b[^,;.]{0,24}\\b(?:rises?|falls?|gains?|drops?|jumps?|slides?|climbs?|slips?|edges?|extends?|steadies?)\\b',
+  '\\byields?\\b[^,;.]{0,24}\\b(?:rises?|falls?|edges?|climbs?|slips?|drifts?|steadies?|holds?|little changed)\\b',
+  '\\bstocks?(?:\\s+(?:index|futures))?\\b[^,;.]{0,24}\\b(?:rises?|falls?|gains?|drops?|slips?|climbs?|edges?)\\b',
+].join('|'), 'i');
 export const OPENING_DIGEST_NARRATIVE_MAX_WORDS = 650;
 
 export function openingDigestSourceIds(research = []) {
@@ -76,7 +84,7 @@ Rules:
 - OIC Top 20 data shows only observed option volume/IVX for names appearing in that table. It does not prove direction, investor intent, market breadth, or the cause of a price move.
 - The fixed 72-name universe is not the whole market. Describe it only as tracked-universe participation or dispersion.
 - Previous editions are context for detecting a change or stale repetition, never evidence for today's facts.
-- Headlines must be specific, non-sensational, 4-7 English words, at most ${OPENING_DIGEST_HEADLINE_MAX_CHARS} characters, and must not overstate causality.
+- The headline must anchor today's single most market-moving or most distinctive development (a specific event, data release, policy decision, company result, or genuine surprise), like a senior sell-side strategist's daily note title: precise, restrained, and accurate. Do NOT use routine recurring daily moves as the headline subject — daily oil price gains or losses, day-to-day Treasury yield drift, or a generic index up/down day are forbidden. Exception: a genuine one-off event in oil or rates (for example an OPEC+ output decision, a CPI surprise, or an FOMC decision) may be named. Headlines must be non-sensational, ${OPENING_DIGEST_HEADLINE_MIN_WORDS}-${OPENING_DIGEST_HEADLINE_MAX_WORDS} English words, at most ${OPENING_DIGEST_HEADLINE_MAX_CHARS} characters, and must not overstate causality.
 - Select at most 10 sources, including contrary evidence when available.
 
 Previous formal editions (newest first):
@@ -140,7 +148,7 @@ export function normalizeOpeningDigestPlan(raw, research = [], history = []) {
       summary: clean(raw?.change_from_prior?.summary, 300) || (prior ? 'No material change from the prior edition.' : 'Initial baseline.'),
     },
     headline_candidates: cleanArray(raw?.headline_candidates, 3, OPENING_DIGEST_HEADLINE_MAX_CHARS)
-      .filter((headline) => visibleWords(headline) >= 3),
+      .filter((headline) => visibleWords(headline) >= OPENING_DIGEST_HEADLINE_MIN_WORDS),
   };
 }
 
@@ -191,7 +199,12 @@ export function auditOpeningDigestInsight(markdown) {
   const headings = [...parts.sections.keys()];
   const expected = [...OPENING_DIGEST_REQUIRED_HEADINGS, ...(headings.includes('Earnings ahead') ? ['Earnings ahead'] : [])];
   if (meta.title !== 'Zen Opening Digest') warnings.push('Opening Digest 固定内容身份必须为 Zen Opening Digest');
-  if (!meta.headline || meta.headline.length > OPENING_DIGEST_HEADLINE_MAX_CHARS || visibleWords(meta.headline) < 3) warnings.push('Opening Digest 动态标题应为 4-7 个词且不超过 36 字符');
+  const headlineWords = visibleWords(meta.headline);
+  if (!meta.headline || meta.headline.length > OPENING_DIGEST_HEADLINE_MAX_CHARS
+    || headlineWords < OPENING_DIGEST_HEADLINE_MIN_WORDS || headlineWords > OPENING_DIGEST_HEADLINE_MAX_WORDS) {
+    warnings.push(`Opening Digest 动态标题应为 ${OPENING_DIGEST_HEADLINE_MIN_WORDS}-${OPENING_DIGEST_HEADLINE_MAX_WORDS} 个词且不超过 ${OPENING_DIGEST_HEADLINE_MAX_CHARS} 字符`);
+  }
+  if (ROUTINE_HEADLINE_RE.test(meta.headline)) warnings.push('Opening Digest 动态标题疑似常规每日行情（油价/收益率/大盘涨跌），应为当天最重要或最有特点的事件');
   if (!OPENING_DIGEST_STANCES.includes(meta.stance)) warnings.push('Opening Digest stance 必须为 constructive、neutral 或 defensive');
   if (!OPENING_DIGEST_CONFIDENCE.includes(meta.confidence)) warnings.push('Opening Digest confidence 必须为 high、medium 或 low');
   if (JSON.stringify(headings) !== JSON.stringify(expected)) warnings.push(`Opening Digest 栏目顺序应为 ${expected.join(' → ')}`);
@@ -207,9 +220,11 @@ export function auditOpeningDigestInsight(markdown) {
   if (/\btracked(?:-universe)?\b[^.]{0,40}\bmarket breadth\b/i.test(parts.body)) warnings.push('固定跟踪池不得冒充全市场 breadth');
   const narrativeWords = visibleWords(parts.body.replace(/^## Earnings ahead[\s\S]*$/m, ''));
   if (narrativeWords > OPENING_DIGEST_NARRATIVE_MAX_WORDS) warnings.push(`Opening Digest 分析正文超过 ${OPENING_DIGEST_NARRATIVE_MAX_WORDS} 词:${narrativeWords}`);
+  const evidenceWords = visibleWords(parts.sections.get('Evidence and cross-currents') || '');
+  if (evidenceWords > OPENING_DIGEST_EVIDENCE_MAX_WORDS) warnings.push(`Opening Digest Evidence and cross-currents 超过 ${OPENING_DIGEST_EVIDENCE_MAX_WORDS} 词:${evidenceWords}`);
   return {
     warnings,
-    stats: { headlineSpecific: !warnings.some((item) => item.includes('动态标题')), stance: meta.stance, confidence: meta.confidence, leadSentences, mattersCount: matters, observableSignpostCount: watchCount, narrativeWords },
+    stats: { headlineSpecific: !warnings.some((item) => item.includes('动态标题')), stance: meta.stance, confidence: meta.confidence, leadSentences, mattersCount: matters, observableSignpostCount: watchCount, narrativeWords, evidenceWords },
   };
 }
 

@@ -61,7 +61,7 @@ A restrained opening read depends on participation holding through the first hou
 
 const INSIGHT_ARTICLE = `---
 title: Zen Opening Digest
-headline: Yields test tech conviction
+headline: Fed decision looms over narrow equity participation
 stance: neutral
 confidence: medium
 preheader: Falling oil offsets firm yields, leaving confirmation to equity participation.
@@ -331,7 +331,7 @@ test('new Opening Digest contract is thesis-first and rejects sample failure mod
   assert.deepEqual(clean.warnings, []);
   assert.equal(clean.stats.leadSentences, 2);
   const bad = INSIGHT_ARTICLE
-    .replace('Yields test tech conviction', 'This headline is far too long to work on a mobile email subject line')
+    .replace('Fed decision looms over narrow equity participation', 'This headline is far too long to work on a mobile email subject line')
     .replace('10Y yield holds its opening range', 'MARA rose because options activity drove the price at 14:15 UTC')
     .replace('Whether VIX confirms or contradicts index resilience', 'Options market skew may presage a bullish signal');
   const audit = auditOpeningDigestInsight(bad);
@@ -339,6 +339,20 @@ test('new Opening Digest contract is thesis-first and rejects sample failure mod
   assert.ok(audit.warnings.some((item) => /UTC/.test(item)));
   assert.ok(audit.warnings.some((item) => /OIC\/IV/.test(item)));
   assert.ok(audit.warnings.some((item) => /期权数据推断方向/.test(item)));
+});
+
+test('Opening Digest rejects routine market-move headlines and over-long evidence sections', () => {
+  const routine = INSIGHT_ARTICLE.replace('Fed decision looms over narrow equity participation', 'Oil gains lift energy shares higher');
+  const audit = auditOpeningDigestInsight(routine);
+  assert.ok(audit.warnings.some((item) => /常规每日行情/.test(item)));
+  assert.equal(audit.warnings.some((item) => /动态标题应为/.test(item)), false);
+  const verboseEvidence = INSIGHT_ARTICLE.replace(
+    '## What to watch',
+    'Padding sentence one carries words. '.repeat(12) + '\n## What to watch',
+  );
+  const over = auditOpeningDigestInsight(verboseEvidence);
+  assert.ok(over.warnings.some((item) => /Evidence and cross-currents 超过 85 词/.test(item)));
+  assert.equal(auditOpeningDigestInsight(INSIGHT_ARTICLE).warnings.some((item) => /Evidence and cross-currents/.test(item)), false);
 });
 
 test('opening content rules are diagnostics rather than hard gates', () => {
@@ -531,8 +545,8 @@ test('dynamic headline becomes recipient subject and H1 while fixed publication 
   const { channel } = standardChannel({ requests, channel: { readArticle: async () => INSIGHT_ARTICLE } });
   await channel.publish({ articlePath: '/tmp/article.md', config: config(), source: 'manual' });
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
-  assert.equal(create.body.subject, 'Yields test tech conviction | Zen Opening Digest');
-  assert.match(create.body.body, />Yields test tech conviction<\/h1>/);
+  assert.equal(create.body.subject, 'Fed decision looms over narrow equity participation | Zen Opening Digest');
+  assert.match(create.body.body, />Fed decision looms over narrow equity participation<\/h1>/);
   assert.match(create.body.body, /data-zen-publication-subtitle[^>]*>Zen Opening Digest · August 10, 2026<\/p>/);
   assert.ok(create.body.body.indexOf('Opening call') < create.body.body.indexOf('Market snapshot'));
   assert.ok(create.body.body.indexOf('Market snapshot') < create.body.body.indexOf('What matters today'));

@@ -1,6 +1,6 @@
 ---
 title: Zen Opening Digest
-headline: Yields test tech conviction
+headline: Fed decision looms over narrow equity participation
 stance: neutral
 confidence: medium
 preheader: Falling oil offsets firm yields, leaving confirmation to equity participation.
