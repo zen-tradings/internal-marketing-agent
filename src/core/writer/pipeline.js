@@ -16,7 +16,8 @@ import { LEGAL_TASK_RE, extractUrls, sourceForTrace, sourcePriorityTier, opening
 import { TRACE_WRITE_THROTTLE_MS, writeResearchTrace } from './trace.js';
 import { runAnalysisV2, mergeInjectedSources } from './analysis.js';
 import { searchExa } from './research.js';
-import { refineOpeningDigestDraft, normalizeOpeningDigestCitations, planOpeningDigestEditorial, compactOpeningDigestEditorial, reviewAndRepairOpeningDigest } from './opening-editor.js';
+import { refineOpeningDigestDraft, normalizeOpeningDigestCitations, planOpeningDigestEditorial, compactOpeningDigestEditorial, reviewAndRepairOpeningDigest, openingDigestSnapshotEvidence } from './opening-editor.js';
+import { auditOpeningDigestNumberProvenance, auditOpeningDigestPeriodConsistency } from '../../lib/opening-digest-number-provenance.js';
 import { reviewAndRepairArticle, canonicalizeTerminalReferences } from './review.js';
 import { describeFetchError, fetchWithRetry } from '../../lib/fetch-retry.js';
 
@@ -374,6 +375,7 @@ export async function runWriter({
     if (!hasTitleFrontmatter(article)) {
       throw new Error('OpenRouter 输出缺少 title frontmatter');
     }
+    let openingDigestAttributionConflicts = [];
     if (workflow.id === 'opening-digest' && workflow.editorialPlanning === true) {
       const attributionBefore = auditOpeningDigestAttribution({
         article,
@@ -396,6 +398,7 @@ export async function runWriter({
         snapshot: editorialContext?.artifact?.attributionSnapshot,
         asOf: researchAsOf,
       });
+      openingDigestAttributionConflicts = attributionAfter.warnings;
       trace.openingDigestAttributionAudit = {
         before: attributionBefore,
         after: attributionAfter,
@@ -403,11 +406,37 @@ export async function runWriter({
       };
     }
     if (workflow.factReview && !sourcePolicy.skipResearch) {
-      const reviewed = workflow.factReviewPolicy === 'severe-only'
-        ? await reviewAndRepairOpeningDigest({ article, input, research, workflow, writer, fetchFn })
-        : await reviewAndRepairArticle({ article, input, research, workflow, writer, fetchFn, sourcePolicy });
-      article = reviewed.article;
-      trace.factReview = reviewed.review;
+      if (workflow.factReviewPolicy === 'severe-only') {
+        const snapshotForAudit = editorialContext?.artifact?.attributionSnapshot || null;
+        const deterministicAudit = workflow.id === 'opening-digest' && workflow.editorialPlanning === true
+          ? {
+            attributionConflicts: openingDigestAttributionConflicts,
+            deterministic: [
+              ...auditOpeningDigestNumberProvenance({
+                article,
+                research: generationResearch,
+                snapshot: snapshotForAudit,
+                excerptBound: Math.max(appliedExcerptChars, 0) || undefined,
+              }).warnings,
+              ...auditOpeningDigestPeriodConsistency({ article, asOf: researchAsOf }).warnings,
+            ],
+            snapshot: openingDigestSnapshotEvidence(snapshotForAudit),
+          }
+          : {};
+        trace.openingDigestDeterministicAudit = {
+          attributionConflicts: deterministicAudit.attributionConflicts || [],
+          deterministic: deterministicAudit.deterministic || [],
+        };
+        const reviewed = await reviewAndRepairOpeningDigest({
+          article, input, research, workflow, writer, fetchFn, extraSoftFindings: deterministicAudit,
+        });
+        article = reviewed.article;
+        trace.factReview = reviewed.review;
+      } else {
+        const reviewed = await reviewAndRepairArticle({ article, input, research, workflow, writer, fetchFn, sourcePolicy });
+        article = reviewed.article;
+        trace.factReview = reviewed.review;
+      }
     } else if (sourcePolicy.skipResearch) {
       trace.factReview = { skipped: true, reason: 'non-research-newsletter' };
     }
@@ -427,6 +456,42 @@ export async function runWriter({
           diagnostic: describeFetchError(error).slice(0, 500),
           blocks: [],
         };
+      }
+    }
+
+    // Hard gate: the measured snapshot is ground truth for the current market state. If the
+    // narrative still contradicts it (without an earlier-time label) after refinement and the
+    // severe-fact repair round, the edition cannot ship; it becomes a failed run instead of a
+    // silently-wrong publication.
+    if (workflow.id === 'opening-digest' && workflow.editorialPlanning === true) {
+      const finalAttribution = auditOpeningDigestAttribution({
+        article,
+        snapshot: editorialContext?.artifact?.attributionSnapshot || null,
+        asOf: researchAsOf,
+      });
+      const finalProvenance = auditOpeningDigestNumberProvenance({
+        article,
+        research: generationResearch,
+        snapshot: editorialContext?.artifact?.attributionSnapshot || null,
+        excerptBound: Math.max(appliedExcerptChars, 0) || undefined,
+      });
+      const finalPeriod = auditOpeningDigestPeriodConsistency({ article, asOf: researchAsOf });
+      trace.openingDigestDeterministicAudit = {
+        ...trace.openingDigestDeterministicAudit,
+        final: {
+          attributionConflicts: finalAttribution.warnings,
+          deterministic: [...finalProvenance.warnings, ...finalPeriod.warnings],
+          provenanceStats: finalProvenance.stats,
+          periodStats: finalPeriod.stats,
+        },
+      };
+      trace.openingDigestAttributionAudit = {
+        ...trace.openingDigestAttributionAudit,
+        final: finalAttribution,
+      };
+      writeResearchTrace(researchTracePath, trace);
+      if (finalAttribution.warnings.length) {
+        throw new Error(`Opening Digest 归因快照冲突在发布前仍存在:${finalAttribution.warnings.length} 条，已拦截发送:${finalAttribution.warnings[0].slice(0, 240)}`);
       }
     }
 

@@ -84,6 +84,7 @@ Rules:
 - OIC Top 20 data shows only observed option volume/IVX for names appearing in that table. It does not prove direction, investor intent, market breadth, or the cause of a price move.
 - The fixed 72-name universe is not the whole market. Describe it only as tracked-universe participation or dispersion.
 - Previous editions are context for detecting a change or stale repetition, never evidence for today's facts.
+- Before selecting a macro-release source, check its own release date and period. A prior-year or otherwise stale release page is never evidence for today's macro data; it may only support an explicit prior-period comparison.
 - The headline must anchor today's single most market-moving or most distinctive development (a specific event, data release, policy decision, company result, or genuine surprise), like a senior sell-side strategist's daily note title: precise, restrained, and accurate. Do NOT use routine recurring daily moves as the headline subject — daily oil price gains or losses, day-to-day Treasury yield drift, or a generic index up/down day are forbidden. Exception: a genuine one-off event in oil or rates (for example an OPEC+ output decision, a CPI surprise, or an FOMC decision) may be named. Headlines must be non-sensational, ${OPENING_DIGEST_HEADLINE_MIN_WORDS}-${OPENING_DIGEST_HEADLINE_MAX_WORDS} English words, at most ${OPENING_DIGEST_HEADLINE_MAX_CHARS} characters, and must not overstate causality.
 - Select at most 10 sources, including contrary evidence when available.
 

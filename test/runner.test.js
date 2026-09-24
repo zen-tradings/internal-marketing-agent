@@ -1010,7 +1010,7 @@ test('Opening Digest 严重事实问题修复并复核通过后可继续', async
       completion += 1;
       if (completion === 1) return jsonResponse({ choices: [{ message: { content: bad } }] });
       if (completion === 2) return jsonResponse({ choices: [{ message: { content: JSON.stringify({ issues: [severe], revised_markdown: fixed }) } }] });
-      return jsonResponse({ choices: [{ message: { content: JSON.stringify({ issues: [] }) } }] });
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({ results: [{ claim: severe.claim, status: 'fixed', evidence: 'repaired' }] }) } }] });
     },
   });
   assert.equal(result.ok, true);
@@ -1019,7 +1019,7 @@ test('Opening Digest 严重事实问题修复并复核通过后可继续', async
   assert.equal(trace.factReview.repaired, true);
 });
 
-test('Opening Digest 复核不得把已删除的无来源比较基数继续绑到有来源数字', async () => {
+test('Opening Digest 复核逐条裁决：无来源基数被删除后按 fixed 放行', async () => {
   const workflow = openingWorkflow();
   const bad = '---\ntitle: Zen Opening Digest\n---\nQ2 revenue surged to $582.3 million from $105.1 million a year earlier.';
   const fixed = '---\ntitle: Zen Opening Digest\n---\nQ2 revenue surged to $582.3 million.';
@@ -1028,10 +1028,6 @@ test('Opening Digest 复核不得把已删除的无来源比较基数继续绑�
     category: 'core_fact_contradiction', confidence: 'high', core: true,
     claim: 'Q2 revenue surged to $582.3 million from $105.1 million a year earlier',
     evidence: message, source_url: 'https://example.com/a', message,
-  };
-  const stale = {
-    ...initial,
-    claim: 'Q2 revenue surged to $582.3 million',
   };
   let completion = 0;
   const result = await runWriter({
@@ -1045,14 +1041,66 @@ test('Opening Digest 复核不得把已删除的无来源比较基数继续绑�
       completion += 1;
       if (completion === 1) return jsonResponse({ choices: [{ message: { content: bad } }] });
       if (completion === 2) return jsonResponse({ choices: [{ message: { content: JSON.stringify({ issues: [initial], revised_markdown: fixed }) } }] });
-      return jsonResponse({ choices: [{ message: { content: JSON.stringify({ issues: [stale] }) } }] });
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({ results: [{ claim: initial.claim, status: 'fixed', evidence: 'the unsupported prior-year comparison was removed' }] }) } }] });
     },
   });
   assert.equal(result.ok, true);
   assert.equal(fs.readFileSync(result.articlePath, 'utf8'), fixed);
   const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
-  assert.equal(trace.factReview.verificationHistory[0].dismissedStaleIssues.length, 1);
   assert.equal(trace.factReview.verificationHistory[0].severeIssues.length, 0);
+});
+
+test('Opening Digest 复核空裁决不算通过：重试后仍不完整则硬停', async () => {
+  const workflow = openingWorkflow();
+  const bad = '---\ntitle: Zen Opening Digest\n---\nRevenue was 900 billion.';
+  const fixed = '---\ntitle: Zen Opening Digest\n---\nRevenue was 90 billion.';
+  const severe = { category: 'fabricated_number_or_date', confidence: 'high', core: true, claim: 'Revenue was 900 billion.', evidence: 'Source reports revenue of 90 billion.', source_url: 'https://example.com/a', message: 'wrong revenue' };
+  let completion = 0;
+  const result = await runWriter({
+    workflow,
+    input: 'opening',
+    config: baseConfig(),
+    fetchFn: async (url) => {
+      if (String(url).endsWith('/search')) return jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/a', text: 'Source reports revenue of 90 billion.' }] });
+      completion += 1;
+      if (completion === 1) return jsonResponse({ choices: [{ message: { content: bad } }] });
+      if (completion === 2) return jsonResponse({ choices: [{ message: { content: JSON.stringify({ issues: [severe], revised_markdown: fixed }) } }] });
+      // Lazy verifier: empty results twice → must hard-fail, never approve.
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({ results: [] }) } }] });
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.stderr, /修复复核未逐条裁决/);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.factReview.approved, false);
+  assert.equal(trace.factReview.verificationHistory[0].verificationIncomplete, true);
+});
+
+test('Opening Digest 复核逐条裁决 unresolved 时继续修复', async () => {
+  const workflow = openingWorkflow();
+  const bad = '---\ntitle: Zen Opening Digest\n---\nRevenue was 900 billion.';
+  const fixed = '---\ntitle: Zen Opening Digest\n---\nRevenue was 90 billion.';
+  const severe = { category: 'fabricated_number_or_date', confidence: 'high', core: true, claim: 'Revenue was 900 billion.', evidence: 'Source reports revenue of 90 billion.', source_url: 'https://example.com/a', message: 'wrong revenue' };
+  let completion = 0;
+  const result = await runWriter({
+    workflow,
+    input: 'opening',
+    config: baseConfig(),
+    fetchFn: async (url) => {
+      if (String(url).endsWith('/search')) return jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/a', text: 'Source reports revenue of 90 billion.' }] });
+      completion += 1;
+      if (completion === 1) return jsonResponse({ choices: [{ message: { content: bad } }] });
+      if (completion === 2) return jsonResponse({ choices: [{ message: { content: JSON.stringify({ issues: [severe], revised_markdown: bad }) } }] });
+      if (completion === 3) return jsonResponse({ choices: [{ message: { content: JSON.stringify({ results: [{ claim: severe.claim, status: 'unresolved', evidence: 'still says 900 billion' }] }) } }] });
+      if (completion === 4) return jsonResponse({ choices: [{ message: { content: JSON.stringify({ revised_markdown: fixed }) } }] });
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({ results: [{ claim: severe.claim, status: 'fixed', evidence: 'now reports 90 billion' }] }) } }] });
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(fs.readFileSync(result.articlePath, 'utf8'), fixed);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath, 'utf8'));
+  assert.equal(trace.factReview.repaired, true);
+  assert.equal(trace.factReview.verificationHistory.length, 2);
 });
 
 test('Opening Digest 严重事实问题两轮修复仍失败时硬停，不降级为数据版', async () => {
@@ -1068,7 +1116,9 @@ test('Opening Digest 严重事实问题两轮修复仍失败时硬停，不降�
       if (String(url).endsWith('/search')) return jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/a', text: 'Source reports revenue of 90 billion.' }] });
       completion += 1;
       if (completion === 1) return jsonResponse({ choices: [{ message: { content: bad } }] });
-      return jsonResponse({ choices: [{ message: { content: JSON.stringify({ issues: [severe], revised_markdown: bad }) } }] });
+      if (completion === 2) return jsonResponse({ choices: [{ message: { content: JSON.stringify({ issues: [severe], revised_markdown: bad }) } }] });
+      if (completion === 4) return jsonResponse({ choices: [{ message: { content: JSON.stringify({ revised_markdown: bad }) } }] });
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({ results: [{ claim: severe.claim, status: 'unresolved', evidence: 'still says 900 billion' }] }) } }] });
     },
   });
   assert.equal(result.ok, false);

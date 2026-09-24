@@ -203,7 +203,7 @@ export function openingCompactionSources(research, blockText) {
   }));
 }
 
-export async function reviewAndRepairOpeningDigest({ article, input, research, workflow, writer, fetchFn }) {
+export async function reviewAndRepairOpeningDigest({ article, input, research, workflow, writer, fetchFn, extraSoftFindings = {} }) {
   const excerptLimit = sourceExcerptLimitFor(workflow);
   const allowed = research.filter((source) => source?.url).map((source) => ({
     title: source.title || '',
@@ -214,7 +214,23 @@ export async function reviewAndRepairOpeningDigest({ article, input, research, w
       .join('\n')
       .slice(0, excerptLimit),
   }));
-  const auditPrompt = `Audit this Zen Opening Digest only against the supplied sources. Report ordinary weaknesses, but reserve a severe issue for a high-confidence error that changes a core conclusion and has specific source evidence. Severe categories are only core_fact_contradiction, fabricated_number_or_date, wrong_link, unsupported_core_causality, wrong_entity_classification, and release_status_error. Do not treat structure, catalyst count, freshness, duplicate links, missing publication dates, style, or weak sourcing as severe.\n\nReturn strict JSON:\n{"issues":[{"category":"...","confidence":"high|medium|low","core":true|false,"claim":"exact problematic text","evidence":"specific source evidence","source_url":"allowed source URL","message":"short explanation"}],"revised_markdown":"complete repaired Markdown when severe issues exist, otherwise empty"}\n\nTask:${input}\n\nAllowed sources:${JSON.stringify(allowed)}\n\nDraft:\n${article}`;
+  // The measured attribution snapshot is injected as first-class evidence so the auditor can
+  // verify narrative numbers and directions against the same timestamped market state the
+  // writer saw. It is pipeline-generated and short, so it is never truncated.
+  const snapshotEvidence = extraSoftFindings.snapshot
+    ? [{
+      title: 'Measured attribution snapshot (pipeline-generated; treat as ground truth for the current market state)',
+      url: extraSoftFindings.snapshot.url,
+      publishedDate: extraSoftFindings.snapshot.capturedAt || '',
+      excerpt: extraSoftFindings.snapshot.text,
+    }]
+    : [];
+  const allowedWithSnapshot = [...snapshotEvidence, ...allowed];
+  const deterministicFindings = [
+    ...(Array.isArray(extraSoftFindings.attributionConflicts) ? extraSoftFindings.attributionConflicts : []),
+    ...(Array.isArray(extraSoftFindings.deterministic) ? extraSoftFindings.deterministic : []),
+  ];
+  const auditPrompt = `Audit this Zen Opening Digest only against the supplied sources. Report ordinary weaknesses, but reserve a severe issue for a high-confidence error that changes a core conclusion and has specific source evidence. Severe categories are only core_fact_contradiction, fabricated_number_or_date, wrong_link, unsupported_core_causality, wrong_entity_classification, and release_status_error. Do not treat structure, catalyst count, freshness, duplicate links, missing publication dates, style, or weak sourcing as severe. A current-period macro figure sourced from a release page dated an earlier period or year is a release_status_error; a current-period figure that no allowed source excerpt nor the attribution snapshot contains is fabricated_number_or_date.${deterministicFindings.length ? `\n\nDeterministic pipeline audits already flagged these findings; verify each against the allowed sources and report a severe issue for any confirmed high-confidence core error:\n${JSON.stringify(deterministicFindings)}` : ''}\n\nReturn strict JSON:\n{"issues":[{"category":"...","confidence":"high|medium|low","core":true|false,"claim":"exact problematic text","evidence":"specific source evidence","source_url":"allowed source URL","message":"short explanation"}],"revised_markdown":"complete repaired Markdown when severe issues exist, otherwise empty"}\n\nTask:${input}\n\nAllowed sources:${JSON.stringify(allowedWithSnapshot)}\n\nDraft:\n${article}`;
   let initial;
   try {
     initial = await completeReviewJson({
@@ -233,15 +249,16 @@ export async function reviewAndRepairOpeningDigest({ article, input, research, w
   }
 
   let issues = normalizeOpeningReviewIssues(initial.issues);
-  let severe = severeOpeningIssues(issues, allowed);
+  let severe = severeOpeningIssues(issues, allowedWithSnapshot);
   if (!severe.length) {
-    return { article, review: { approved: true, policy: 'severe-only', issues, severeIssues: [] } };
+    return { article, review: { approved: true, policy: 'severe-only', issues, severeIssues: [], deterministicFindings } };
   }
 
   const initialIssues = issues;
   const initialSevere = severe;
   let current = normalizeArticle(initial.revised_markdown || '');
   const verificationHistory = [];
+  let consecutiveUnverified = 0;
   const hardFailure = (errorOrMessage) => {
     const error = errorOrMessage?.openingDigestHardFailure
       ? errorOrMessage
@@ -254,6 +271,7 @@ export async function reviewAndRepairOpeningDigest({ article, input, research, w
       repaired: current !== article,
       verificationHistory,
       unresolvedSevereIssues: severe,
+      deterministicFindings,
     };
     return error;
   };
@@ -278,7 +296,7 @@ export async function reviewAndRepairOpeningDigest({ article, input, research, w
     let verification;
     try {
       verification = await completeReviewJson({
-        prompt: `Verify whether every previously severe issue is fixed. Only report an issue as severe when it remains high-confidence, affects a core conclusion, quotes the problematic claim, and cites specific evidence from an allowed source. Return strict JSON {"issues":[{"category":"core_fact_contradiction|fabricated_number_or_date|wrong_link|unsupported_core_causality|wrong_entity_classification|release_status_error","confidence":"high|medium|low","core":true|false,"claim":"...","evidence":"...","source_url":"...","message":"..."}]}.\n\nPrevious severe issues:${JSON.stringify(severe)}\n\nAllowed sources:${JSON.stringify(allowed)}\n\nRevised draft:\n${current}`,
+        prompt: `You MUST adjudicate every previously severe issue below, one result item per issue, quoting enough of the issue's claim to make the mapping unambiguous. Use status "fixed" only when the current draft no longer contains the unsupported claim, or it is now directly supported by a supplied source; use "unresolved" and cite specific evidence from an allowed source when the problematic claim (or the same fact reworded) is still present and unsupported. Never invent a fact. Return strict JSON {"results":[{"claim":"exact text of the previous severe issue's claim","status":"fixed|unresolved","evidence":"why"}]}.\n\nPrevious severe issues:${JSON.stringify(severe)}\n\nAllowed sources:${JSON.stringify(allowedWithSnapshot)}\n\nRevised draft:\n${current}`,
         model: writer.reviewModel || writer.model,
         writer: { ...writer, temperature: 0 },
         fetchFn,
@@ -288,11 +306,41 @@ export async function reviewAndRepairOpeningDigest({ article, input, research, w
     } catch (error) {
       throw hardFailure(`已发现严重事实问题，但修复复核失败:${error.message}`);
     }
-    issues = normalizeOpeningReviewIssues(verification.issues);
-    const dismissedStaleIssues = staleSupportedOpeningIssues(issues, severe);
-    const dismissed = new Set(dismissedStaleIssues);
-    severe = severeOpeningIssues(issues.filter((issue) => !dismissed.has(issue)), allowed);
-    verificationHistory.push({ round: round + 1, issues, dismissedStaleIssues, severeIssues: severe });
+    // An empty or partial adjudication is not evidence that the issues were fixed: a lazy
+    // verifier once returned an empty issue list and an unrepairable edition shipped. Require
+    // one adjudication per previous severe issue; retry once on incomplete coverage, then
+    // hard-fail so the edition cannot silently pass.
+    const adjudications = normalizeOpeningVerificationResults(verification?.results);
+    const matched = matchOpeningVerificationResults(severe, adjudications);
+    if (matched.coverage < 1) {
+      consecutiveUnverified += 1;
+      verificationHistory.push({ round: round + 1, coverage: matched.coverage, adjudications, severeIssues: severe, verificationIncomplete: true });
+      if (consecutiveUnverified >= 2 || round === 1) {
+        throw hardFailure(`修复复核未逐条裁决全部严重问题(覆盖率 ${matched.coverage}/${severe.length})，无法确认修复效果`);
+      }
+      // The draft is already the repaired version; re-run verification on it rather than
+      // repairing an already-repaired draft again.
+      continue;
+    }
+    consecutiveUnverified = 0;
+    const stillUnresolved = matched.results.filter((item) => item.status === 'unresolved');
+    severe = severeOpeningIssues(stillUnresolved.map((item) => {
+      const previousIssue = severe.find((previous) => claimsReferenceSameIssue(previous.claim, item.claim)) || {};
+      return {
+        category: previousIssue.category || 'core_fact_contradiction',
+        confidence: 'high',
+        core: true,
+        claim: item.claim,
+        evidence: item.evidence,
+        source_url: previousIssue.sourceUrl || previousIssue.source_url || '',
+        message: item.evidence,
+      };
+    }), allowedWithSnapshot);
+    issues = normalizeOpeningReviewIssues(stillUnresolved.map((item) => ({
+      category: 'core_fact_contradiction', confidence: 'high', core: true,
+      claim: item.claim, evidence: item.evidence, source_url: '', message: item.evidence,
+    })));
+    verificationHistory.push({ round: round + 1, adjudications, unresolved: stillUnresolved, severeIssues: severe });
     if (!severe.length) {
       return {
         article: current,
@@ -311,7 +359,7 @@ export async function reviewAndRepairOpeningDigest({ article, input, research, w
         current = await repairOpeningDigestSevereIssues({
           article: current,
           severe,
-          allowed,
+          allowed: allowedWithSnapshot,
           workflow,
           writer,
           fetchFn,
@@ -322,6 +370,60 @@ export async function reviewAndRepairOpeningDigest({ article, input, research, w
     }
   }
   throw hardFailure(`Opening Digest 严重事实问题修复后仍未通过:${severe.map((issue) => issue.message || issue.claim).join('; ')}`);
+}
+
+// Builds the measured attribution snapshot as a first-class audit evidence source. Short,
+// pipeline-generated, never truncated.
+export function openingDigestSnapshotEvidence(snapshot) {
+  if (!snapshot) return null;
+  const lines = (Array.isArray(snapshot.metrics) ? snapshot.metrics : [])
+    .filter((metric) => !metric.unavailable && Number.isFinite(metric.value))
+    .map((metric) => {
+      const digits = Number(metric.value) >= 1000 ? 0 : 2;
+      const value = Number(metric.value).toLocaleString('en-US', { maximumFractionDigits: digits, minimumFractionDigits: digits });
+      const change = Number.isFinite(metric.changePct)
+        ? ` (${metric.changePct >= 0 ? '+' : ''}${metric.changePct.toFixed(2)}% versus prior close)`
+        : ' (day change unavailable)';
+      return `${metric.label}: ${value}${change}, as of ${metric.asOf || snapshot.capturedAt}`;
+    });
+  return {
+    url: `zen-attribution-snapshot://${snapshot.capturedAt || 'unknown'}`,
+    capturedAt: snapshot.capturedAt || '',
+    text: `Captured at: ${snapshot.capturedAt}. These are timestamped observations of the current market state, not catalysts; narrative statements that contradict them without an earlier-time label are conflicts.\n${lines.join('\n')}`,
+  };
+}
+
+export function normalizeOpeningVerificationResults(value) {
+  return (Array.isArray(value) ? value : []).map((item) => typeof item === 'object' && item
+    ? {
+      claim: String(item.claim || '').trim(),
+      status: String(item.status || '').trim().toLowerCase() === 'unresolved' ? 'unresolved' : 'fixed',
+      evidence: String(item.evidence || '').trim(),
+      message: String(item.evidence || '').trim(),
+    }
+    : { claim: '', status: 'fixed', evidence: '', message: String(item || '') });
+}
+
+export function matchOpeningVerificationResults(previousSevere, adjudications) {
+  const results = [];
+  for (const previous of previousSevere || []) {
+    const exact = adjudications.find((item) => item.claim === previous.claim);
+    const overlap = exact ? [exact] : adjudications.filter((item) => item.claim && claimsReferenceSameIssue(previous.claim, item.claim));
+    results.push(overlap[0] || { claim: previous.claim, status: 'unadjudicated', evidence: 'no adjudication returned for this issue' });
+  }
+  const covered = results.filter((item) => item.status !== 'unadjudicated').length;
+  return { results, coverage: previousSevere?.length ? covered / previousSevere.length : 1 };
+}
+
+function claimsReferenceSameIssue(previousClaim, candidateClaim) {
+  const left = String(previousClaim || '').toLowerCase();
+  const right = String(candidateClaim || '').toLowerCase();
+  if (!left || !right) return false;
+  if (left.includes(right) || right.includes(left)) return true;
+  const leftNumbers = reviewNumericTokens(left);
+  const rightNumbers = reviewNumericTokens(right);
+  return leftNumbers.length > 0 && rightNumbers.length > 0
+    && leftNumbers.some((token) => rightNumbers.includes(token));
 }
 
 export async function repairOpeningDigestSevereIssues({ article, severe, allowed, workflow, writer, fetchFn }) {
@@ -362,25 +464,7 @@ export function severeOpeningIssues(issues, allowed) {
     && issue.core === true
     && issue.claim.length >= 4
     && issue.evidence.length >= 4
-    && allowedUrls.has(referenceUrlKey(issue.sourceUrl)));
-}
-
-export function staleSupportedOpeningIssues(issues, previousSevere) {
-  return issues.filter((issue) => (previousSevere || []).some((previous) => {
-    if (!issue.claim || !previous.claim || issue.claim === previous.claim
-      || referenceUrlKey(issue.sourceUrl) !== referenceUrlKey(previous.sourceUrl)
-      || !previous.claim.includes(issue.claim)) return false;
-    const explanation = [issue.message, issue.evidence].find((value) => /\b(?:but|however)\b/i.test(value || '')) || '';
-    const [supported = '', unsupported = ''] = explanation.split(/\b(?:but|however)\b/i, 2);
-    if (!/\b(?:supported|sourced|reasonable rounding)\b/i.test(supported)
-      || /\b(?:not supported|not sourced|not found|unsupported|no source)\b/i.test(supported)
-      || !/\b(?:not supported|not sourced|not found|unsupported|no source|does not|doesn't)\b/i.test(unsupported)) return false;
-    const claimNumbers = reviewNumericTokens(issue.claim);
-    if (!claimNumbers.length) return false;
-    const supportedNumbers = new Set(reviewNumericTokens(supported));
-    const unsupportedNumbers = new Set(reviewNumericTokens(unsupported));
-    return claimNumbers.every((token) => supportedNumbers.has(token) && !unsupportedNumbers.has(token));
-  }));
+    && allowedUrls.has(referenceUrlKey(issue.sourceUrl || issue.source_url)));
 }
 
 export function reviewNumericTokens(value) {
