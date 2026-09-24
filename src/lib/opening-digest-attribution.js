@@ -23,7 +23,7 @@ const VARIABLE_RULES = [
 
 const UP_RE = /\b(?:rose|rallied|rebound(?:ed|ing)?|climbed|gained|jumped|advanced|strengthened|higher|trimmed (?:its |their )?losses|pared (?:its |their )?losses)\b/i;
 const DOWN_RE = /\b(?:fell|dropped|declined|slid|slipped|retreated|weakened|tumbled|lower|pulled back|gave up|trimmed (?:its |their )?gains|pared (?:its |their )?gains)\b/i;
-const EARLIER_TIME_RE = /\b(?:premarket|pre-market|overnight|in early (?:trading|dealings)|before the (?:open|bell)|at \d{1,2}(?::\d{2})?\s*(?:a\.m\.|p\.m\.)(?:\s*ET)?|by \d{1,2}(?::\d{2})?\s*(?:a\.m\.|p\.m\.)(?:\s*ET)?)\b/i;
+const EARLIER_TIME_RE = /\b(?:premarket|pre-market|overnight|yesterday|prior (?:day|session|close)|previous (?:day|session|close)|in early (?:trading|dealings)|before the (?:open|bell)|at \d{1,2}(?::\d{2})?\s*(?:a\.m\.|p\.m\.)(?:\s*ET)?|by \d{1,2}(?::\d{2})?\s*(?:a\.m\.|p\.m\.)(?:\s*ET)?)\b/i;
 const UPCOMING_RE = /\b(?:will|set to|due to|scheduled to|expected to|is set for|is due at)\b[^.]{0,60}\b(?:release|publish|report|announce|speak|testify|present|deliver|open|begin|offer|provide|show|give|land|arrive|drop)\b|\b(?:due|scheduled) (?:at|for|by) \d{1,2}(?::\d{2})?\s*(?:a\.m\.|p\.m\.)|\bwatch (?:for )?[^.]{0,60}\d{1,2}:\d{2}\s*(?:a\.m\.|p\.m\.)/i;
 const TIME_RE = /\b(\d{1,2})(?::(\d{2}))?\s*(a\.m\.|p\.m\.)(?:\s*ET)?\b/gi;
 const DIRECT_CAUSAL_RE = /\bdirectly\s+(?:support(?:s|ed)?|caus(?:e|es|ed|ing)|driv(?:e|es|en)|boost(?:s|ed)?|lift(?:s|ed)?)\b/i;
@@ -35,7 +35,7 @@ const PERCENT_RE = /(-?\d+(?:\.\d+)?)\s*%/;
 // percentage is a level (a 10-year yield at 4.947%) and must never be compared with a snapshot change.
 const CHANGE_UP_RE = /\b(?:up|rose|climbed|gained|jumped|surged|rallied|advanced|strengthened)\s+(?:about\s+|roughly\s+|around\s+|some\s+)?(?:by\s+)?(\d+(?:\.\d+)?)\s*%/gi;
 const CHANGE_DOWN_RE = /\b(?:down|fell|dropped|slipped|eased|declined|weakened|retreated|tumbled)\s+(?:about\s+|roughly\s+|around\s+|some\s+)?(?:by\s+)?(\d+(?:\.\d+)?)\s*%/gi;
-const SIGNED_PERCENT_RE = /[-+]\s?(\d+(?:\.\d+)?)\s*%/g;
+const SIGNED_PERCENT_RE = /(?<![\d.%])[-+]\s?(\d+(?:\.\d+)?)\s*%/g;
 const SNAPSHOT_REF_RE = /\bsnapshot\b/i;
 const NUMBER_RE = /(\d+(?:\.\d+)?)/g;
 const SNAPSHOT_MATCH_TOLERANCE = 0.01;
@@ -70,7 +70,6 @@ export function auditOpeningDigestAttribution({ article, snapshot = null, asOf =
       const hasLink = /\]\(https?:\/\//.test(sentence);
       // URLs and movements of another instrument must not be attributed to this one.
       const visible = sentence.replace(/\[([^\]]+)\]\(https?:\/\/[^)]+\)/g, '$1');
-      const hasEarlierLabel = EARLIER_TIME_RE.test(visible);
       for (const rule of VARIABLE_RULES) {
         const metricMention = rule.match.exec(visible);
         if (!metricMention) continue;
@@ -78,6 +77,7 @@ export function auditOpeningDigestAttribution({ article, snapshot = null, asOf =
         if (metric) {
           const metricClause = visible.slice(metricMention.index + metricMention[0].length)
             .split(/[,;—]|\b(?:while|whereas|versus|vs\.?|SPY|QQQ|IWM|VIX|WTI|DXY|S&P|Nasdaq)\b/i, 1)[0];
+          const hasEarlierLabel = hasEarlierTimeLabel(metricClause, asOf);
           const direction = sentenceDirection(metricClause);
           if (direction !== 'none' && !hasEarlierLabel) {
             const snapshotUp = Number(metric.changePct) >= 0;
@@ -134,6 +134,16 @@ function sentenceDirection(sentence) {
   const down = DOWN_RE.test(sentence);
   if (up === down) return 'none';
   return up ? 'up' : 'down';
+}
+
+function hasEarlierTimeLabel(text, asOf) {
+  if (EARLIER_TIME_RE.test(text)) return true;
+  const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+  const today = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'long' }).format(asOf);
+  const index = weekdays.indexOf(today);
+  if (index < 0) return false;
+  const prior = weekdays[(index + weekdays.length - 1) % weekdays.length];
+  return new RegExp(`\\b(?:on|late) ${prior}\\b`, 'i').test(text);
 }
 
 function sentenceChanges(sentence) {

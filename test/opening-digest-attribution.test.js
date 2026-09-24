@@ -57,6 +57,19 @@ test('a source URL and another instrument move do not become a Treasury move', (
   assert.equal(audit.stats.snapshotConflicts, 0);
 });
 
+test('a dated prior-session yield move and a yield range do not contradict the current snapshot', () => {
+  const audit = auditOpeningDigestAttribution({
+    article: article([
+      'The 10-year jumped more than 13 basis points to 5.104% on Wednesday, and held near 5.13% into Thursday.',
+      'The 10-year jumped from 4.96% to 5.14% late Wednesday as traders repriced rates.',
+      'Watch whether the 10-year holds near 5.11%-5.13% through the cash session.',
+    ].join('\n')),
+    snapshot: SNAPSHOT,
+    asOf: new Date('2026-09-24T14:00:00.000Z'),
+  });
+  assert.equal(audit.stats.snapshotConflicts, 0);
+});
+
 test('upcoming-framed same-day event times require a source link and must not already be past', () => {
   const unsourced = auditOpeningDigestAttribution({
     article: article('The 1:15 p.m. ET weekly employment report will offer a fresh labor-market read.'),
