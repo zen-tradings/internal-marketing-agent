@@ -23,7 +23,6 @@ const SHA = 'a'.repeat(40);
 test('DigitalOcean deploy defaults to read-only preflight and preserves protected production settings unless explicitly overridden', () => {
   assert.deepEqual(parseDeployArgs([]), {
     activate: false,
-    reuseVerifiedArchive: false,
     commit: 'HEAD',
     target: '',
     model: 'z-ai/glm-5.3-flash',
@@ -50,7 +49,6 @@ test('DigitalOcean deploy defaults to read-only preflight and preserves protecte
   assert.equal(parseDeployArgs(['--options-strategy-model', 'anthropic/custom']).optionsStrategyModel, 'anthropic/custom');
   assert.equal(parseDeployArgs(['--options-strategy-timeout-ms', '1200000']).optionsStrategyTimeoutMs, '1200000');
   assert.equal(parseDeployArgs(['--sync-discord-config']).syncDiscordConfig, true);
-  assert.equal(parseDeployArgs(['--reuse-verified-archive']).reuseVerifiedArchive, true);
   assert.throws(() => parseDeployArgs(['--unknown']), /Unknown argument/);
 });
 

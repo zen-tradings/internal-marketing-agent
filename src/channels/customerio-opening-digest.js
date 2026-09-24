@@ -39,7 +39,7 @@ export function makeChannel({
     id: 'customerio-opening-digest',
     templateId: CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID,
     templateLocked: true,
-    async publish({ publicationJournal, remoteOperations, runId, articlePath, config, workflow, source = 'manual', existingRemoteId = '', existingDeliveries = [], onCreated, onDelivery, onDeferredDelivery, contentMode = 'editorial', acceptanceId = '', correctionId = '' }) {
+    async publish({ publicationJournal, remoteOperations, runId, articlePath, config, workflow, source = 'manual', existingRemoteId = '', existingDeliveries = [], onCreated, onDelivery, onDeferredDelivery, contentMode = 'editorial', acceptanceId = '' }) {
       assertLivePublication(config);
       const cio = config.customerio || {};
       const digest = config.openingDigest || {};
@@ -84,10 +84,7 @@ export function makeChannel({
         if (acceptance && !/^[a-z0-9-]{8,80}$/i.test(acceptanceId)) {
           throw publishError('Opening Digest 验收邮件缺少安全的 acceptance ID');
         }
-        if (correctionId && (source !== 'cron' || !/^[1-9]\d?$/.test(String(correctionId)))) {
-          throw publishError('Opening Digest 更正版仅允许正式 cron 身份与 1-99 的修订编号');
-        }
-        const name = openingDigestNewsletterName(dateKey, { acceptance, acceptanceId, correctionId });
+        const name = openingDigestNewsletterName(dateKey, { acceptance, acceptanceId });
         let newsletterId = Number(existingRemoteId) || 0;
         let remote;
         if (newsletterId) {
@@ -118,7 +115,7 @@ export function makeChannel({
         let headerImageUrl = '';
         try {
           if (emailAlreadySent) throw new Error('skip-existing-email-cover');
-          const coverKey = acceptance ? `${dateKey}-${acceptanceId}` : correctionId ? `${dateKey}-correction-${correctionId}` : dateKey;
+          const coverKey = acceptance ? `${dateKey}-${acceptanceId}` : dateKey;
           const cover = await renderCover({
             dateLabel: displayDate(dateKey),
             executablePath: digest.browserExecutablePath,
@@ -193,7 +190,7 @@ export function makeChannel({
           name,
           type: 'email',
           recipients: { and: [{ or: [{ segment: { id: digest.segmentId } }] }] },
-          subject: openingDigestNewsletterSubject(headline, { acceptance, correctionId }),
+          subject: openingDigestNewsletterSubject(headline, { acceptance }),
           preheader_text: article.preheader,
           body,
           from: cio.from,
@@ -557,14 +554,14 @@ async function readJson(filename, label) {
   catch (error) { throw publishError(`历史同源目录缺少或损坏${label}:${error.message}`); }
 }
 
-function openingDigestNewsletterName(dateKey, { acceptance = false, acceptanceId = '', correctionId = '' } = {}) {
+function openingDigestNewsletterName(dateKey, { acceptance = false, acceptanceId = '' } = {}) {
   const base = `${OPENING_DIGEST_NEWSLETTER_TITLE} · ${dateKey}`;
-  return acceptance ? `[TEST] ${base} · ${acceptanceId}` : correctionId ? `${base} · Correction ${correctionId}` : base;
+  return acceptance ? `[TEST] ${base} · ${acceptanceId}` : base;
 }
 
-function openingDigestNewsletterSubject(headline, { acceptance = false, correctionId = '' } = {}) {
+function openingDigestNewsletterSubject(headline, { acceptance = false } = {}) {
   const base = `${String(headline || 'Opening data, read unavailable').trim()} | ${OPENING_DIGEST_NEWSLETTER_TITLE}`;
-  return acceptance ? `[TEST] ${base}` : correctionId ? `[Correction ${correctionId}] ${base}` : base;
+  return acceptance ? `[TEST] ${base}` : base;
 }
 
 function assertExistingNewsletter(remote, { newsletterId, name, segmentId, subscriptionTopicId }) {

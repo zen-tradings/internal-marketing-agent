@@ -742,26 +742,6 @@ test('Discord 只在正式 cron 邮件成功后把同一冻结英文 payload 加
   assert.equal(queued.length, 1);
 });
 
-test('formal correction gets a distinct non-TEST identity and retains cron derivative rules', async () => {
-  const requests = [];
-  const { channel } = standardChannel({ requests });
-  const enabled = config();
-  enabled.discord = { openingDigestEnabled: true };
-  const queued = [];
-  await channel.publish({
-    articlePath: '/tmp/article.md', config: enabled, source: 'cron', correctionId: '1',
-    onDeferredDelivery: async (delivery) => { queued.push(delivery); return { state: 'pending' }; },
-  });
-  const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
-  assert.equal(create.body.name, 'Zen Opening Digest · 2026-08-10 · Correction 1');
-  assert.match(create.body.subject, /^\[Correction 1\]/);
-  assert.equal(queued[0]?.destination, 'discord');
-  await assert.rejects(channel.publish({
-    articlePath: '/tmp/article.md', config: enabled, source: 'acceptance',
-    acceptanceId: 'acceptance-run-1234', correctionId: '1',
-  }), /更正版仅允许正式 cron/);
-});
-
 test('正式 cron 仅在 Customer.io 成功后持久排队微信，且队列保存原始冻结英文 payload', async () => {
   const events = [];
   const { channel } = standardChannel({

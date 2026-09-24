@@ -28,11 +28,6 @@ After reviewing the preflight output, activate the exact pushed commit:
 npm run deploy:digitalocean -- --commit "$(git rev-parse HEAD)" --max-concurrency 2 --model z-ai/glm-5.3-flash --translation-model z-ai/glm-5.3-flash --opening-digest-model z-ai/glm-5.3-flash --options-strategy-model z-ai/glm-5.3-flash --opening-digest-wechat-enabled true --sync-discord-config --activate
 ```
 
-If an upload completed but the following SSH connection failed before staging,
-rerun the same command with `--reuse-verified-archive`. The command rebuilds the
-archive for the selected commit and skips upload only when its SHA-256 matches
-the existing archive on the Droplet.
-
 需要同时切换 Opening Digest 的受控测试受众时，必须通过同一事务化部署命令传入已在 Customer.io 核验的 segment ID；部署失败会连同受保护环境文件一起回滚：
 
 ```bash

@@ -1,5 +1,4 @@
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -75,7 +74,6 @@ export function unmanagedEnvironmentText(value) {
 export function parseDeployArgs(argv) {
   const parsed = {
     activate: false,
-    reuseVerifiedArchive: false,
     commit: 'HEAD',
     target: '',
     model: DEFAULT_MODEL,
@@ -100,7 +98,6 @@ export function parseDeployArgs(argv) {
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === '--activate') parsed.activate = true;
-    else if (arg === '--reuse-verified-archive') parsed.reuseVerifiedArchive = true;
     else if (arg === '--sync-discord-config') parsed.syncDiscordConfig = true;
     else if (['--commit', '--target', '--model', '--translation-model', '--reasoning', '--planner-model', '--planner-reasoning', '--max-concurrency', '--opening-digest-model', '--opening-digest-wechat-enabled', '--opening-digest-segment-id', '--options-strategy-model', '--options-strategy-reasoning', '--options-strategy-max-tokens', '--options-strategy-timeout-ms'].includes(arg)) {
       const value = argv[++index];
@@ -625,7 +622,7 @@ export function assertLocalRelease(commit, run = runCommand) {
   run('git', ['merge-base', '--is-ancestor', commit, '@{upstream}'], { quiet: true });
 }
 
-export function activateRemote({ target, commit, model, translationModel = DEFAULT_MODEL, reasoning, plannerModel, plannerReasoning, maxConcurrency, openingDigestModel = DEFAULT_OPENING_DIGEST_MODEL, openingDigestWechatEnabled, openingDigestSegmentId = 0, optionsStrategyModel = DEFAULT_OPTIONS_STRATEGY_MODEL, optionsStrategyReasoning = DEFAULT_OPTIONS_STRATEGY_REASONING, optionsStrategyMaxTokens = DEFAULT_OPTIONS_STRATEGY_MAX_TOKENS, optionsStrategyTimeoutMs = DEFAULT_OPTIONS_STRATEGY_TIMEOUT_MS, discordConfig = null, reuseVerifiedArchive = false }, run = runCommand) {
+export function activateRemote({ target, commit, model, translationModel = DEFAULT_MODEL, reasoning, plannerModel, plannerReasoning, maxConcurrency, openingDigestModel = DEFAULT_OPENING_DIGEST_MODEL, openingDigestWechatEnabled, openingDigestSegmentId = 0, optionsStrategyModel = DEFAULT_OPTIONS_STRATEGY_MODEL, optionsStrategyReasoning = DEFAULT_OPTIONS_STRATEGY_REASONING, optionsStrategyMaxTokens = DEFAULT_OPTIONS_STRATEGY_MAX_TOKENS, optionsStrategyTimeoutMs = DEFAULT_OPTIONS_STRATEGY_TIMEOUT_MS, discordConfig = null }, run = runCommand) {
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-content-hub-deploy-'));
   const short = commit.slice(0, 12);
   const archive = path.join(temporaryDir, `zen-content-hub-${short}.tar.gz`);
@@ -655,13 +652,7 @@ exit "$code"
   const encodedRunner = Buffer.from(runnerScript, 'utf8').toString('base64');
   try {
     run('git', ['archive', '--format=tar.gz', `--output=${archive}`, commit]);
-    if (reuseVerifiedArchive) {
-      const expectedHash = createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
-      const remoteHash = run('ssh', [...SSH_OPTIONS, target, `sha256sum /tmp/zen-content-hub-${short}.tar.gz`], { quiet: true }).trim().split(/\s+/)[0];
-      if (remoteHash !== expectedHash) throw new Error('Previously uploaded release archive hash mismatch; refusing reuse');
-    } else {
-      run('scp', [...SSH_OPTIONS, archive, `${target}:/tmp/zen-content-hub-${short}.tar.gz`]);
-    }
+    run('scp', [...SSH_OPTIONS, archive, `${target}:/tmp/zen-content-hub-${short}.tar.gz`]);
     if (discordConfig) {
       fs.writeFileSync(discordConfigFile, JSON.stringify(discordConfig), { mode: 0o600 });
       run('scp', [...SSH_OPTIONS, discordConfigFile, `${target}:${remoteDiscordConfig}`]);
@@ -758,7 +749,6 @@ export async function main(argv = process.argv.slice(2)) {
     optionsStrategyMaxTokens: options.optionsStrategyMaxTokens,
     optionsStrategyTimeoutMs: options.optionsStrategyTimeoutMs,
     discordConfig,
-    reuseVerifiedArchive: options.reuseVerifiedArchive,
   });
   console.log(output.trim());
 }
