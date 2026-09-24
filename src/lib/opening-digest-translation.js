@@ -32,16 +32,21 @@ const FIXED_TERMS = new Map([
 
 export async function translateOpeningDigestPayload(payload, {
   writer, fetchFn = globalThis.fetch, cacheDir, timeoutMs = 5 * 60 * 1000, complete = completeTranslation,
+  verifiedTranslations = {},
 } = {}) {
   const wechatPayload = prepareOpeningDigestWechatPayload(payload);
   const units = translationUnits(wechatPayload);
+  const verified = new Map(Object.entries(verifiedTranslations));
+  const unknown = [...verified.keys()].filter((id) => !units.some((unit) => unit.id === id));
+  if (unknown.length) throw translationError(`人工核对译文包含未知文本块:${unknown.join(',')}`);
   const payloadHash = hashPayload(wechatPayload, writer?.model || '');
   const cachePath = cacheDir ? path.join(cacheDir, 'opening-digest-zh-CN.json') : '';
   if (cachePath) {
     try {
       const cached = JSON.parse(await fs.readFile(cachePath, 'utf8'));
       if (cached?.schemaVersion === OPENING_DIGEST_TRANSLATION_VERSION
-        && cached?.payloadHash === payloadHash && validMapping(units, cached.translations)) return cached;
+        && cached?.payloadHash === payloadHash && validMapping(units, cached.translations)
+        && [...verified].every(([id, value]) => cached.translations.find((unit) => unit.id === id)?.text === String(value || '').trim())) return cached;
     } catch (error) {
       if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw translationError(`中文译文缓存读取失败:${error.message}`);
     }
@@ -50,6 +55,15 @@ export async function translateOpeningDigestPayload(payload, {
   const translations = new Map();
   const modelUnits = [];
   for (const unit of units) {
+    if (verified.has(unit.id)) {
+      const candidate = String(verified.get(unit.id) || '').trim();
+      const assessment = assessUnit(unit, candidate, true);
+      if (assessment.hardErrors.length) {
+        throw translationError(`人工核对译文未通过硬校验:${unit.id}(${assessment.hardErrors.join('、')})`);
+      }
+      translations.set(unit.id, candidate);
+      continue;
+    }
     const fixed = FIXED_TERMS.get(unit.text);
     const company = unit.kind === 'company_name' ? translateCompanyName(unit.text) : '';
     const note = deterministicNoteTranslation(unit);
@@ -132,6 +146,7 @@ export async function translateOpeningDigestPayload(payload, {
     blockCount: ordered.length,
     repairs,
     fallbacks,
+    verifiedTranslationIds: [...verified.keys()],
     translations: ordered,
     createdAt: new Date().toISOString(),
   };

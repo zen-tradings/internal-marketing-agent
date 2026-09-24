@@ -198,6 +198,30 @@ export function openStore(dbPath) {
       `).run(String(error || '').slice(0, 1000), now, now, id);
       return db.prepare('SELECT * FROM delivery_outbox WHERE id = ?').get(id);
     },
+    requeueFailedOpeningDigestWechatTranslation(runId) {
+      const now = Date.now();
+      const result = db.prepare(`
+        UPDATE delivery_outbox
+        SET state = 'pending', attempts = 0, next_attempt_at = 0,
+            last_error = NULL, finished_at = NULL, updated_at = ?
+        WHERE run_id = ? AND destination = 'wechat' AND state = 'failed'
+          AND last_error LIKE 'Opening Digest 中文直译硬校验失败:%'
+          AND EXISTS (
+            SELECT 1 FROM runs r WHERE r.id = delivery_outbox.run_id
+              AND r.workflow_id = 'opening-digest' AND r.source = 'cron' AND r.status = 'done'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM remote_operations o WHERE o.run_id = delivery_outbox.run_id
+              AND o.operation = 'create-opening-digest-wechat'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM run_deliveries d WHERE d.run_id = delivery_outbox.run_id
+              AND d.destination = 'wechat' AND d.media_id IS NOT NULL
+          )
+      `).run(now, runId);
+      if (result.changes !== 1) throw new Error('微信译文失败 outbox 不满足安全恢复条件');
+      return db.prepare("SELECT * FROM delivery_outbox WHERE run_id = ? AND destination = 'wechat'").get(runId);
+    },
     recoveryHealth(now = Date.now()) {
       const age = (value) => value == null ? null : Math.max(0, now - Number(value));
       const queued = db.prepare("SELECT MIN(created_at) AS oldest FROM runs WHERE status = 'queued'").get();

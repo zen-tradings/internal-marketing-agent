@@ -105,6 +105,23 @@ test('Opening Digest 专用直译保持块 ID、顺序、数字、Ticker、时�
   assert.equal(calls, callsBeforeCacheRead, '同一英文 payload 的测试稿和正式稿必须复用中文译文');
 });
 
+test('人工核对译句可恢复单块翻译，同时仍拒绝新增数字', async () => {
+  const source = payload();
+  source.article.preheader = "Long yields at multi-decade highs and a renewed oil rally frame a defensive open, with today's Trump-Xi summit the main offset.";
+  const mapping = new Map(translated(source).translations.map((item) => [item.id, item.text]));
+  const verified = '长端收益率处于多个年代以来的高位，油价再度上涨，令开盘偏防御；今日 Trump-Xi 峰会是主要缓冲。';
+  const options = {
+    writer: { model: 'test' }, verifiedTranslations: { preheader: verified },
+    complete: async ({ units }) => ({ translations: units.map((unit) => ({ id: unit.id, text: mapping.get(unit.id) })) }),
+  };
+  const result = await translateOpeningDigestPayload(source, options);
+  assert.equal(result.translations.find((unit) => unit.id === 'preheader').text, verified);
+  assert.deepEqual(result.verifiedTranslationIds, ['preheader']);
+  await assert.rejects(translateOpeningDigestPayload(source, {
+    ...options, verifiedTranslations: { preheader: '10年期收益率处于高位，今日 Trump-Xi 峰会是缓冲。' },
+  }), /人工核对译文未通过硬校验/);
+});
+
 test('Opening Digest 专用翻译把可配置长超时传给模型调用', async () => {
   let observedTimeout;
   await translateOpeningDigestPayload(payload(), {

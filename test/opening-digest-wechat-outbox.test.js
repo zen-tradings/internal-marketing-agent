@@ -173,3 +173,15 @@ test('事实硬门禁终态失败只告警一次，Customer.io 状态保持成�
   assert.equal(store.listDeliveries('od-wechat-1').find((item) => item.destination === 'customerio').status, 'delivered');
   assert.equal(store.listDeliveries('od-wechat-1').find((item) => item.destination === 'wechat').status, 'failed');
 });
+
+test('只恢复尚未创建微信草稿的译文硬校验失败 outbox', () => {
+  const store = setup();
+  store.setStatus('od-wechat-1', 'done');
+  const row = queueOpeningDigestWechatDelivery({ store, runId: 'od-wechat-1', title: '微信日报', payload: openingPayload() });
+  store.failDeliveryOutbox(row.id, { error: 'Opening Digest 中文直译硬校验失败:preheader(译文新增数字)' });
+  assert.equal(store.requeueFailedOpeningDigestWechatTranslation('od-wechat-1').state, 'pending');
+  assert.throws(() => store.requeueFailedOpeningDigestWechatTranslation('od-wechat-1'), /安全恢复条件/);
+  store.failDeliveryOutbox(row.id, { error: 'Opening Digest 中文直译硬校验失败:preheader(译文新增数字)' });
+  store.prepareRemoteOperation({ runId: 'od-wechat-1', operation: 'create-opening-digest-wechat', operationKey: 'test', payloadSha256: 'hash' });
+  assert.throws(() => store.requeueFailedOpeningDigestWechatTranslation('od-wechat-1'), /安全恢复条件/);
+});
