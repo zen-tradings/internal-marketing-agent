@@ -64,17 +64,13 @@ export function makeChannel({
         if (parsed.title !== 'Zen Opening Digest' || parsed.edition !== dateKey) {
           throw publishError(`Opening Digest 标题或 edition 与当前美东日期不一致:${parsed.title} / ${parsed.edition}`);
         }
-        const headline = correctionId
-          ? `Correction: ${editorialMeta.headline || 'Opening signals stay mixed'}`
-          : editorialMeta.headline || 'Opening signals stay mixed';
+        const headline = editorialMeta.headline || 'Opening signals stay mixed';
         if (headline.length > 80) {
           throw publishError(`Opening Digest 动态标题超过安全上限 80 字符:${headline}`);
         }
         const sanitized = sanitizeUnsubscribeTags(parsed.body);
         if (sanitized.removed) diagnostics.push(`Opening Digest 正文已移除 ${sanitized.removed} 个退订 Liquid 标签`);
-        const article = { ...parsed, body: correctionId
-          ? `Correction to the 10:00 a.m. ET edition: the earlier message contained a data-only placeholder after editorial validation failed. This corrected edition supersedes it.\n\n${sanitized.body}`
-          : sanitized.body };
+        const article = { ...parsed, body: sanitized.body };
 
         const audience = await audiencePreflightFor({
           baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, segmentId: digest.segmentId,
@@ -198,7 +194,7 @@ export function makeChannel({
           name,
           type: 'email',
           recipients: { and: [{ or: [{ segment: { id: digest.segmentId } }] }] },
-          subject: openingDigestNewsletterSubject(headline, { acceptance, correctionId }),
+          subject: openingDigestNewsletterSubject(headline, { acceptance }),
           preheader_text: article.preheader,
           body,
           from: cio.from,
@@ -564,13 +560,13 @@ async function readJson(filename, label) {
 
 function openingDigestNewsletterName(dateKey, { acceptance = false, acceptanceId = '', correctionId = '' } = {}) {
   const base = `${OPENING_DIGEST_NEWSLETTER_TITLE} · ${dateKey}`;
-  return correctionId ? `[CORRECTION] ${base} · ${correctionId}`
+  return correctionId ? `${base} · resend-${dateKey}`
     : acceptance ? `[TEST] ${base} · ${acceptanceId}` : base;
 }
 
-function openingDigestNewsletterSubject(headline, { acceptance = false, correctionId = '' } = {}) {
+function openingDigestNewsletterSubject(headline, { acceptance = false } = {}) {
   const base = `${String(headline || 'Opening data, read unavailable').trim()} | ${OPENING_DIGEST_NEWSLETTER_TITLE}`;
-  return correctionId ? `[CORRECTION] ${base}` : acceptance ? `[TEST] ${base}` : base;
+  return acceptance ? `[TEST] ${base}` : base;
 }
 
 function assertExistingNewsletter(remote, { newsletterId, name, segmentId, subscriptionTopicId }) {

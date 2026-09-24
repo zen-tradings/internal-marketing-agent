@@ -415,11 +415,12 @@ sudo systemd-run --wait --pipe --collect --uid=zenbot \
 ```
 
 Restart the single service after the validated release is active so it restores
-the queued correction. The correction has a distinct `[CORRECTION]` Customer.io
-identity, sends immediately when the regular 10:15 ET window has passed, and
-freezes its email and Discord/WeChat payloads through the normal publication
-journal. Confirm all three delivery records and retire the held original email
-afterward. Never reuse the original newsletter ID or resend its frozen payload.
+the queued run. The resend has a distinct internal Customer.io identity but uses
+the ordinary recipient-facing subject, headline, and body. It sends immediately
+when the regular 10:15 ET window has passed, and freezes its email and
+Discord/WeChat payloads through the normal publication journal. Confirm all
+three delivery records and retire the held original email afterward. Never
+reuse the original newsletter ID or resend its frozen payload.
 
 
 New formal cron runs recover automatically through the SQLite `delivery_outbox`: transient translation and WeChat failures retry across restarts, and a known `media_id` is only read or updated. The command below is retained only for historical runs created before durable WeChat delivery was introduced.

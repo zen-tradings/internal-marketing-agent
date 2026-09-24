@@ -595,7 +595,7 @@ test('cron digest sends immediately when the 10:15 ET target is less than five m
   assert.equal(requests.some((item) => item.path.endsWith('/send')), true);
 });
 
-test('correction freezes a distinct, visibly labelled email and derivative payload', async () => {
+test('resend freezes a distinct internal identity with ordinary recipient-facing copy', async () => {
   const { channel } = standardChannel({
     channel: { readArticle: async () => INSIGHT_ARTICLE, now: () => new Date('2026-08-10T14:20:00.000Z') },
   });
@@ -606,11 +606,13 @@ test('correction freezes a distinct, visibly labelled email and derivative paylo
     publicationJournal: { get: () => null, prepare: (bundle) => { frozen = bundle; throw new Error('freeze captured'); } },
     remoteOperations: {},
   }), /freeze captured/);
-  assert.equal(frozen.name, '[CORRECTION] Zen Opening Digest · 2026-08-10 · correction-2026-08-10');
-  assert.match(frozen.email.subject, /^\[CORRECTION\] Correction:/);
-  assert.match(frozen.email.body, /earlier message contained a data-only placeholder/);
-  assert.match(frozen.destinations.find((item) => item.destination === 'wechat').payload.openingPayload.article.headline, /^Correction:/);
-  assert.match(frozen.destinations.find((item) => item.destination === 'discord').payload.messages[0].embeds[0].description, /corrected edition supersedes it/);
+  assert.equal(frozen.name, 'Zen Opening Digest · 2026-08-10 · resend-2026-08-10');
+  assert.equal(frozen.email.subject, 'Fed decision looms over narrow equity participation | Zen Opening Digest');
+  assert.doesNotMatch(frozen.email.body, /Correction|data-only placeholder/i);
+  assert.equal(frozen.destinations.find((item) => item.destination === 'wechat').payload.openingPayload.article.headline,
+    'Fed decision looms over narrow equity participation');
+  assert.doesNotMatch(frozen.destinations.find((item) => item.destination === 'discord').payload.messages[0].embeds[0].description,
+    /Correction|data-only placeholder/i);
 });
 
 test('prepared universe artifact is reused for acceptance and formal rendering without another OIC capture', async (t) => {
