@@ -10,7 +10,8 @@ const TARGET_FILE = path.join(REPO_ROOT, 'deploy', 'target.env');
 const LOCAL_ENV_FILE = path.join(REPO_ROOT, '.env');
 const DEFAULT_MODEL = 'z-ai/glm-5.3-flash';
 const DEFAULT_REASONING = 'high';
-const DEFAULT_PLANNER_MODEL = 'moonshotai/kimi-k3';
+const DEFAULT_PLANNER_MODEL = 'z-ai/glm-5.3-flash';
+const DEFAULT_REVIEW_MODEL = 'deepseek/deepseek-v4.1-flash';
 const DEFAULT_PLANNER_REASONING = 'high';
 const DEFAULT_OPENING_DIGEST_MODEL = 'z-ai/glm-5.3-flash';
 const DEFAULT_OPTIONS_STRATEGY_MODEL = 'z-ai/glm-5.3-flash';
@@ -74,6 +75,7 @@ export function unmanagedEnvironmentText(value) {
 export function parseDeployArgs(argv) {
   const parsed = {
     activate: false,
+    syncModelRoles: false,
     commit: 'HEAD',
     target: '',
     model: DEFAULT_MODEL,
@@ -98,6 +100,7 @@ export function parseDeployArgs(argv) {
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === '--activate') parsed.activate = true;
+    else if (arg === '--sync-model-roles') parsed.syncModelRoles = true;
     else if (arg === '--sync-discord-config') parsed.syncDiscordConfig = true;
     else if (['--commit', '--target', '--model', '--translation-model', '--reasoning', '--planner-model', '--planner-reasoning', '--max-concurrency', '--opening-digest-model', '--opening-digest-wechat-enabled', '--opening-digest-segment-id', '--options-strategy-model', '--options-strategy-reasoning', '--options-strategy-max-tokens', '--options-strategy-timeout-ms'].includes(arg)) {
       const value = argv[++index];
@@ -274,6 +277,107 @@ for key in MAX_CONCURRENCY BROWSER_CONCURRENCY WECHAT_WRITE_CONCURRENCY CUSTOMER
 done
 `;
 
+export const SYNC_MODEL_ROLES_SCRIPT = String.raw`set -euo pipefail
+expected_commit=$1
+old_router=$2
+old_planner=$3
+old_review=$4
+new_router=$5
+new_planner=$6
+new_review=$7
+env_file=/etc/zen-content-hub/zen-content-hub.env
+metadata=http://169.254.169.254/metadata/v1
+test -n "$(curl -fsS --max-time 3 "$metadata/id")"
+test "$(cat /opt/zen-content-hub/.deploy-commit)" = "$expected_commit"
+test "$(systemctl is-active zen-content-hub)" = active
+port=$(sudo awk -F= '$1 == "HEALTH_PORT" { print $2 }' "$env_file" | tail -n 1)
+test -n "$port"
+check_ready() {
+  curl -fsS --max-time 5 "http://127.0.0.1:$port/ready" | node -e '
+let raw = "";
+process.stdin.on("data", chunk => raw += chunk);
+process.stdin.on("end", () => {
+  const value = JSON.parse(raw);
+  if (value.ok !== true || value.slackConnected !== true || Number(value.queue?.active || 0) !== 0 || Number(value.queue?.pending || 0) !== 0) process.exit(1);
+});'
+}
+check_ready
+for spec in "OPENROUTER_ROUTER_MODEL:$old_router" "OPENROUTER_PLANNER_MODEL:$old_planner" "OPENROUTER_REVIEW_MODEL:$old_review"; do
+  key=${'${spec%%:*}'}
+  expected=${'${spec#*:}'}
+  actual=$(sudo awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
+  test "$actual" = "$expected"
+done
+old_pid=$(systemctl show -p MainPID --value zen-content-hub)
+test "$old_pid" -gt 0
+backup=$(sudo mktemp /etc/zen-content-hub/zen-content-hub.env.pre-model-sync.XXXXXX)
+sudo cp -a "$env_file" "$backup"
+restore_on_error() {
+  status=$?
+  trap - ERR
+  sudo cp -a "$backup" "$env_file"
+  sudo systemctl restart zen-content-hub
+  printf 'model_sync_failed_rolled_back=%s\n' "$backup" >&2
+  exit "$status"
+}
+trap restore_on_error ERR
+sudo python3 - "$env_file" "$new_router" "$new_planner" "$new_review" <<'PY'
+import os
+import sys
+import tempfile
+
+path = sys.argv[1]
+updates = dict(zip(('OPENROUTER_ROUTER_MODEL', 'OPENROUTER_PLANNER_MODEL', 'OPENROUTER_REVIEW_MODEL'), sys.argv[2:]))
+with open(path, 'rb') as source:
+    original = source.read()
+lines = original.splitlines(keepends=True)
+seen = set()
+result = []
+for line in lines:
+    key = line.split(b'=', 1)[0].decode('ascii', errors='replace')
+    if key in updates:
+        if key in seen:
+            raise SystemExit('duplicate model role key')
+        seen.add(key)
+        ending = b'\r\n' if line.endswith(b'\r\n') else b'\n' if line.endswith(b'\n') else b''
+        result.append(key.encode() + b'=' + updates[key].encode() + ending)
+    else:
+        result.append(line)
+if seen != set(updates):
+    raise SystemExit('missing model role key')
+stat = os.stat(path)
+fd, temporary = tempfile.mkstemp(prefix='.zen-content-hub.env.model-sync.', dir=os.path.dirname(path))
+try:
+    with os.fdopen(fd, 'wb') as output:
+        output.write(b''.join(result))
+        output.flush()
+        os.fsync(output.fileno())
+    os.chown(temporary, stat.st_uid, stat.st_gid)
+    os.chmod(temporary, stat.st_mode & 0o777)
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+sudo systemctl restart zen-content-hub
+ready=false
+for attempt in $(seq 1 30); do
+  new_pid=$(systemctl show -p MainPID --value zen-content-hub)
+  if [ "$new_pid" -gt 0 ] && [ "$new_pid" != "$old_pid" ] && [ "$(systemctl is-active zen-content-hub)" = active ] && check_ready; then
+    ready=true
+    break
+  fi
+  sleep 2
+done
+test "$ready" = true
+test "$(cat /opt/zen-content-hub/.deploy-commit)" = "$expected_commit"
+trap - ERR
+printf 'model_sync=complete\n'
+printf 'previous_pid=%s\n' "$old_pid"
+printf 'main_pid=%s\n' "$new_pid"
+printf 'env_backup=%s\n' "$backup"
+`;
+
 export const ACTIVATE_SCRIPT = String.raw`set -euo pipefail
 sha=$1
 model=$2
@@ -353,18 +457,15 @@ for candidate in "$stage" "$rollback" "$failed" "$env_backup" "$backup_helper_ba
     exit 1
   fi
 done
-for key in OPENROUTER_ROUTER_MODEL OPENROUTER_REVIEW_MODEL; do
-  value=$(sudo awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
-  if [ -z "$value" ]; then
-    value=$(sudo awk -F= '$1 == "OPENROUTER_MODEL" { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
-  fi
-  test "$value" = z-ai/glm-5.2
-done
+current_router=$(sudo awk -F= '$1 == "OPENROUTER_ROUTER_MODEL" { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
+current_review=$(sudo awk -F= '$1 == "OPENROUTER_REVIEW_MODEL" { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
+test "$current_router" = z-ai/glm-5.3-flash
+test "$current_review" = deepseek/deepseek-v4.1-flash
 current_planner=$(sudo awk -F= '$1 == "OPENROUTER_PLANNER_MODEL" { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
 if [ -z "$current_planner" ]; then
   current_planner=$(sudo awk -F= '$1 == "OPENROUTER_MODEL" { print substr($0, index($0, "=") + 1) }' "$env_file" | tail -n 1)
 fi
-if [ "$current_planner" != z-ai/glm-5.2 ] && [ "$current_planner" != "$planner_model" ]; then
+if [ "$current_planner" != "$planner_model" ]; then
   exit 1
 fi
 
@@ -446,9 +547,9 @@ update_env EXA_SEARCH_QPS 8
 update_env SLACK_POST_INTERVAL_MS 1000
 update_env OPENROUTER_MODEL "$model"
 update_env OPENROUTER_TRANSLATION_MODEL "$translation_model"
-update_env OPENROUTER_ROUTER_MODEL z-ai/glm-5.2
+update_env OPENROUTER_ROUTER_MODEL z-ai/glm-5.3-flash
 update_env OPENROUTER_PLANNER_MODEL "$planner_model"
-update_env OPENROUTER_REVIEW_MODEL z-ai/glm-5.2
+update_env OPENROUTER_REVIEW_MODEL deepseek/deepseek-v4.1-flash
 update_env OPENROUTER_REASONING_EFFORT "$reasoning"
 update_env OPENROUTER_PLANNER_REASONING_EFFORT "$planner_reasoning"
 update_env OPENROUTER_REVIEW_REASONING_EFFORT none
@@ -613,6 +714,27 @@ export function preflightRemote(target, run = runCommand) {
   return parsePreflight(output);
 }
 
+export function syncModelRolesRemote(target, before, run = runCommand) {
+  const values = [
+    before.active_commit,
+    before.env_OPENROUTER_ROUTER_MODEL,
+    before.env_OPENROUTER_PLANNER_MODEL,
+    before.env_OPENROUTER_REVIEW_MODEL,
+    DEFAULT_MODEL,
+    DEFAULT_PLANNER_MODEL,
+    DEFAULT_REVIEW_MODEL,
+  ];
+  if (!/^[a-z_][a-z0-9_-]*@[a-z0-9_.:-]+$/i.test(target)
+    || !/^[a-f0-9]{40}$/i.test(values[0])
+    || values.slice(1).some((value) => !/^[a-z0-9._/-]+$/i.test(value || ''))) {
+    throw new Error('Invalid production target or model role value');
+  }
+  return run('ssh', [...SSH_OPTIONS, target, `bash -s -- ${values.join(' ')}`], {
+    input: SYNC_MODEL_ROLES_SCRIPT,
+    quiet: true,
+  });
+}
+
 export function resolveCommit(commit, run = runCommand) {
   return run('git', ['rev-parse', '--verify', `${commit}^{commit}`], { quiet: true }).trim();
 }
@@ -696,6 +818,46 @@ exit "$code"
 
 export async function main(argv = process.argv.slice(2)) {
   const options = parseDeployArgs(argv);
+  if (options.syncModelRoles) {
+    if (argv.length !== 1) throw new Error('--sync-model-roles must be used alone');
+    const target = loadDeployTarget();
+    if (!/^[a-z_][a-z0-9_-]*@[a-z0-9_.:-]+$/i.test(target)) throw new Error('Invalid production SSH target');
+    const before = preflightRemote(target);
+    const roles = {
+      env_OPENROUTER_ROUTER_MODEL: [before.env_OPENROUTER_ROUTER_MODEL, DEFAULT_MODEL],
+      env_OPENROUTER_PLANNER_MODEL: [before.env_OPENROUTER_PLANNER_MODEL, DEFAULT_PLANNER_MODEL],
+      env_OPENROUTER_REVIEW_MODEL: [before.env_OPENROUTER_REVIEW_MODEL, DEFAULT_REVIEW_MODEL],
+    };
+    for (const [key, [current, desired]] of Object.entries(roles)) {
+      if (![desired, key === 'env_OPENROUTER_PLANNER_MODEL' ? 'moonshotai/kimi-k3' : 'z-ai/glm-5.2'].includes(current)) {
+        throw new Error(`Production ${key} has an unexpected value: ${current || '(missing)'}`);
+      }
+    }
+    if (Object.values(roles).every(([current, desired]) => current === desired)) {
+      console.log('Production model roles already match the requested configuration.');
+      return;
+    }
+    const output = syncModelRolesRemote(target, before);
+    const after = preflightRemote(target);
+    if (after.active_commit !== before.active_commit
+      || Object.entries(roles).some(([key, [, desired]]) => after[key] !== desired)) {
+      throw new Error('Production model role verification failed after restart');
+    }
+    console.log(output.trim());
+    console.log(JSON.stringify({
+      droplet_id: after.droplet_id,
+      active_commit: after.active_commit,
+      service: after.service,
+      ready_ok: after.ready_ok,
+      slack_connected: after.slack_connected,
+      queue_active: after.queue_active,
+      queue_pending: after.queue_pending,
+      router_model: after.env_OPENROUTER_ROUTER_MODEL,
+      planner_model: after.env_OPENROUTER_PLANNER_MODEL,
+      review_model: after.env_OPENROUTER_REVIEW_MODEL,
+    }, null, 2));
+    return;
+  }
   const target = loadDeployTarget(options);
   const commit = resolveCommit(options.commit);
   validateDeployInputs({ ...options, target, commit });
@@ -727,10 +889,10 @@ export async function main(argv = process.argv.slice(2)) {
   const effectiveRouterModel = preflight.env_OPENROUTER_ROUTER_MODEL || preflight.env_OPENROUTER_MODEL;
   const effectivePlannerModel = preflight.env_OPENROUTER_PLANNER_MODEL || preflight.env_OPENROUTER_MODEL;
   const effectiveReviewModel = preflight.env_OPENROUTER_REVIEW_MODEL || preflight.env_OPENROUTER_MODEL;
-  if (effectiveRouterModel !== 'z-ai/glm-5.2'
-    || !['z-ai/glm-5.2', options.plannerModel].includes(effectivePlannerModel)
-    || effectiveReviewModel !== 'z-ai/glm-5.2') {
-    throw new Error('Production model roles have drifted from the approved GLM-to-Kimi planner migration path');
+  if (effectiveRouterModel !== DEFAULT_MODEL
+    || effectivePlannerModel !== options.plannerModel
+    || effectiveReviewModel !== DEFAULT_REVIEW_MODEL) {
+    throw new Error('Production model roles have drifted from the approved configuration');
   }
   const output = activateRemote({
     target,

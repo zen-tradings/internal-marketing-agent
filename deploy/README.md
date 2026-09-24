@@ -22,6 +22,16 @@ Slack readiness, idle queue and current model roles:
 npm run deploy:digitalocean
 ```
 
+To synchronize only the router, planner, and review model values in the protected
+production environment, use the same deployment entry point. It verifies the
+Droplet and idle service, backs up the environment file, changes only those three
+values, restarts the existing release, and checks readiness. It does not require
+a clean local worktree because it does not upload code:
+
+```bash
+npm run deploy:digitalocean -- --sync-model-roles
+```
+
 After reviewing the preflight output, activate the exact pushed commit:
 
 ```bash
@@ -107,9 +117,9 @@ QDII_ENABLED=true
 QDII_PYTHON_PATH=.venv/bin/python
 QDII_WORKER_PATH=/opt/zen-content-hub/python/qdii_worker.py
 OPENROUTER_MODEL=z-ai/glm-5.3-flash
-OPENROUTER_ROUTER_MODEL=z-ai/glm-5.2
-OPENROUTER_PLANNER_MODEL=moonshotai/kimi-k3
-OPENROUTER_REVIEW_MODEL=z-ai/glm-5.2
+OPENROUTER_ROUTER_MODEL=z-ai/glm-5.3-flash
+OPENROUTER_PLANNER_MODEL=z-ai/glm-5.3-flash
+OPENROUTER_REVIEW_MODEL=deepseek/deepseek-v4.1-flash
 OPENROUTER_REASONING_EFFORT=high
 OPENROUTER_PLANNER_REASONING_EFFORT=high
 OPENROUTER_REVIEW_REASONING_EFFORT=none

@@ -76,9 +76,9 @@ export function loadConfig(env = process.env) {
     writer: {
       openrouterApiKey: need('OPENROUTER_API_KEY'),
       model: env.OPENROUTER_MODEL || 'z-ai/glm-5.3-flash',
-      routerModel: env.OPENROUTER_ROUTER_MODEL || 'z-ai/glm-5.2',
-      plannerModel: env.OPENROUTER_PLANNER_MODEL || 'moonshotai/kimi-k3',
-      reviewModel: env.OPENROUTER_REVIEW_MODEL || 'z-ai/glm-5.2',
+      routerModel: env.OPENROUTER_ROUTER_MODEL || 'z-ai/glm-5.3-flash',
+      plannerModel: env.OPENROUTER_PLANNER_MODEL || 'z-ai/glm-5.3-flash',
+      reviewModel: env.OPENROUTER_REVIEW_MODEL || 'deepseek/deepseek-v4.1-flash',
       optionsStrategyModel: env.OPTIONS_STRATEGY_MODEL || 'z-ai/glm-5.3-flash',
       baseUrl: env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
       maxTokens: positiveIntegerOrThrow(env.OPENROUTER_MAX_TOKENS, 12000, 'OPENROUTER_MAX_TOKENS'),
@@ -254,7 +254,7 @@ export function loadConfig(env = process.env) {
     },
     assets: {
       headerImage: env.WECHAT_HEADER_IMAGE || path.join(REPO_ROOT, 'assets', 'zen-header-banner.gif'),
-      surveyImage: env.WECHAT_SURVEY_IMAGE || path.join(REPO_ROOT, 'assets', 'zen-survey-qr.jpg'),
+      surveyImage: env.WECHAT_SURVEY_IMAGE || path.join(REPO_ROOT, 'assets', 'zen-community-banner.png'),
       footerImage: env.WECHAT_FOOTER_IMAGE || path.join(REPO_ROOT, 'assets', 'zen-footer-qr.png'),
     },
     cover: {

@@ -704,7 +704,7 @@ function config() {
     openingDigest: { browserExecutablePath: '/tmp/chrome', captureTimeoutMs: 1000 },
     assets: {
       headerImage: path.resolve('assets/zen-header-banner.gif'),
-      surveyImage: path.resolve('assets/zen-survey-qr.jpg'),
+      surveyImage: path.resolve('assets/zen-community-banner.png'),
       footerImage: path.resolve('assets/zen-footer-qr.png'),
     },
   };

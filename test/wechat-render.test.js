@@ -35,7 +35,7 @@ test('微信最终 HTML:尾图移动到脚注和来源之后且只出现一次',
 });
 
 test('微信最终 HTML:调研图与社群封底固定为最后两张且顺序不可交换', () => {
-  const survey = path.resolve('assets/zen-survey-qr.jpg');
+  const survey = path.resolve('assets/zen-community-banner.png');
   const footer = path.resolve('assets/zen-footer-qr.png');
   const html = `<section><p><img src="${footer}"></p><p>正文</p><p><img src="${survey}"></p><section class="footnotes">脚注</section></section>`;
   const output = appendFinalTailImages(html, { surveyPath: survey, footerPath: footer });

@@ -14,10 +14,10 @@ test('固定封底使用最新四二维码原图', () => {
   assert.equal(digest, 'fce16f9a13c62cc67d4668645e738565cb00df13bb3876dba2e3663d77c975d5');
 });
 
-test('固定倒数第二张图使用内容调研问卷原图', () => {
-  const survey = new URL('../assets/zen-survey-qr.jpg', import.meta.url);
+test('固定倒数第二张图使用社区双 GitHub 二维码横幅原图', () => {
+  const survey = new URL('../assets/zen-community-banner.png', import.meta.url);
   const digest = crypto.createHash('sha256').update(fs.readFileSync(survey)).digest('hex');
-  assert.equal(digest, 'd75f2e711ab6958a1303084edea5c2682d17cb00ac48b413309d7c5ebc595a25');
+  assert.equal(digest, '01fd867e5554eaea61fb9842c41a513117c13881c274fb896fe4505c1c810e32');
 });
 
 test('有 frontmatter 时头图插在第二个 --- 之后空一行处,尾图追加到文末', () => {

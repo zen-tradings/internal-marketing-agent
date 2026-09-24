@@ -8,12 +8,14 @@ import {
   ACTIVATE_SCRIPT,
   DEPLOY_MANAGED_ENV_KEYS,
   PREFLIGHT_SCRIPT,
+  SYNC_MODEL_ROLES_SCRIPT,
   loadDeployTarget,
   loadDiscordDeployConfig,
   parseDeployArgs,
   parsePreflight,
   parseRemoteDeployStatus,
   resolveMaxConcurrency,
+  syncModelRolesRemote,
   validateDeployInputs,
   unmanagedEnvironmentText,
 } from '../scripts/deploy-digitalocean.mjs';
@@ -23,12 +25,13 @@ const SHA = 'a'.repeat(40);
 test('DigitalOcean deploy defaults to read-only preflight and preserves protected production settings unless explicitly overridden', () => {
   assert.deepEqual(parseDeployArgs([]), {
     activate: false,
+    syncModelRoles: false,
     commit: 'HEAD',
     target: '',
     model: 'z-ai/glm-5.3-flash',
     translationModel: 'z-ai/glm-5.3-flash',
     reasoning: 'high',
-    plannerModel: 'moonshotai/kimi-k3',
+    plannerModel: 'z-ai/glm-5.3-flash',
     plannerReasoning: 'high',
     maxConcurrency: undefined,
     openingDigestModel: undefined,
@@ -49,6 +52,7 @@ test('DigitalOcean deploy defaults to read-only preflight and preserves protecte
   assert.equal(parseDeployArgs(['--options-strategy-model', 'anthropic/custom']).optionsStrategyModel, 'anthropic/custom');
   assert.equal(parseDeployArgs(['--options-strategy-timeout-ms', '1200000']).optionsStrategyTimeoutMs, '1200000');
   assert.equal(parseDeployArgs(['--sync-discord-config']).syncDiscordConfig, true);
+  assert.equal(parseDeployArgs(['--sync-model-roles']).syncModelRoles, true);
   assert.throws(() => parseDeployArgs(['--unknown']), /Unknown argument/);
 });
 
@@ -62,7 +66,7 @@ test('activation preserves the preflight concurrency unless an operator explicit
 });
 
 test('embedded remote preflight and activation scripts are valid Bash', () => {
-  for (const script of [PREFLIGHT_SCRIPT, ACTIVATE_SCRIPT]) {
+  for (const script of [PREFLIGHT_SCRIPT, ACTIVATE_SCRIPT, SYNC_MODEL_ROLES_SCRIPT]) {
     const result = spawnSync('bash', ['-n'], { input: script, encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
   }
@@ -101,6 +105,59 @@ test('embedded remote preflight and activation scripts are valid Bash', () => {
   assert.match(ACTIVATE_SCRIPT, /\[ "\$switch_started" -eq 0 \] && \[ -d "\$stage" \]/);
   assert.match(ACTIVATE_SCRIPT, /find \/var\/lib\/zen-content-hub\/backups[^\n]+backup-\*\.sha256/);
   assert.match(ACTIVATE_SCRIPT, /sha256sum -c "\$latest_backup_manifest"/);
+});
+
+test('model role sync uses a validated target, the current release, and only the three approved values', () => {
+  const before = {
+    active_commit: SHA,
+    env_OPENROUTER_ROUTER_MODEL: 'z-ai/glm-5.2',
+    env_OPENROUTER_PLANNER_MODEL: 'moonshotai/kimi-k3',
+    env_OPENROUTER_REVIEW_MODEL: 'z-ai/glm-5.2',
+  };
+  let call;
+  const run = (command, args, options) => {
+    call = { command, args, options };
+    return 'model_sync=complete\n';
+  };
+  assert.equal(syncModelRolesRemote('root@203.0.113.8', before, run), 'model_sync=complete\n');
+  assert.equal(call.command, 'ssh');
+  assert.match(call.args.at(-1), new RegExp(`bash -s -- ${SHA} z-ai/glm-5\\.2 moonshotai/kimi-k3 z-ai/glm-5\\.2 z-ai/glm-5\\.3-flash z-ai/glm-5\\.3-flash deepseek/deepseek-v4\\.1-flash`));
+  assert.equal(call.options.input, SYNC_MODEL_ROLES_SCRIPT);
+  assert.match(SYNC_MODEL_ROLES_SCRIPT, /pre-model-sync/);
+  assert.match(SYNC_MODEL_ROLES_SCRIPT, /trap restore_on_error ERR/);
+  assert.match(SYNC_MODEL_ROLES_SCRIPT, /sudo systemctl restart zen-content-hub/);
+  assert.throws(() => syncModelRolesRemote('root@example.com;false', before, run), /Invalid production target/);
+  assert.throws(() => syncModelRolesRemote('root@example.com', { ...before, env_OPENROUTER_ROUTER_MODEL: 'bad;false' }, run), /Invalid production target/);
+});
+
+test('model role sync changes only three environment lines and rejects incomplete input', () => {
+  const python = SYNC_MODEL_ROLES_SCRIPT.match(/<<'PY'\n([\s\S]*?)\nPY/)[1];
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-role-sync-'));
+  const envFile = path.join(directory, 'service.env');
+  const original = [
+    'SECRET=keep-exactly',
+    'OPENROUTER_ROUTER_MODEL=z-ai/glm-5.2',
+    'OPENROUTER_PLANNER_MODEL=moonshotai/kimi-k3',
+    'OPENROUTER_REVIEW_MODEL=z-ai/glm-5.2',
+    'TAIL=keep',
+    '',
+  ].join('\n');
+  try {
+    fs.writeFileSync(envFile, original, { mode: 0o640 });
+    const result = spawnSync('python3', ['-c', python, envFile, 'z-ai/glm-5.3-flash', 'z-ai/glm-5.3-flash', 'deepseek/deepseek-v4.1-flash'], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.readFileSync(envFile, 'utf8'), original
+      .replace('OPENROUTER_ROUTER_MODEL=z-ai/glm-5.2', 'OPENROUTER_ROUTER_MODEL=z-ai/glm-5.3-flash')
+      .replace('OPENROUTER_PLANNER_MODEL=moonshotai/kimi-k3', 'OPENROUTER_PLANNER_MODEL=z-ai/glm-5.3-flash')
+      .replace('OPENROUTER_REVIEW_MODEL=z-ai/glm-5.2', 'OPENROUTER_REVIEW_MODEL=deepseek/deepseek-v4.1-flash'));
+    assert.equal(fs.statSync(envFile).mode & 0o777, 0o640);
+    fs.writeFileSync(envFile, 'SECRET=keep-exactly\nOPENROUTER_ROUTER_MODEL=old\n');
+    const failed = spawnSync('python3', ['-c', python, envFile, 'z-ai/glm-5.3-flash', 'z-ai/glm-5.3-flash', 'deepseek/deepseek-v4.1-flash'], { encoding: 'utf8' });
+    assert.notEqual(failed.status, 0);
+    assert.equal(fs.readFileSync(envFile, 'utf8'), 'SECRET=keep-exactly\nOPENROUTER_ROUTER_MODEL=old\n');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('detached remote deployment status is strict and explicit', () => {

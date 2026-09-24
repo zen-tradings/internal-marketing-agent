@@ -106,7 +106,7 @@ You send `@bot earnings: Micron FY26Q3 https://example.com/xxx` in Slack. Then, 
    headless Chromium; field-extraction failure falls back to safe
    defaults, generator failure or timeout blocks publishing)
    → @wenyan-md/core rendering; wechat-render.js appends
-   assets/zen-survey-qr.jpg then assets/zen-footer-qr.png at the end of
+   assets/zen-community-banner.png then assets/zen-footer-qr.png at the end of
    the final HTML, then uploads to the WeChat draft box (RENDER_OPTS is a
    hard character-level parity constraint with wenyan-mcp — never change
    it) → persist the returned media_id (idempotency anchor)

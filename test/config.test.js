@@ -26,7 +26,7 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal('egress' in c, false);
   assert.equal(c.writer.openrouterApiKey, 'or-key');
   assert.equal(c.writer.model, 'deepseek/deepseek-chat');
-  assert.equal(c.writer.plannerModel, 'moonshotai/kimi-k3');
+  assert.equal(c.writer.plannerModel, 'z-ai/glm-5.3-flash');
   assert.equal(c.writer.baseUrl, 'https://openrouter.ai/api/v1');
   assert.equal(c.writer.maxTokens, 12000);
   assert.equal(c.writer.reasoningEffort, 'high');
@@ -80,7 +80,7 @@ test('loadConfig 读取 env 并给出默认值', () => {
   assert.equal(c.openingDigest.earningsWorkerTimeoutMs, 15000);
   assert.equal(c.workflowEnvironment.channel, 'wechat-draft');
   assert.equal(c.workflowEnvironment.newsletterEdition, 'Vol. 1');
-  assert.match(c.assets.surveyImage, /assets\/zen-survey-qr\.jpg$/);
+  assert.match(c.assets.surveyImage, /assets\/zen-community-banner\.png$/);
   assert.match(c.assets.footerImage, /assets\/zen-footer-qr\.png$/);
 });
 
@@ -103,9 +103,9 @@ test('默认写作角色使用 GLM 5.3 Flash，辅助角色保持既定模型', 
   assert.equal(c.translation.model, 'z-ai/glm-5.3-flash');
   assert.equal(c.openingDigest.model, 'z-ai/glm-5.3-flash');
   assert.equal(c.writer.optionsStrategyModel, 'z-ai/glm-5.3-flash');
-  assert.equal(c.writer.routerModel, 'z-ai/glm-5.2');
-  assert.equal(c.writer.plannerModel, 'moonshotai/kimi-k3');
-  assert.equal(c.writer.reviewModel, 'z-ai/glm-5.2');
+  assert.equal(c.writer.routerModel, 'z-ai/glm-5.3-flash');
+  assert.equal(c.writer.plannerModel, 'z-ai/glm-5.3-flash');
+  assert.equal(c.writer.reviewModel, 'deepseek/deepseek-v4.1-flash');
 });
 
 test('生产环境允许已验证的 1-2 并发并锁住重资源上限', () => {
@@ -290,9 +290,9 @@ test('分析 V2 的模型角色、搜索预算、时效窗口和 Slack 编辑防
     WECHAT_APP_ID: 'wx', WECHAT_APP_SECRET: 'sec',
     OPENROUTER_API_KEY: 'or-key',
     OPENROUTER_MODEL: 'qwen/qwen3.8-max',
-    OPENROUTER_ROUTER_MODEL: 'z-ai/glm-5.2',
-    OPENROUTER_PLANNER_MODEL: 'moonshotai/kimi-k3',
-    OPENROUTER_REVIEW_MODEL: 'z-ai/glm-5.2',
+    OPENROUTER_ROUTER_MODEL: 'z-ai/glm-5.3-flash',
+    OPENROUTER_PLANNER_MODEL: 'z-ai/glm-5.3-flash',
+    OPENROUTER_REVIEW_MODEL: 'deepseek/deepseek-v4.1-flash',
     OPENROUTER_PLANNER_REASONING_EFFORT: 'high',
     ANALYSIS_PIPELINE_VERSION: 'v1',
     ANALYSIS_SEARCH_MAX_QUERIES: '5',
@@ -300,9 +300,9 @@ test('分析 V2 的模型角色、搜索预算、时效窗口和 Slack 编辑防
     SLACK_EDIT_DEBOUNCE_MS: '2500',
   });
   assert.equal(c.writer.model, 'qwen/qwen3.8-max');
-  assert.equal(c.writer.routerModel, 'z-ai/glm-5.2');
-  assert.equal(c.writer.plannerModel, 'moonshotai/kimi-k3');
-  assert.equal(c.writer.reviewModel, 'z-ai/glm-5.2');
+  assert.equal(c.writer.routerModel, 'z-ai/glm-5.3-flash');
+  assert.equal(c.writer.plannerModel, 'z-ai/glm-5.3-flash');
+  assert.equal(c.writer.reviewModel, 'deepseek/deepseek-v4.1-flash');
   assert.equal(c.writer.plannerReasoningEffort, 'high');
   assert.equal(c.analysis.pipelineVersion, 'v1');
   assert.equal(c.analysis.searchMaxQueries, 5);
