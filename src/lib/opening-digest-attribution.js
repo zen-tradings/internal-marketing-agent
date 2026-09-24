@@ -68,12 +68,17 @@ export function auditOpeningDigestAttribution({ article, snapshot = null, asOf =
       if (trimmed.length < 12) continue;
       stats.sentenceCount += 1;
       const hasLink = /\]\(https?:\/\//.test(sentence);
-      const hasEarlierLabel = EARLIER_TIME_RE.test(sentence);
+      // URLs and movements of another instrument must not be attributed to this one.
+      const visible = sentence.replace(/\[([^\]]+)\]\(https?:\/\/[^)]+\)/g, '$1');
+      const hasEarlierLabel = EARLIER_TIME_RE.test(visible);
       for (const rule of VARIABLE_RULES) {
-        if (!rule.match.test(sentence)) continue;
+        const metricMention = rule.match.exec(visible);
+        if (!metricMention) continue;
         const metric = metrics.get(rule.key);
         if (metric) {
-          const direction = sentenceDirection(sentence);
+          const metricClause = visible.slice(metricMention.index + metricMention[0].length)
+            .split(/[,;—]|\b(?:while|whereas|versus|vs\.?|SPY|QQQ|IWM|VIX|WTI|DXY|S&P|Nasdaq)\b/i, 1)[0];
+          const direction = sentenceDirection(metricClause);
           if (direction !== 'none' && !hasEarlierLabel) {
             const snapshotUp = Number(metric.changePct) >= 0;
             if ((direction === 'up') !== snapshotUp) {
@@ -81,7 +86,7 @@ export function auditOpeningDigestAttribution({ article, snapshot = null, asOf =
               warnings.push(`归因冲突:正文对 ${metric.label} 的方向与 ${snapshot?.capturedAt || '快照'} 时点快照(${signedPct(metric.changePct)})不一致,且未标注更早观察时点:${trimmed}`);
             }
           }
-          const changes = sentenceChanges(sentence);
+          const changes = sentenceChanges(metricClause);
           if (changes.length && !hasEarlierLabel) {
             for (const change of changes) {
               if (Math.sign(change) !== 0 && Math.sign(change) !== Math.sign(metric.changePct)) {

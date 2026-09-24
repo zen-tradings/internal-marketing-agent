@@ -45,6 +45,18 @@ test('yield direction matching the snapshot does not warn', () => {
   assert.equal(audit.stats.snapshotConflicts, 0);
 });
 
+test('a source URL and another instrument move do not become a Treasury move', () => {
+  const audit = auditOpeningDigestAttribution({
+    article: article([
+      'S&P Global flash PMI jumped to 58.4 ([report](https://example.com/10-year-treasury-tops-5)).',
+      "The 10-year's 5.104% prior close coincides with QQQ -0.60% versus SPY -0.31% in the snapshot.",
+    ].join(' ')),
+    snapshot: SNAPSHOT,
+    asOf: AS_OF,
+  });
+  assert.equal(audit.stats.snapshotConflicts, 0);
+});
+
 test('upcoming-framed same-day event times require a source link and must not already be past', () => {
   const unsourced = auditOpeningDigestAttribution({
     article: article('The 1:15 p.m. ET weekly employment report will offer a fresh labor-market read.'),

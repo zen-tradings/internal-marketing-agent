@@ -399,6 +399,29 @@ diagnosis; do not retry against production or send a Slack test message.
 
 ## Recovering a failed Opening Digest WeChat derivative
 
+### Correcting a data-only attribution-conflict edition
+
+If a formal edition was published as a data-only placeholder after an unresolved
+attribution conflict, hold any scheduled original Customer.io send and verify that
+hold with its operation record before queuing a correction. The correction command
+requires the original current-day run, its trace, a completed original email
+record, a confirmed `postpone-opening-email` operation, and an idle queue:
+
+```bash
+sudo systemd-run --wait --pipe --collect --uid=zenbot \
+  --property=WorkingDirectory=/opt/zen-content-hub \
+  --property=EnvironmentFile=/etc/zen-content-hub/zen-content-hub.env \
+  /usr/bin/npm run requeue:opening-digest-correction -- "$run_id"
+```
+
+Restart the single service after the validated release is active so it restores
+the queued correction. The correction has a distinct `[CORRECTION]` Customer.io
+identity, sends immediately when the regular 10:15 ET window has passed, and
+freezes its email and Discord/WeChat payloads through the normal publication
+journal. Confirm all three delivery records and retire the held original email
+afterward. Never reuse the original newsletter ID or resend its frozen payload.
+
+
 New formal cron runs recover automatically through the SQLite `delivery_outbox`: transient translation and WeChat failures retry across restarts, and a known `media_id` is only read or updated. The command below is retained only for historical runs created before durable WeChat delivery was introduced.
 
 When a formal cron email succeeded but its Chinese WeChat derivative failed at the immutable-token translation gate before receiving any WeChat `media_id`, deploy and verify the fix first. Confirm `/ready` reports `active=0` and `pending=0`, then run the restricted recovery against the SQLite `runs.id`:

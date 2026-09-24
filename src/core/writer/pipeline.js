@@ -491,7 +491,9 @@ export async function runWriter({
       };
       writeResearchTrace(researchTracePath, trace);
       if (finalAttribution.warnings.length) {
-        throw new Error(`Opening Digest 归因快照冲突在发布前仍存在:${finalAttribution.warnings.length} 条，已拦截发送:${finalAttribution.warnings[0].slice(0, 240)}`);
+        const error = new Error(`Opening Digest 归因快照冲突在发布前仍存在:${finalAttribution.warnings.length} 条，已拦截发送:${finalAttribution.warnings[0].slice(0, 240)}`);
+        error.openingDigestHardFailure = true;
+        throw error;
       }
     }
 

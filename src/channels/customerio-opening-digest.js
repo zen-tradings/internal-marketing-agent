@@ -39,13 +39,17 @@ export function makeChannel({
     id: 'customerio-opening-digest',
     templateId: CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID,
     templateLocked: true,
-    async publish({ publicationJournal, remoteOperations, runId, articlePath, config, workflow, source = 'manual', existingRemoteId = '', existingDeliveries = [], onCreated, onDelivery, onDeferredDelivery, contentMode = 'editorial', acceptanceId = '' }) {
+    async publish({ publicationJournal, remoteOperations, runId, articlePath, config, workflow, source = 'manual', existingRemoteId = '', existingDeliveries = [], onCreated, onDelivery, onDeferredDelivery, contentMode = 'editorial', acceptanceId = '', correctionId = '' }) {
       assertLivePublication(config);
       const cio = config.customerio || {};
       const digest = config.openingDigest || {};
       assertDigestConfig(cio, digest);
       const frozen = publicationJournal?.get();
       if (frozen) return withFrozenPublication(frozen.payload, { publicationJournal, remoteOperations, runId, cio, digest, fetchFn, sleep, onCreated });
+      if (correctionId && (source !== 'cron' || !publicationJournal || !remoteOperations || contentMode !== 'editorial'
+        || !/^correction-[a-z0-9-]{8,64}$/.test(correctionId))) {
+        throw publishError('Opening Digest 纠错发送要求正式持久化任务和完整 editorial 稿');
+      }
       const current = now();
       const dateKey = easternDateKey(current);
       const diagnostics = [];
@@ -60,13 +64,17 @@ export function makeChannel({
         if (parsed.title !== 'Zen Opening Digest' || parsed.edition !== dateKey) {
           throw publishError(`Opening Digest 标题或 edition 与当前美东日期不一致:${parsed.title} / ${parsed.edition}`);
         }
-        const headline = editorialMeta.headline || 'Opening signals stay mixed';
+        const headline = correctionId
+          ? `Correction: ${editorialMeta.headline || 'Opening signals stay mixed'}`
+          : editorialMeta.headline || 'Opening signals stay mixed';
         if (headline.length > 80) {
           throw publishError(`Opening Digest 动态标题超过安全上限 80 字符:${headline}`);
         }
         const sanitized = sanitizeUnsubscribeTags(parsed.body);
         if (sanitized.removed) diagnostics.push(`Opening Digest 正文已移除 ${sanitized.removed} 个退订 Liquid 标签`);
-        const article = { ...parsed, body: sanitized.body };
+        const article = { ...parsed, body: correctionId
+          ? `Correction to the 10:00 a.m. ET edition: the earlier message contained a data-only placeholder after editorial validation failed. This corrected edition supersedes it.\n\n${sanitized.body}`
+          : sanitized.body };
 
         const audience = await audiencePreflightFor({
           baseUrl: cio.baseUrl, appApiKey: cio.appApiKey, segmentId: digest.segmentId,
@@ -84,7 +92,7 @@ export function makeChannel({
         if (acceptance && !/^[a-z0-9-]{8,80}$/i.test(acceptanceId)) {
           throw publishError('Opening Digest 验收邮件缺少安全的 acceptance ID');
         }
-        const name = openingDigestNewsletterName(dateKey, { acceptance, acceptanceId });
+        const name = openingDigestNewsletterName(dateKey, { acceptance, acceptanceId, correctionId });
         let newsletterId = Number(existingRemoteId) || 0;
         let remote;
         if (newsletterId) {
@@ -190,7 +198,7 @@ export function makeChannel({
           name,
           type: 'email',
           recipients: { and: [{ or: [{ segment: { id: digest.segmentId } }] }] },
-          subject: openingDigestNewsletterSubject(headline, { acceptance }),
+          subject: openingDigestNewsletterSubject(headline, { acceptance, correctionId }),
           preheader_text: article.preheader,
           body,
           from: cio.from,
@@ -554,14 +562,15 @@ async function readJson(filename, label) {
   catch (error) { throw publishError(`历史同源目录缺少或损坏${label}:${error.message}`); }
 }
 
-function openingDigestNewsletterName(dateKey, { acceptance = false, acceptanceId = '' } = {}) {
+function openingDigestNewsletterName(dateKey, { acceptance = false, acceptanceId = '', correctionId = '' } = {}) {
   const base = `${OPENING_DIGEST_NEWSLETTER_TITLE} · ${dateKey}`;
-  return acceptance ? `[TEST] ${base} · ${acceptanceId}` : base;
+  return correctionId ? `[CORRECTION] ${base} · ${correctionId}`
+    : acceptance ? `[TEST] ${base} · ${acceptanceId}` : base;
 }
 
-function openingDigestNewsletterSubject(headline, { acceptance = false } = {}) {
+function openingDigestNewsletterSubject(headline, { acceptance = false, correctionId = '' } = {}) {
   const base = `${String(headline || 'Opening data, read unavailable').trim()} | ${OPENING_DIGEST_NEWSLETTER_TITLE}`;
-  return acceptance ? `[TEST] ${base}` : base;
+  return correctionId ? `[CORRECTION] ${base}` : acceptance ? `[TEST] ${base}` : base;
 }
 
 function assertExistingNewsletter(remote, { newsletterId, name, segmentId, subscriptionTopicId }) {

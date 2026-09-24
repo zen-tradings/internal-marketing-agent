@@ -39,15 +39,19 @@ export async function runWithRetry(
 }
 
 export function openingDigestPublishContext(run) {
+  const correction = run?.workflowId === 'opening-digest' && run?.source === 'cron'
+    ? /^opening-digest-(correction-\d{4}-\d{2}-\d{2})$/.exec(String(run.id || ''))
+    : null;
+  if (correction) return { source: 'cron', acceptanceId: '', correctionId: correction[1] };
   if (run?.workflowId !== 'opening-digest' || run?.source !== 'slack') {
-    return { source: run?.source, acceptanceId: '' };
+    return { source: run?.source, acceptanceId: '', correctionId: '' };
   }
   const raw = String(run.id || '');
   const normalized = raw.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
   const acceptanceId = /^[a-z0-9-]{8,80}$/.test(normalized)
     ? normalized
     : `slack-${normalized.slice(0, 54) || 'run'}-${crypto.createHash('sha256').update(raw).digest('hex').slice(0, 12)}`.slice(0, 80);
-  return { source: 'acceptance', acceptanceId };
+  return { source: 'acceptance', acceptanceId, correctionId: '' };
 }
 
 // Queue-handler factory with injectable store, runner, and channels for unit tests.
@@ -268,6 +272,7 @@ export function makeHandler(deps) {
           contentMode: res.contentMode,
           source: publishContext.source,
           acceptanceId: publishContext.acceptanceId,
+          correctionId: publishContext.correctionId,
         });
         ChannelResult.parse({ mediaId, title });
         store.setMediaId(run.id, mediaId, title); // Persist immediately after publish to support the idempotency check above.
@@ -419,4 +424,3 @@ async function notifyBestEffort(notifier, method, notify, payload) {
     return undefined;
   }
 }
-
