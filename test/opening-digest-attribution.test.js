@@ -180,6 +180,18 @@ test('an unsourced WTI change different from its own snapshot still warns', () =
   assert.ok(audit.warnings.some((warning) => warning.includes('归因无源:正文对 WTI')));
 });
 
+test('signed snapshot changes retain their negative sign', () => {
+  const audit = auditOpeningDigestAttribution({
+    article: article('SPY at 767.04 (-0.02%) and VIX at 15.23 (-2.81%) as of 10:16 AM ET show contained volatility.'),
+    snapshot: { metrics: [
+      { label: 'SPY', value: 767.04, changePct: -0.02 },
+      { label: 'VIX', value: 15.23, changePct: -2.81 },
+    ] },
+    asOf: new Date('2026-09-25T14:16:00Z'),
+  });
+  assert.deepEqual(audit.warnings, []);
+});
+
 test('attribution repair invariant allows deletion but forbids new tokens', () => {
   const original = article('Oil rebounded for 4 days. [A sourced line](https://example.com/a) stays.');
   const deletion = article('[A sourced line](https://example.com/a) stays.');

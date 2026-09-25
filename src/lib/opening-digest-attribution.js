@@ -150,7 +150,9 @@ function sentenceChanges(sentence) {
   const changes = [];
   for (const match of sentence.matchAll(CHANGE_UP_RE)) changes.push(Number(match[1]));
   for (const match of sentence.matchAll(CHANGE_DOWN_RE)) changes.push(-Number(match[1]));
-  for (const match of sentence.matchAll(SIGNED_PERCENT_RE)) changes.push(Number(match[1]));
+  for (const match of sentence.matchAll(SIGNED_PERCENT_RE)) {
+    changes.push(match[0].startsWith('-') ? -Number(match[1]) : Number(match[1]));
+  }
   return changes.filter((value) => Number.isFinite(value) && value !== 0);
 }
 
