@@ -153,6 +153,33 @@ test('yield levels, cross-commodity moves and snapshot-sourced numbers do not wa
   assert.equal(audit.stats.causalStrengthIssues, 0);
 });
 
+test('a company percentage does not become an unsourced oil or yield change', () => {
+  const audit = auditOpeningDigestAttribution({
+    article: article('**AI demand widened.** Akamai rose 21.3% in premarket trading. [Akamai report] Reuters reported that optimism offset worries over oil prices and rising Treasury yields, with several chip stocks up about 2% in premarket trading. [Reuters]'),
+    snapshot: SNAPSHOT,
+    asOf: AS_OF,
+  });
+  assert.deepEqual(audit.warnings, []);
+});
+
+test('an explicit prior-close threshold is not an unsupported comparison', () => {
+  const audit = auditOpeningDigestAttribution({
+    article: article('Tracked-universe participation is narrow: only BE (+5.79%) and ARM (+5.26%) exceed 5% versus prior close.'),
+    snapshot: SNAPSHOT,
+    asOf: AS_OF,
+  });
+  assert.deepEqual(audit.warnings, []);
+});
+
+test('an unsourced WTI change different from its own snapshot still warns', () => {
+  const audit = auditOpeningDigestAttribution({
+    article: article('WTI down 2.75% during the opening hour.'),
+    snapshot: SNAPSHOT,
+    asOf: AS_OF,
+  });
+  assert.ok(audit.warnings.some((warning) => warning.includes('归因无源:正文对 WTI')));
+});
+
 test('attribution repair invariant allows deletion but forbids new tokens', () => {
   const original = article('Oil rebounded for 4 days. [A sourced line](https://example.com/a) stays.');
   const deletion = article('[A sourced line](https://example.com/a) stays.');

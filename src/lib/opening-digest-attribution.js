@@ -29,15 +29,13 @@ const TIME_RE = /\b(\d{1,2})(?::(\d{2}))?\s*(a\.m\.|p\.m\.)(?:\s*ET)?\b/gi;
 const DIRECT_CAUSAL_RE = /\bdirectly\s+(?:support(?:s|ed)?|caus(?:e|es|ed|ing)|driv(?:e|es|en)|boost(?:s|ed)?|lift(?:s|ed)?)\b/i;
 const BUYER_FLOW_RE = /\b(?:lacks?|lack of|absen(?:t|ce of)|exhaust(?:ed|ion)|no new|without|running out of)\s+(?:incremental\s+)?(?:buyers?|bids?|demand)|(?:buyers?|bids?)\s+(?:are|is|have been|were)\s*(?:absent|exhausted|missing)|no incremental buyers/i;
 const SURPASS_RE = /\b(?:surpass(?:es|ed)?|outpac(?:es|ed)|exceed(?:s|ed)?|overtook|overtak(?:en|ing))\b/i;
-const COMPARABLE_BASIS_RE = /\b(?:comparabl|same (?:initial )?(?:launch )?window|first \d+ days?|initial \d+|during its first|launch window|comparable period)\b/i;
-const PERCENT_RE = /(-?\d+(?:\.\d+)?)\s*%/;
+const COMPARABLE_BASIS_RE = /\b(?:comparabl|same (?:initial )?(?:launch )?window|first \d+ days?|initial \d+|during its first|launch window|comparable period|versus (?:the )?prior close)\b/i;
 // Only percentages attached to a direction word or an explicit sign count as changes; a bare
 // percentage is a level (a 10-year yield at 4.947%) and must never be compared with a snapshot change.
 const CHANGE_UP_RE = /\b(?:up|rose|climbed|gained|jumped|surged|rallied|advanced|strengthened)\s+(?:about\s+|roughly\s+|around\s+|some\s+)?(?:by\s+)?(\d+(?:\.\d+)?)\s*%/gi;
 const CHANGE_DOWN_RE = /\b(?:down|fell|dropped|slipped|eased|declined|weakened|retreated|tumbled)\s+(?:about\s+|roughly\s+|around\s+|some\s+)?(?:by\s+)?(\d+(?:\.\d+)?)\s*%/gi;
 const SIGNED_PERCENT_RE = /(?<![\d.%])[-+]\s?(\d+(?:\.\d+)?)\s*%/g;
 const SNAPSHOT_REF_RE = /\bsnapshot\b/i;
-const NUMBER_RE = /(\d+(?:\.\d+)?)/g;
 const SNAPSHOT_MATCH_TOLERANCE = 0.01;
 // Do not split a sentence right after a.m./p.m.; those periods are part of a timestamp.
 // A lookbehind alone is defeated by backtracking (\s* can match empty), so neutralize the
@@ -95,9 +93,11 @@ export function auditOpeningDigestAttribution({ article, snapshot = null, asOf =
               }
             }
           }
-          if (!hasLink && PERCENT_RE.test(sentence)
-            && !SNAPSHOT_REF_RE_TEST(sentence)
-            && !sentenceNumbersMatchSnapshot(sentence, metrics)) {
+          // A percentage elsewhere in the sentence can describe a different security.
+          // Only an actual change in this metric's own clause needs this source check.
+          if (!hasLink && changes.length
+            && !SNAPSHOT_REF_RE_TEST(metricClause)
+            && !changes.every((change) => Math.abs(change - metric.changePct) < SNAPSHOT_MATCH_TOLERANCE)) {
             stats.causalStrengthIssues += 1;
             warnings.push(`归因无源:正文对 ${metric.label} 引用变动数值但句内无来源链接:${trimmed}`);
           }
@@ -152,12 +152,6 @@ function sentenceChanges(sentence) {
   for (const match of sentence.matchAll(CHANGE_DOWN_RE)) changes.push(-Number(match[1]));
   for (const match of sentence.matchAll(SIGNED_PERCENT_RE)) changes.push(Number(match[1]));
   return changes.filter((value) => Number.isFinite(value) && value !== 0);
-}
-
-function sentenceNumbersMatchSnapshot(sentence, metrics) {
-  const numbers = [...sentence.matchAll(NUMBER_RE)].map((match) => Number(match[1]));
-  return [...metrics.values()].some((metric) => numbers.some((number) => Math.abs(number - metric.value) < SNAPSHOT_MATCH_TOLERANCE
-    || (Number.isFinite(metric.changePct) && Math.abs(Math.abs(metric.changePct) - number) < SNAPSHOT_MATCH_TOLERANCE)));
 }
 
 function SNAPSHOT_REF_RE_TEST(sentence) { return SNAPSHOT_REF_RE.test(sentence); }
