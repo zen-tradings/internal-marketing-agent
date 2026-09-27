@@ -367,3 +367,105 @@ test('微信 GIF 降帧重编码:检测 GIF 魔数并用 Pillow 降帧', async (
   assert.equal(duration, 600, '降帧后单帧时长应保留总动画时长(360×100ms/60)');
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('微信图片 10MB 上限:未超限文件原样透传', async () => {
+  const { prepareWechatImage, WECHAT_IMAGE_MAX_BYTES } = await import('../src/lib/wechat-render.js');
+  assert.equal(WECHAT_IMAGE_MAX_BYTES, 10 * 1024 * 1024);
+  const small = new File([Buffer.from('89504e470d0a1a0a', 'hex')], 'small.png', { type: 'image/png' });
+  assert.equal(await prepareWechatImage(small, 'small.png'), small);
+});
+
+test('微信图片 10MB 上限:非 GIF 超限文件直接硬失败', async () => {
+  const { prepareWechatImage } = await import('../src/lib/wechat-render.js');
+  const oversizedPng = new File([Buffer.alloc(10 * 1024 * 1024 + 1)], 'big.png', { type: 'image/png' });
+  await assert.rejects(
+    () => prepareWechatImage(oversizedPng, 'big.png'),
+    /原文图片超过微信 10MB 上限:big\.png/,
+  );
+});
+
+test('微信图片 10MB 上限:超大动画 GIF 主动降帧后合规', async (t) => {
+  const { execFileSync, spawnSync } = await import('node:child_process');
+  const { prepareWechatImage } = await import('../src/lib/wechat-render.js');
+  let pythonPath = null;
+  for (const candidate of [process.env.QDII_PYTHON_PATH, '.venv/bin/python', 'python3'].filter(Boolean)) {
+    const check = spawnSync(candidate, ['-c', 'import PIL'], { stdio: 'ignore' });
+    if (!check.error && check.status === 0) { pythonPath = candidate; break; }
+  }
+  if (!pythonPath) { t.skip('Pillow 运行时不可用'); return; }
+  const previousPythonPath = process.env.QDII_PYTHON_PATH;
+  process.env.QDII_PYTHON_PATH = pythonPath;
+  t.after(() => {
+    if (previousPythonPath === undefined) delete process.env.QDII_PYTHON_PATH;
+    else process.env.QDII_PYTHON_PATH = previousPythonPath;
+  });
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-gif-cap-'));
+  const fixturePath = path.join(dir, 'figure-big.gif');
+  // 随机噪声帧不可 LZW 压缩:260 帧 200x200 生成约 14.5MB,稳定超过 10MB 上限。
+  execFileSync(pythonPath, ['-c', [
+    'import sys, os',
+    'from PIL import Image',
+    "frames = [Image.frombytes('L', (200, 200), os.urandom(200 * 200)) for _ in range(260)]",
+    'frames[0].save(sys.argv[1], save_all=True, append_images=frames[1:], duration=100, loop=0)',
+  ].join('\n'), fixturePath], { stdio: 'ignore' });
+  assert.ok(fs.statSync(fixturePath).size > 10 * 1024 * 1024, 'fixture 应超过微信 10MB 上限');
+
+  const prepared = await prepareWechatImage(
+    new File([fs.readFileSync(fixturePath)], 'figure-big.gif', { type: 'image/gif' }),
+    'figure-big.gif',
+  );
+  assert.equal(prepared.type, 'image/gif');
+  const preparedBuffer = Buffer.from(await prepared.arrayBuffer());
+  assert.ok(preparedBuffer.length <= 10 * 1024 * 1024, `降帧后应 ≤ 10MB,实际 ${preparedBuffer.length}`);
+  const preparedPath = path.join(dir, 'prepared.gif');
+  fs.writeFileSync(preparedPath, preparedBuffer);
+  const frameProbe = spawnSync(pythonPath, ['-c', [
+    'import sys',
+    'from PIL import Image, ImageSequence',
+    'im = Image.open(sys.argv[1])',
+    'frames = sum(1 for _ in ImageSequence.Iterator(im))',
+    "print(frames, im.info.get('duration'))",
+  ].join('\n'), preparedPath], { encoding: 'utf8' });
+  assert.equal(frameProbe.status, 0);
+  const [frames, duration] = frameProbe.stdout.trim().split(/\s+/).map(Number);
+  assert.ok(frames <= 60, `降帧后帧数应 ≤ 60,实际 ${frames}`);
+  assert.ok(duration >= 400, `降帧后应保留总动画时长,实际 ${duration}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('微信图片 10MB 上限:降帧后仍超限的 GIF 硬失败', async (t) => {
+  const { execFileSync, spawnSync } = await import('node:child_process');
+  const { prepareWechatImage } = await import('../src/lib/wechat-render.js');
+  let pythonPath = null;
+  for (const candidate of [process.env.QDII_PYTHON_PATH, '.venv/bin/python', 'python3'].filter(Boolean)) {
+    const check = spawnSync(candidate, ['-c', 'import PIL'], { stdio: 'ignore' });
+    if (!check.error && check.status === 0) { pythonPath = candidate; break; }
+  }
+  if (!pythonPath) { t.skip('Pillow 运行时不可用'); return; }
+  const previousPythonPath = process.env.QDII_PYTHON_PATH;
+  process.env.QDII_PYTHON_PATH = pythonPath;
+  t.after(() => {
+    if (previousPythonPath === undefined) delete process.env.QDII_PYTHON_PATH;
+    else process.env.QDII_PYTHON_PATH = previousPythonPath;
+  });
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-gif-still-'));
+  const fixturePath = path.join(dir, 'figure-huge.gif');
+  // 单帧 3600x3600 随机噪声约 17.8MB:降帧(单帧不动)后仍超限,必须拒绝。
+  execFileSync(pythonPath, ['-c', [
+    'import sys, os',
+    'from PIL import Image',
+    "Image.frombytes('L', (3600, 3600), os.urandom(3600 * 3600)).save(sys.argv[1])",
+  ].join('\n'), fixturePath], { stdio: 'ignore' });
+  assert.ok(fs.statSync(fixturePath).size > 10 * 1024 * 1024, 'fixture 应超过微信 10MB 上限');
+
+  await assert.rejects(
+    () => prepareWechatImage(
+      new File([fs.readFileSync(fixturePath)], 'figure-huge.gif', { type: 'image/gif' }),
+      'figure-huge.gif',
+    ),
+    /GIF 降帧后仍超过微信 10MB 上限:figure-huge\.gif/,
+  );
+  fs.rmSync(dir, { recursive: true, force: true });
+});

@@ -1,5 +1,5 @@
 import { wechatRequestContext, wechatPublisher } from './adapters/wechat-publisher.js';
-export { isAnimatedGif, reencodeAnimatedGif } from './adapters/wechat-publisher.js';
+export { isAnimatedGif, reencodeAnimatedGif, prepareWechatImage, WECHAT_IMAGE_MAX_BYTES } from './adapters/wechat-publisher.js';
 import { validateLocalImage, registerPublicationAssets } from './publication-assets.js';
 
 import { JSDOM } from 'jsdom';

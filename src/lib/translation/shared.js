@@ -25,8 +25,8 @@ export const DEFAULT_LIMITS = {
   fetchTimeoutMs: 30000,
   maxRedirects: 5,
   maxAssetCount: 80,
-  maxAssetBytes: 40 * 1024 * 1024,
-  maxSingleAssetBytes: 10 * 1024 * 1024,
+  maxAssetBytes: 100 * 1024 * 1024,
+  maxSingleAssetBytes: 20 * 1024 * 1024,
 };
 export const DOCUMENT_BLOCK_TYPES = new Set([
   'heading', 'paragraph', 'quote', 'list_item', 'figure', 'table', 'equation', 'code', 'reference',

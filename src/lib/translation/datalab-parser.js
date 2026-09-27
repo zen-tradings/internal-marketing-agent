@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { JSDOM } from 'jsdom';
+import { DEFAULT_LIMITS } from './shared.js';
 
 const DEFAULT_BASE_URL = 'https://www.datalab.to/api/v1';
 
@@ -63,8 +64,8 @@ export async function convertPdfWithDatalab({
   const assets = writeExtractedImages(result.images, {
     workDir,
     maxCount: positive(config.maxAssetCount, 80),
-    maxTotalBytes: positive(config.maxAssetBytes, 40 * 1024 * 1024),
-    maxSingleBytes: positive(config.maxSingleAssetBytes, 10 * 1024 * 1024),
+    maxTotalBytes: positive(config.maxAssetBytes, DEFAULT_LIMITS.maxAssetBytes),
+    maxSingleBytes: positive(config.maxSingleAssetBytes, DEFAULT_LIMITS.maxSingleAssetBytes),
   });
   return {
     html: result.html,

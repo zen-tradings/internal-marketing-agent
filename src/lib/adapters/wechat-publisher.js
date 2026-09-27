@@ -88,6 +88,9 @@ function uploadQueueSlot(task) {
 }
 
 const WECHAT_SYSTEM_ERROR_RE = /errcode["':=\s]*-1|system error hint/i;
+// WeChat material/add_material 拒绝超过 10MB 的单张图片；这是微信的硬限制，
+// 超限时不会返回 errcode -1，因此不能依赖现有的 -1 降帧重试路径。
+export const WECHAT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 const GIF_REENCODE_MAX_FRAMES = 60;
 const GIF_REENCODE_SCRIPT = `
 import sys
@@ -116,6 +119,25 @@ export async function isAnimatedGif(file) {
     const head = Buffer.from(await file.slice(0, 6).arrayBuffer());
     return head.subarray(0, 3).toString('ascii') === 'GIF';
   } catch { return false; }
+}
+
+// 上传前把超大图片收敛到微信 10MB 硬限制内：动画 GIF 用降帧重编码（≤60 帧，动画保留），
+// 重编码后仍超限或非 GIF 超限时抛出清晰硬错误，而不是把必败请求发给微信拿回含混的 API 错误。
+export async function prepareWechatImage(file, filename) {
+  if (!file || typeof file.arrayBuffer !== 'function') return file;
+  const buffer = Buffer.from(await file.arrayBuffer());
+  if (buffer.length <= WECHAT_IMAGE_MAX_BYTES) return file;
+  const name = filename || 'image';
+  if (buffer.subarray(0, 3).toString('ascii') !== 'GIF') {
+    throw new Error(`原文图片超过微信 10MB 上限:${name} ${buffer.length}/${WECHAT_IMAGE_MAX_BYTES}`);
+  }
+  const reencoded = await reencodeAnimatedGif(file, filename);
+  const reencodedBuffer = Buffer.from(await reencoded.arrayBuffer());
+  if (reencodedBuffer.length > WECHAT_IMAGE_MAX_BYTES) {
+    throw new Error(`GIF 降帧后仍超过微信 10MB 上限:${name} ${reencodedBuffer.length}/${WECHAT_IMAGE_MAX_BYTES}`);
+  }
+  console.error(`超大 GIF 已降帧以符合微信 10MB 上限:${name} ${buffer.length} -> ${reencodedBuffer.length}`);
+  return reencoded;
 }
 
 // Re-encode an animated GIF to at most GIF_REENCODE_MAX_FRAMES frames using the pinned Pillow runtime
@@ -170,7 +192,9 @@ function installUploadGate() {
     }
     if (cacheKey) {
       let result;
-      let uploadFile = file;
+      // 超过微信 10MB 硬限制的图片在这里先收敛（动画 GIF 降帧）；否则 add_material
+      // 会直接拒绝且不会走下方 errcode -1 的降帧重试路径。
+      let uploadFile = await prepareWechatImage(file, filename);
       for (let attempt = 1; ; attempt += 1) {
         try {
           // eslint-disable-next-line no-await-in-loop
