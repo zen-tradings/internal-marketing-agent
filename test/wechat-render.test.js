@@ -469,3 +469,18 @@ test('微信图片 10MB 上限:降帧后仍超限的 GIF 硬失败', async (t) =
   );
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('微信发布校验:超限动画 GIF 放行交给上传门禁降帧,超限 PNG 仍硬失败', async (t) => {
+  const { validateLocalImage } = await import('../src/lib/publication-assets.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-gif-validate-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const gif = Buffer.concat([Buffer.from('GIF89a', 'ascii'), Buffer.alloc(10 * 1024 * 1024 + 1)]);
+  const png = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(1024)]);
+  fs.writeFileSync(path.join(dir, 'big.gif'), gif, { mode: 0o600 });
+  fs.writeFileSync(path.join(dir, 'big.png'), Buffer.concat([png, Buffer.alloc(10 * 1024 * 1024)]));
+  assert.equal(validateLocalImage('big.gif', { absoluteDirPath: dir }), fs.realpathSync(path.join(dir, 'big.gif')));
+  assert.throws(
+    () => validateLocalImage('big.png', { absoluteDirPath: dir }),
+    /图片超过微信 10MB 上限:/,
+  );
+});

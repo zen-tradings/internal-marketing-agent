@@ -34,13 +34,20 @@ export function validateLocalImage(src, { absoluteDirPath, trustedAssetPaths = [
   if (!trusted && (!absoluteDirPath || !within(path.resolve(absoluteDirPath), filename)
     || !within(fs.realpathSync(absoluteDirPath), real))) throw new Error(`图片越出任务资产目录:${src}`);
   const stat = fs.statSync(real);
-  if (!stat.isFile() || !stat.size || stat.size > 10 * 1024 * 1024) throw new Error('图片必须是 10MB 内的非空普通文件');
+  if (!stat.isFile() || !stat.size) throw new Error('图片必须是 10MB 内的非空普通文件');
   const descriptor = fs.openSync(real, 'r');
+  let format;
   try {
     const head = Buffer.alloc(512);
     const length = fs.readSync(descriptor, head, 0, head.length, 0);
-    imageFormat(head.subarray(0, length));
+    format = imageFormat(head.subarray(0, length));
   } finally { fs.closeSync(descriptor); }
+  if (stat.size > 10 * 1024 * 1024) {
+    // 微信 add_material 单图硬上限 10MB。动画 GIF 可降帧修复，这里放行，
+    // 由上传门禁 prepareWechatImage 降帧；其它格式无法降采样修复，保持硬失败。
+    if (format !== 'gif') throw new Error(`图片超过微信 10MB 上限:${stat.size}/${10 * 1024 * 1024}`);
+    console.error(`本地 GIF 超过微信 10MB 上限,将在上传时降帧:${src} ${stat.size}`);
+  }
   return real;
 }
 
