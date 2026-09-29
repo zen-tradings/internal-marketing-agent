@@ -296,7 +296,7 @@ export async function reviewAndRepairOpeningDigest({ article, input, research, w
     let verification;
     try {
       verification = await completeReviewJson({
-        prompt: `You MUST adjudicate every previously severe issue below, one result item per issue, quoting enough of the issue's claim to make the mapping unambiguous. Use status "fixed" only when the current draft no longer contains the unsupported claim, or it is now directly supported by a supplied source; use "unresolved" and cite specific evidence from an allowed source when the problematic claim (or the same fact reworded) is still present and unsupported. Never invent a fact. Return strict JSON {"results":[{"claim":"exact text of the previous severe issue's claim","status":"fixed|unresolved","evidence":"why"}]}.\n\nPrevious severe issues:${JSON.stringify(severe)}\n\nAllowed sources:${JSON.stringify(allowedWithSnapshot)}\n\nRevised draft:\n${current}`,
+        prompt: `You MUST adjudicate every previously severe issue below, one result item per issue, quoting enough of the issue's claim to make the mapping unambiguous. Identify the specific unsupported component of each issue (number, date, attribution, causal link, or URL). Use status "fixed" when that component is absent from the current draft, even if a different, directly sourced fact on the same topic remains. Use "unresolved" only when the unsupported component (or an equivalent unsupported claim) is still present; cite specific evidence from an allowed source. Do not carry a removed attribution forward from the previous issue into the revised draft. Compare approximate numbers against the cited source's wording and verify the link attached to the current claim. Never invent a fact. Return strict JSON {"results":[{"claim":"exact text of the previous severe issue's claim","status":"fixed|unresolved","evidence":"why"}]}.\n\nPrevious severe issues:${JSON.stringify(severe)}\n\nAllowed sources:${JSON.stringify(allowedWithSnapshot)}\n\nRevised draft:\n${current}`,
         model: writer.reviewModel || writer.model,
         writer: { ...writer, temperature: 0 },
         fetchFn,
@@ -430,7 +430,7 @@ export async function repairOpeningDigestSevereIssues({ article, severe, allowed
   let repair;
   try {
     repair = await completeReviewJson({
-      prompt: `Repair only the listed severe issues. Do not change unrelated structure or viewpoints and do not add facts. Return strict JSON {"revised_markdown":"complete Markdown with the original frontmatter"}.\n\nSevere issues:${JSON.stringify(severe)}\n\nAllowed sources:${JSON.stringify(allowed)}\n\nDraft:\n${article}`,
+      prompt: `Repair only the listed severe issues. Do not change unrelated structure or viewpoints and do not add facts. For an unsupported number or attribution, remove the entire unsupported claim everywhere it occurs unless the revised claim uses the exact source wording and links directly to that source. Do not merely delete the named attribution while leaving an unsupported approximate number, or move the same claim to another section. For a wrong link, cite the source that actually supports the claim or remove it. Return strict JSON {"revised_markdown":"complete Markdown with the original frontmatter"}.\n\nSevere issues:${JSON.stringify(severe)}\n\nAllowed sources:${JSON.stringify(allowed)}\n\nDraft:\n${article}`,
       model: writer.reviewModel || writer.model,
       writer: { ...writer, temperature: 0 },
       fetchFn,
