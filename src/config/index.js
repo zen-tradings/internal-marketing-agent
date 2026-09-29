@@ -251,6 +251,7 @@ export function loadConfig(env = process.env) {
       browserExecutablePath: env.OPENING_DIGEST_BROWSER_EXECUTABLE
         || env.TRANSLATION_BROWSER_EXECUTABLE
         || '/usr/bin/google-chrome',
+      tailImageUrl: optionalHttpsUrl(env.OPENING_DIGEST_TAIL_IMAGE_URL, 'OPENING_DIGEST_TAIL_IMAGE_URL'),
     },
     assets: {
       headerImage: env.WECHAT_HEADER_IMAGE || path.join(REPO_ROOT, 'assets', 'zen-header-banner.gif'),
@@ -290,6 +291,16 @@ function validatedDiscordWebhookUrl(value) {
   if (url.protocol !== 'https:' || url.hostname !== 'discord.com' || !pathOk || url.username || url.password || url.search || url.hash) {
     throw new Error('DISCORD_OPENING_DIGEST_WEBHOOK_URL 必须是官方 discord.com HTTPS webhook 地址');
   }
+  return url.toString();
+}
+
+function optionalHttpsUrl(value, label) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  let url;
+  try { url = new URL(text); }
+  catch { throw new Error(`${label} 必须是有效的 HTTPS 地址`); }
+  if (url.protocol !== 'https:') throw new Error(`${label} 必须是 HTTPS 地址`);
   return url.toString();
 }
 

@@ -568,7 +568,7 @@ test('complete digest renders template, address, options and schedules without c
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
   assert.equal(create.body.name, 'Zen Opening Digest · 2026-08-10');
   assert.equal(create.body.subject, 'Opening signals stay mixed | Zen Opening Digest');
-  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@8"/);
+  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@9"/);
   assert.match(create.body.body, /href="https:\/\/example\.com\/a"/, '英文邮件必须继续保留来源链接');
   assert.match(create.body.body, new RegExp(`href="${OPENING_DIGEST_DISCORD_INVITE_URL}"[^>]*>Join us on Discord</a>`));
   assert.equal(create.body.body.split(OPENING_DIGEST_DISCORD_INVITE_URL).length - 1, 1);
@@ -582,6 +582,25 @@ test('complete digest renders template, address, options and schedules without c
   assert.equal(requests.some((item) => item.path.endsWith('/contents')), false);
   const schedule = requests.find((item) => item.path.endsWith('/schedule'));
   assert.equal(schedule.body.scheduled_at, Date.parse('2026-08-10T14:15:00.000Z') / 1000);
+});
+
+test('digest tail image renders between the Discord link and the feedback block only when configured', async () => {
+  const configured = [];
+  const withTail = standardChannel({ requests: configured, channel: { uploadAsset: async (args) => ({ path: `https://assets.example/${args.filename}` }) } }).channel;
+  const withTailConfig = config();
+  withTailConfig.openingDigest.tailImageUrl = 'https://assets.example/zen-community-banner-email.jpg';
+  await withTail.publish({ articlePath: '/tmp/article.md', config: withTailConfig, source: 'cron' });
+  const configuredBody = configured.find((item) => item.path === '/v1/newsletters' && item.method === 'POST').body.body;
+  const tailIndex = configuredBody.indexOf('<img src="https://assets.example/zen-community-banner-email.jpg" alt="Zen Trading"');
+  assert.ok(tailIndex > 0, '配置 tailImageUrl 时邮件必须包含固定尾图');
+  assert.ok(configuredBody.indexOf(OPENING_DIGEST_DISCORD_INVITE_URL) < tailIndex, '尾图必须在 Discord 链接之后');
+  assert.ok(tailIndex < configuredBody.indexOf('Was this edition useful?'), '尾图必须在反馈块之前');
+
+  const plain = [];
+  const withoutTail = standardChannel({ requests: plain, channel: { uploadAsset: async (args) => ({ path: `https://assets.example/${args.filename}` }) } }).channel;
+  await withoutTail.publish({ articlePath: '/tmp/article.md', config: config(), source: 'cron' });
+  const plainBody = plain.find((item) => item.path === '/v1/newsletters' && item.method === 'POST').body.body;
+  assert.doesNotMatch(plainBody, /<img[^>]*alt="Zen Trading"/, '未配置 tailImageUrl 时邮件不得出现尾图');
 });
 
 test('cron digest sends immediately when the 10:15 ET target is less than five minutes away', async () => {

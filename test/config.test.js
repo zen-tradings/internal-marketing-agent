@@ -139,6 +139,14 @@ test('Opening Digest 微信同步只有显式开关才启用', () => {
     OPENROUTER_MODEL: 'global/writer',
     OPENING_DIGEST_MODEL: 'openai/gpt-oss-120b',
   }).openingDigest.model, 'openai/gpt-oss-120b');
+  assert.equal(loadConfig({ ...base, OPENING_DIGEST_TAIL_IMAGE_URL: '' }).openingDigest.tailImageUrl, '');
+  assert.equal(loadConfig({
+    ...base, OPENING_DIGEST_TAIL_IMAGE_URL: 'https://assets.example/zen-community-banner-email.jpg',
+  }).openingDigest.tailImageUrl, 'https://assets.example/zen-community-banner-email.jpg');
+  assert.throws(() => loadConfig({ ...base, OPENING_DIGEST_TAIL_IMAGE_URL: 'http://assets.example/x.jpg' }),
+    /OPENING_DIGEST_TAIL_IMAGE_URL 必须是 HTTPS 地址/);
+  assert.throws(() => loadConfig({ ...base, OPENING_DIGEST_TAIL_IMAGE_URL: 'not a url' }),
+    /OPENING_DIGEST_TAIL_IMAGE_URL 必须是有效的 HTTPS 地址/);
 });
 
 test('Opening Digest Discord 同步要求官方 webhook，可锁定固定 channel id', () => {

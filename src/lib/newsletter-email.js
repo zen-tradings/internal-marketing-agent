@@ -61,6 +61,10 @@ export function renderNewsletterEmail(article, options = {}) {
   const contact = contactEmail
     ? `<p style="margin:0 0 8px"><a href="${escapeAttr(siteUrl)}" style="color:#173f43">${escapeHtml(siteLabel)}</a> · <a href="mailto:${escapeAttr(contactEmail)}" style="color:#173f43">${escapeHtml(contactEmail)}</a></p>`
     : `<p style="margin:0 0 8px"><a href="${escapeAttr(siteUrl)}" style="color:#173f43">${escapeHtml(siteLabel)}</a></p>`;
+  // Fixed brand tail image rendered after the body content and before the feedback block; silently omitted without a valid URL.
+  const tailImage = safeUrl(options.tailImageUrl)
+    ? `<img src="${escapeAttr(safeUrl(options.tailImageUrl))}" alt="Zen Trading" style="display:block;width:100%;max-width:100%;height:auto;border:0;border-radius:8px;margin:26px 0 0">`
+    : '';
 
   return `<!doctype html>
 <html lang="en">
@@ -83,6 +87,7 @@ export function renderNewsletterEmail(article, options = {}) {
         <h1 style="margin:0 0 20px;font-size:24px;line-height:1.25;font-weight:500;color:#08272b">${escapeHtml(displayTitle)}</h1>
         ${subtitle}
         <div style="font-size:14px;line-height:1.6;font-weight:300;color:#173f43">${content}</div>
+        ${tailImage}
         ${feedback}
       </td></tr>
       <tr><td class="zen-email-footer" style="padding:18px 16px;border-top:1px solid #dcd8d5;font-size:11px;line-height:1.6;font-weight:300;color:#66787a">

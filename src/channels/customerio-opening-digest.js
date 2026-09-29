@@ -179,6 +179,7 @@ export function makeChannel({
         });
         const body = renderNewsletterEmail({ ...article, edition: dateKey }, {
           ...cio, headerImageUrl, contentHtml, includeUnsubscribe: false,
+          tailImageUrl: digest.tailImageUrl,
           displayTitle: headline,
           publicationSubtitle: `Zen Opening Digest · ${displayDate(dateKey)}`,
           templateId: CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID,
