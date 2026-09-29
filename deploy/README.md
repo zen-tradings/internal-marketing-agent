@@ -399,6 +399,23 @@ diagnosis; do not retry against production or send a Slack test message.
 
 ## Recovering a failed Opening Digest WeChat derivative
 
+### Requeuing an unpublished attribution-gate failure
+
+For a formal Opening Digest that failed at generation on the current ET date with
+the exact attribution-snapshot gate error and no publication record, first deploy
+and validate the corrected release. With an idle queue, requeue the original run:
+
+```bash
+sudo systemd-run --wait --pipe --collect --uid=zenbot \
+  --property=WorkingDirectory=/opt/zen-content-hub \
+  --property=EnvironmentFile=/etc/zen-content-hub/zen-content-hub.env \
+  /usr/bin/npm run requeue:opening-digest-attribution -- "$run_id"
+```
+
+The command refuses any recorded publication or another sent formal edition.
+The service restores this queued task on its next maintainer-directed restart;
+verify the resulting email delivery and derived-channel records afterward.
+
 ### Correcting a data-only attribution-conflict edition
 
 If a formal edition was published as a data-only placeholder after an unresolved

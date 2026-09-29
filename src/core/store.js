@@ -590,6 +590,24 @@ export function openStore(dbPath) {
           )
       `, id);
     },
+    requeueFailedOpeningDigestAttribution(id, scheduleKey) {
+      return requeueAndClearNotifications(db, `
+        UPDATE runs
+        SET status = 'queued', stage = NULL, error = NULL, started_at = NULL, finished_at = NULL
+        WHERE id = ? AND workflow_id = 'opening-digest' AND source = 'cron'
+          AND schedule_key = ? AND status = 'failed' AND stage = 'generate'
+          AND error LIKE 'Opening Digest 归因快照冲突在发布前仍存在:%'
+          AND media_id IS NULL AND remote_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM publication_intents WHERE run_id = runs.id)
+          AND NOT EXISTS (SELECT 1 FROM remote_operations WHERE run_id = runs.id)
+          AND NOT EXISTS (SELECT 1 FROM run_deliveries WHERE run_id = runs.id)
+          AND NOT EXISTS (SELECT 1 FROM delivery_outbox WHERE run_id = runs.id)
+          AND NOT EXISTS (
+            SELECT 1 FROM runs other WHERE other.workflow_id = 'opening-digest'
+              AND other.source = 'cron' AND other.schedule_key LIKE ? AND other.media_id IS NOT NULL
+          )
+      `, id, scheduleKey, `${scheduleKey}%`);
+    },
     recoverRunningWorkflow(workflowId) {
       return db.prepare(`
         UPDATE runs
@@ -628,9 +646,9 @@ function safeJsonArray(value) {
 
 
 
-function requeueAndClearNotifications(db, sql, id) {
+function requeueAndClearNotifications(db, sql, id, ...params) {
   return db.transaction(() => {
-    const changes = db.prepare(sql).run(id).changes;
+    const changes = db.prepare(sql).run(id, ...params).changes;
     if (changes) db.prepare('DELETE FROM notification_outbox WHERE run_id = ? AND sent_at IS NULL').run(id);
     return changes;
   })();

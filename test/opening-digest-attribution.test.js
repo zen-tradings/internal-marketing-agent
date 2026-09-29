@@ -21,7 +21,7 @@ function article(body) {
 
 test('snapshot conflicts are flagged when narrative direction contradicts the snapshot without an earlier-time label', () => {
   const audit = auditOpeningDigestAttribution({
-    article: article('Oil rebounded after four days of declines, supporting energy exposure through the session.'),
+    article: article('WTI rebounded after four days of declines, supporting energy exposure through the session.'),
     snapshot: SNAPSHOT,
     asOf: AS_OF,
   });
@@ -29,11 +29,35 @@ test('snapshot conflicts are flagged when narrative direction contradicts the sn
   assert.match(audit.warnings[0], /归因冲突:正文对 WTI/);
 
   const labelled = auditOpeningDigestAttribution({
-    article: article('Premarket, Brent briefly fell below $100 before rebounding, a move that has since reversed.'),
+    article: article('Premarket, WTI briefly fell below $100 before rebounding, a move that has since reversed.'),
     snapshot: SNAPSHOT,
     asOf: AS_OF,
   });
   assert.equal(labelled.stats.snapshotConflicts, 0);
+});
+
+test('prior-session index moves do not conflict with current ETF snapshot', () => {
+  const snapshot = {
+    capturedAt: '2026-09-29T14:00:00.071Z',
+    metrics: [{ label: 'QQQ', changePct: 0.17 }, { label: 'SPY', changePct: 0.1 }],
+  };
+  const body = "Higher long yields raise discount rates and compress equity valuations, most acutely for long-duration growth names — the mechanism cited in Monday's session, when the S&P 500 fell 0.77% and the Nasdaq Composite dropped 0.92% ([WSJ](https://example.com/markets)).";
+  const audit = auditOpeningDigestAttribution({
+    article: article(body), snapshot, asOf: new Date(snapshot.capturedAt),
+  });
+  assert.deepEqual(audit.warnings, []);
+
+  const priorQqq = auditOpeningDigestAttribution({
+    article: article("During Monday's session, QQQ fell 0.92% before today's rebound."),
+    snapshot, asOf: new Date(snapshot.capturedAt),
+  });
+  assert.equal(priorQqq.stats.snapshotConflicts, 0);
+
+  const currentQqq = auditOpeningDigestAttribution({
+    article: article('QQQ fell 0.92% in the current snapshot.'),
+    snapshot, asOf: new Date(snapshot.capturedAt),
+  });
+  assert.ok(currentQqq.stats.snapshotConflicts > 0);
 });
 
 test('yield direction matching the snapshot does not warn', () => {

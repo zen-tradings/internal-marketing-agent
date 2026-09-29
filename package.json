@@ -19,6 +19,7 @@
     "requeue:analysis-gate": "node scripts/requeue-analysis-gate.mjs",
     "retry:opening-digest-wechat": "node scripts/retry-opening-digest-wechat.mjs",
     "requeue:opening-digest-correction": "node scripts/requeue-opening-digest-correction.mjs",
+    "requeue:opening-digest-attribution": "node scripts/requeue-opening-digest-attribution.mjs",
     "check:documents": "node scripts/check-documents.mjs",
     "auth:google-docs": "node scripts/google-docs-oauth.mjs",
     "check:customerio": "node scripts/check-customerio.mjs",

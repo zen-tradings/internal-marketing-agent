@@ -13,11 +13,12 @@ import { openingDigestBodyParts } from './opening-digest-editorial.js';
 // 4. Comparison basis: "surpassed/outpaced X" claims without a supplied comparable basis.
 
 const VARIABLE_RULES = [
-  { key: 'WTI', match: /\b(?:oil|crude|wti|brent)\b/i },
+  { key: 'WTI', match: /\b(?:WTI|West Texas Intermediate)\b/i },
   { key: '10Y UST', match: /\b(?:10-year|ten-year|treasury yields?|long[- ]end (?:yields?|rates?)|bond yields?)\b/i },
   { key: 'DXY', match: /\b(?:dollar|dxy)\b/i },
-  { key: 'SPY', match: /\bS&P\b(?!\s+Global\b)/i },
-  { key: 'QQQ', match: /\bNasdaq\b/i },
+  // Indexes and other crude benchmarks can diverge from the ETF/future in the snapshot.
+  { key: 'SPY', match: /\bSPY\b/i },
+  { key: 'QQQ', match: /\bQQQ\b/i },
   { key: 'VIX', match: /\b(?:VIX|volatility index)\b/i },
 ];
 
@@ -75,7 +76,10 @@ export function auditOpeningDigestAttribution({ article, snapshot = null, asOf =
         if (metric) {
           const metricClause = visible.slice(metricMention.index + metricMention[0].length)
             .split(/[,;—]|\b(?:while|whereas|versus|vs\.?|SPY|QQQ|IWM|VIX|WTI|DXY|S&P|Nasdaq)\b/i, 1)[0];
-          const hasEarlierLabel = hasEarlierTimeLabel(metricClause, asOf);
+          // A time label often introduces the whole observation before naming the asset.
+          const precedingContext = visible.slice(Math.max(0, metricMention.index - 140), metricMention.index);
+          const hasEarlierLabel = hasEarlierTimeLabel(metricClause, asOf)
+            || hasEarlierTimeLabel(precedingContext, asOf);
           const direction = sentenceDirection(metricClause);
           if (direction !== 'none' && !hasEarlierLabel) {
             const snapshotUp = Number(metric.changePct) >= 0;
@@ -143,7 +147,7 @@ function hasEarlierTimeLabel(text, asOf) {
   const index = weekdays.indexOf(today);
   if (index < 0) return false;
   const prior = weekdays[(index + weekdays.length - 1) % weekdays.length];
-  return new RegExp(`\\b(?:on|late) ${prior}\\b`, 'i').test(text);
+  return new RegExp(`\\b(?:(?:on|late) ${prior}\\b|${prior}'s session\\b)`, 'i').test(text);
 }
 
 function sentenceChanges(sentence) {
