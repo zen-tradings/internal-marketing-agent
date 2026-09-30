@@ -364,7 +364,7 @@ function auditModernOpeningDigestArticle({ article, research, asOf, requireFresh
     marketReadWordCount: insight.stats.narrativeWords,
     marketReadSentenceCount: insight.stats.leadSentences,
     marketReadParagraphCount: 1,
-    marketReadStructureValid: insight.stats.mattersCount >= 2 && insight.stats.mattersCount <= 3,
+    marketReadStructureValid: insight.stats.mattersCount === 2,
   };
 }
 

@@ -10,6 +10,7 @@ export const OPENING_DIGEST_HEADLINE_MAX_CHARS = 60;
 export const OPENING_DIGEST_HEADLINE_MIN_WORDS = 5;
 export const OPENING_DIGEST_HEADLINE_MAX_WORDS = 11;
 export const OPENING_DIGEST_EVIDENCE_MAX_WORDS = 85;
+export const OPENING_DIGEST_MATTERS_MAX_WORDS = 130;
 const ROUTINE_HEADLINE_RE = new RegExp([
   '\\b(?:oil|crude|wti|brent)\\b[^,;.]{0,24}\\b(?:rises?|falls?|gains?|drops?|jumps?|slides?|climbs?|slips?|edges?|extends?|steadies?)\\b',
   '\\byields?\\b[^,;.]{0,24}\\b(?:rises?|falls?|edges?|climbs?|slips?|drifts?|steadies?|holds?|little changed)\\b',
@@ -212,7 +213,7 @@ export function auditOpeningDigestInsight(markdown) {
   const leadSentences = sentenceCount(parts.lead);
   if (leadSentences < 1 || leadSentences > 2) warnings.push(`Opening call 应为 1-2 句，当前 ${leadSentences} 句`);
   const matters = paragraphCount(parts.sections.get('What matters today'));
-  if (matters < 2 || matters > 3) warnings.push(`What matters today 应为 2-3 个短段，当前 ${matters}`);
+  if (matters !== 2) warnings.push(`What matters today 应为 2 个短段，当前 ${matters}`);
   const watchCount = (parts.sections.get('What to watch')?.match(/^[-*]\s+/gm) || []).length;
   if (watchCount < 3 || watchCount > 5) warnings.push(`What to watch 应为 3-5 条，当前 ${watchCount}`);
   if (/\bUTC\b/i.test(parts.body)) warnings.push('Opening Digest 用户可见正文不得使用 UTC，应统一显示 ET');
@@ -223,9 +224,11 @@ export function auditOpeningDigestInsight(markdown) {
   if (narrativeWords > OPENING_DIGEST_NARRATIVE_MAX_WORDS) warnings.push(`Opening Digest 分析正文超过 ${OPENING_DIGEST_NARRATIVE_MAX_WORDS} 词:${narrativeWords}`);
   const evidenceWords = visibleWords(parts.sections.get('Evidence and cross-currents') || '');
   if (evidenceWords > OPENING_DIGEST_EVIDENCE_MAX_WORDS) warnings.push(`Opening Digest Evidence and cross-currents 超过 ${OPENING_DIGEST_EVIDENCE_MAX_WORDS} 词:${evidenceWords}`);
+  const mattersWords = visibleWords(parts.sections.get('What matters today') || '');
+  if (mattersWords > OPENING_DIGEST_MATTERS_MAX_WORDS) warnings.push(`Opening Digest What matters today 超过 ${OPENING_DIGEST_MATTERS_MAX_WORDS} 词:${mattersWords}`);
   return {
     warnings,
-    stats: { headlineSpecific: !warnings.some((item) => item.includes('动态标题')), stance: meta.stance, confidence: meta.confidence, leadSentences, mattersCount: matters, observableSignpostCount: watchCount, narrativeWords, evidenceWords },
+    stats: { headlineSpecific: !warnings.some((item) => item.includes('动态标题')), stance: meta.stance, confidence: meta.confidence, leadSentences, mattersCount: matters, mattersWords, observableSignpostCount: watchCount, narrativeWords, evidenceWords },
   };
 }
 

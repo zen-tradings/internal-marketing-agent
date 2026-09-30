@@ -341,7 +341,7 @@ test('new Opening Digest contract is thesis-first and rejects sample failure mod
   assert.ok(audit.warnings.some((item) => /期权数据推断方向/.test(item)));
 });
 
-test('Opening Digest rejects routine market-move headlines and over-long evidence sections', () => {
+test('Opening Digest rejects routine market-move headlines and over-long evidence and matters sections', () => {
   const routine = INSIGHT_ARTICLE.replace('Fed decision looms over narrow equity participation', 'Oil gains lift energy shares higher');
   const audit = auditOpeningDigestInsight(routine);
   assert.ok(audit.warnings.some((item) => /常规每日行情/.test(item)));
@@ -353,6 +353,25 @@ test('Opening Digest rejects routine market-move headlines and over-long evidenc
   const over = auditOpeningDigestInsight(verboseEvidence);
   assert.ok(over.warnings.some((item) => /Evidence and cross-currents 超过 85 词/.test(item)));
   assert.equal(auditOpeningDigestInsight(INSIGHT_ARTICLE).warnings.some((item) => /Evidence and cross-currents/.test(item)), false);
+  const verboseMatters = INSIGHT_ARTICLE.replace(
+    '## Evidence and cross-currents',
+    'Padding sentence one carries words. '.repeat(18) + '\n## Evidence and cross-currents',
+  );
+  const mattersOver = auditOpeningDigestInsight(verboseMatters);
+  assert.ok(mattersOver.warnings.some((item) => /What matters today 超过 130 词/.test(item)));
+  const threeMatters = INSIGHT_ARTICLE.replace(
+    '## Evidence and cross-currents',
+    '**A third matter pads the section.** Extra sentence without new facts.\n\n## Evidence and cross-currents',
+  );
+  assert.ok(auditOpeningDigestInsight(threeMatters).warnings.some((item) => /应为 2 个短段/.test(item)));
+  const singleMatter = INSIGHT_ARTICLE.replace(
+    '\n\n**Energy supplies the counterweight.** The [oil move](https://example.com/b) reduces one inflationary pressure, but it does not by itself establish a broad risk-on regime.',
+    '',
+  );
+  assert.ok(auditOpeningDigestInsight(singleMatter).warnings.some((item) => /应为 2 个短段/.test(item)));
+  const cleanMatters = auditOpeningDigestInsight(INSIGHT_ARTICLE);
+  assert.equal(cleanMatters.stats.mattersCount, 2);
+  assert.equal(cleanMatters.warnings.some((item) => /What matters today/.test(item)), false);
 });
 
 test('opening content rules are diagnostics rather than hard gates', () => {

@@ -52,7 +52,7 @@ edition: ${date}
 
 After frontmatter, write the at-most-two-sentence Opening call as one paragraph with no heading. Then use exactly these headings in this order:
 ## What matters today
-Write 2-3 short paragraphs, each beginning with a bold judgment-led phrase.
+Write exactly two short paragraphs, each beginning with a bold judgment-led phrase. Together the two paragraphs must stay within roughly 90-120 visible English words (about 150-200 Chinese characters after translation); compress rather than pad.
 ## Evidence and cross-currents
 Write exactly two short paragraphs. Together the two paragraphs must stay within roughly 60-75 visible English words (about 100 Chinese characters after translation); compress rather than pad. The first paragraph presents the strongest supporting evidence for the opening call; the second presents the strongest contrary evidence or cross-current against it. Open each paragraph with a bold judgment-led phrase; do not use fixed labels such as "Supporting:" or "Constraining:". Inside each paragraph follow one line of reasoning: observed facts with inline links, then the transmission mechanism, then what it implies for the overall call. Keep each causal chain in its own sentence; do not stack several unrelated drivers into one sentence. The second paragraph must still be evidence-bound and cite supplied sources, never invented speculation. Do not add a third paragraph or a reconciling summary.
 ## What to watch
