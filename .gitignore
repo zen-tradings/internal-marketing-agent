@@ -19,3 +19,7 @@ deploy/target.env
 
 *.instance-lock
 *.instance-lock-journal
+
+# ZCode local tool state
+.zcode/
+.zcodeignore
