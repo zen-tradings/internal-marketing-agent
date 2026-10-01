@@ -115,8 +115,11 @@ test('恢复与校验:占位符替换为图片且通过硬门禁', () => {
   const images = [...document.querySelectorAll('img[data-zen-math="true"]')];
   assert.equal(images.length, 1);
   const style = images[0].getAttribute('style');
-  assert.ok(style.includes('em'), '行内公式必须用 em 高度随字号缩放');
+  assert.match(style, /width:84px/, '行内公式必须显式 px 尺寸(微信不识别 em)');
+  assert.match(style, /height:28px/);
   assert.ok(style.includes('vertical-align:middle'));
+  assert.equal(images[0].getAttribute('width'), '84', 'width 属性必须与 style px 一致兜底');
+  assert.equal(images[0].getAttribute('height'), '28');
 
   // 全量恢复场景:所有占位符都在
   const fullHtml = restoreMathInHtml(
@@ -149,7 +152,7 @@ test('恢复与校验:残留占位符或 TeX 必须硬失败', () => {
   assert.doesNotThrow(() => validateMathRestored('<pre><code>\\mathbf{X}</code></pre>', { equations: [] }));
 });
 
-test('恢复与校验:公式 em 尺寸 = 像素 / 16(随读者字号缩放,不得缩小)', () => {
+test('恢复与校验:公式 px 尺寸 = 测量像素 × 0.88 且 width/height 属性兜底', () => {
   const protection = protectMathInMarkdown('设 $\\mathbf{X}_{\\leq t}$ 与显示公式\n\n$$\\max f$$\n\n结束。\n');
   withImages(protection.equations);
   const html = restoreMathInHtml(
@@ -159,17 +162,31 @@ test('恢复与校验:公式 em 尺寸 = 像素 / 16(随读者字号缩放,不�
   const document = new JSDOM(html).window.document;
   for (const image of document.querySelectorAll('img[data-zen-math="true"]')) {
     const style = image.getAttribute('style');
-    const em = parseFloat(/([\d.]+)em/.exec(style)[1]);
     const isDisplay = Boolean(image.closest('[data-zen-math-display]'));
-    if (isDisplay) assert.equal(em, 96 / 16, '显示宽度应为 px/16');
-    else assert.equal(em, 32 / 16, '行内高度应为 px/16');
+    // fake 测量 96×32 → 主题正文 .88em 缩放后 84×28
+    assert.equal(image.getAttribute('width'), '84');
+    assert.equal(image.getAttribute('height'), '28');
+    assert.match(style, /width:84px/);
+    if (isDisplay) assert.match(style, /height:auto/);
+    else assert.match(style, /height:28px/);
+    assert.doesNotMatch(style, /[\d.]+em/, '公式图片不得再用 em 尺寸(微信不生效)');
   }
+  assert.doesNotThrow(() => validateMathRestored(html, { equations: protection.equations }));
 });
 
 test('恢复与校验:公式尺寸超出合理范围必须硬失败', () => {
-  const tiny = [{ token: 'ZENMATH0001XZENMATH', tex: 'x_t', display: false, hasCjk: false, image: { src: 'm.png', width: 96, height: 6 } }];
+  const tiny = [{ token: 'ZENMATH0001XZENMATH', tex: 'x_t', display: false, hasCjk: false, image: { src: 'm.png', width: 96, height: 4 } }];
   const restoredTiny = restoreMathInHtml('<p>A ZENMATH0001XZENMATH B</p>', { equations: tiny });
   assert.throws(() => validateMathRestored(restoredTiny, { equations: tiny }), /超出合理范围/);
+});
+
+test('恢复与校验:width/height 属性与 px 尺寸不一致必须硬失败', () => {
+  const mismatched = [{ token: 'ZENMATH0001XZENMATH', tex: 'x_t', display: false, hasCjk: false, image: { src: 'm.png', width: 96, height: 32 } }];
+  const restored = restoreMathInHtml('<p>A ZENMATH0001XZENMATH B</p>', { equations: mismatched });
+  const document = new JSDOM(restored).window.document;
+  document.querySelector('img[data-zen-math]').setAttribute('width', '300');
+  const tampered = document.body.innerHTML;
+  assert.throws(() => validateMathRestored(tampered, { equations: mismatched }), /不一致/);
 });
 
 test('公式去重:行内段落与相同 TeX 的显示块只保留显示版', () => {

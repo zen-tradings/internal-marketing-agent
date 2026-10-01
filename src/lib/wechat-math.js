@@ -27,6 +27,13 @@ const MATH_TOKEN_SUFFIX = 'XZENMATH';
 export const MATH_INK_COLOR = '#2B3645';
 export const MATH_CAPTURE_SCALE = 3;
 const MATH_BASE_FONT_PX = 16;
+// WeChat's editor drops em-valued width/height on <img>, so em sizing never
+// reaches the reader and formulas render at their intrinsic 3x pixels (~3.5x
+// the body font). Size images in integer px instead, scaled to the theme body
+// font (.88em of a 16px reader base, matching #wenyan p in assets/zen-trading.css);
+// the 3x PNG keeps rendering sharp at that smaller display size.
+const MATH_BODY_FONT_EM = 0.88;
+const MATH_DISPLAY_MARGIN_PX = Math.round(MATH_BODY_FONT_EM * MATH_BASE_FONT_PX);
 const MATH_CAPTURE_PADDING = { x: 3, y: 2 };
 const MAX_INLINE_TEX_LENGTH = 1000;
 const MAX_DISPLAY_TEX_LENGTH = 4000;
@@ -243,25 +250,34 @@ function dedupeDisplayEquations(markdown, equations) {
   return result;
 }
 
+function mathImagePx(cssPixels) {
+  return Math.max(1, Math.round(cssPixels * MATH_BODY_FONT_EM));
+}
+
 function buildEquationImage(document, equation) {
   const image = equation.image;
   if (!image?.src) throw new Error(`公式 ${equation.token} 缺少渲染图片`);
+  const width = mathImagePx(image.width);
+  const height = mathImagePx(image.height);
   const node = document.createElement('img');
   node.setAttribute('src', image.src);
   node.setAttribute('data-zen-math', 'true');
   node.setAttribute('alt', '');
-  // image.width/height are CSS pixels measured at MATH_BASE_FONT_PX in the capture
-  // page, so dividing by the base font alone yields reader-font-relative em sizing.
+  // Integer width/height attributes mirror the px style so the display size
+  // survives even if WeChat strips the style attribute entirely.
+  node.setAttribute('width', String(width));
+  node.setAttribute('height', String(height));
   const style = equation.display
-    ? `width:${(image.width / MATH_BASE_FONT_PX).toFixed(4)}em;max-width:100%;height:auto;margin:1em auto;display:block;`
-    : `height:${(image.height / MATH_BASE_FONT_PX).toFixed(4)}em;vertical-align:middle;max-width:100%;`;
+    ? `width:${width}px;height:auto;max-width:100%;margin:${MATH_DISPLAY_MARGIN_PX}px auto;display:block;`
+    : `width:${width}px;height:${height}px;vertical-align:middle;max-width:100%;`;
   node.setAttribute('style', style);
   return node;
 }
 
 // Replace protection tokens in the styled HTML with rasterized equation images.
-// Inline formulas scale with the reader's font setting via em heights; display
-// formulas stay centered and clamp to the article width.
+// Inline formulas are sized in integer px matched to the theme body font (WeChat
+// ignores em sizes on images); display formulas stay centered and clamp to the
+// article width.
 export function restoreMathInHtml(html, { equations = [] } = {}) {
   if (!equations.length) return String(html ?? '');
   const byToken = new Map(equations.map((equation) => [equation.token, equation]));
@@ -309,17 +325,39 @@ export function validateMathRestored(html, { equations = [] } = {}) {
   if (images.length !== equations.length) {
     errors.push(`公式图片恢复数量不符:提取 ${equations.length} 个,恢复 ${images.length} 个`);
   }
-  // Plausible rendered-size bounds catch sizing regressions (e.g. em divisors)
-  // before a draft with invisible formulas can be published.
-  const readEm = (image) => parseFloat(/([\d.]+)em/.exec(image.getAttribute('style') || '')?.[1] ?? 'NaN');
+  // Plausible rendered-size bounds catch sizing regressions (e.g. a stray em
+  // that WeChat discards, or a 3x intrinsic-size fallback) before a draft with
+  // invisible or oversized formulas can be published. The width/height
+  // attributes must mirror the px style so the size survives even if WeChat
+  // strips one of the two carriers.
+  const readStylePx = (image, property) => {
+    const match = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*(\\d+(?:\\.\\d+)?)px`, 'i')
+      .exec(image.getAttribute('style') || '');
+    return match ? Number(match[1]) : Number.NaN;
+  };
+  const readAttributePx = (image, property) => {
+    const raw = image.getAttribute(property);
+    return /^\d+$/.test(raw || '') ? Number(raw) : Number.NaN;
+  };
   for (const [index, image] of images.entries()) {
-    const em = readEm(image);
-    if (Number.isNaN(em)) {
-      errors.push(`第 ${index + 1} 张公式图片缺少 em 尺寸`);
-    } else if (image.getAttribute('data-zen-math-display') || image.closest('[data-zen-math-display]')) {
-      if (em < 1 || em > 40) errors.push(`第 ${index + 1} 张显示公式宽度 ${em}em 超出合理范围`);
-    } else if (em < 0.4 || em > 8) {
-      errors.push(`第 ${index + 1} 张行内公式高度 ${em}em 超出合理范围`);
+    const isDisplay = Boolean(image.getAttribute('data-zen-math-display') || image.closest('[data-zen-math-display]'));
+    const primary = isDisplay ? 'width' : 'height';
+    const minPx = isDisplay ? 12 : 5;
+    const maxPx = isDisplay ? 640 : 120;
+    const stylePx = readStylePx(image, primary);
+    if (Number.isNaN(stylePx)) {
+      errors.push(`第 ${index + 1} 张公式图片缺少 ${primary} px 尺寸`);
+    } else if (stylePx < minPx || stylePx > maxPx) {
+      errors.push(`第 ${index + 1} 张${isDisplay ? '显示' : '行内'}公式 ${primary} ${stylePx}px 超出合理范围`);
+    }
+    const mismatches = ['width', 'height'].filter((property) => {
+      const attrPx = readAttributePx(image, property);
+      if (Number.isNaN(attrPx)) return true;
+      const styleValue = readStylePx(image, property);
+      return !Number.isNaN(styleValue) && attrPx !== styleValue;
+    });
+    if (mismatches.length) {
+      errors.push(`第 ${index + 1} 张公式图片 ${mismatches.join('/')} 属性缺失或与 px 尺寸不一致`);
     }
   }
   for (const [index, image] of images.entries()) {
