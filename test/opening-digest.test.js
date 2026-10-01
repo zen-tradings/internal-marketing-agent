@@ -316,6 +316,7 @@ test('opening editorial planner keeps only real source IDs and an honest no-expe
   const prompt = buildOpeningDigestPlanningPrompt({ research, asOf: new Date('2026-08-10T14:15:00Z') });
   assert.match(prompt, /during the U\.S\. cash session/);
   assert.match(prompt, /does not prove direction/);
+  assert.match(prompt, /understands in one pass/);
   const plan = normalizeOpeningDigestPlan({
     stance: 'neutral', confidence: 'medium', selected_source_ids: ['OD1', 'BAD'],
     priced_expectation: { status: 'supported', text: 'Observed expectation', source_ids: ['BAD'] },
@@ -339,6 +340,15 @@ test('new Opening Digest contract is thesis-first and rejects sample failure mod
   assert.ok(audit.warnings.some((item) => /UTC/.test(item)));
   assert.ok(audit.warnings.some((item) => /OIC\/IV/.test(item)));
   assert.ok(audit.warnings.some((item) => /期权数据推断方向/.test(item)));
+});
+
+test('Opening Digest headline gate accepts headlines up to 12 words and 70 characters', () => {
+  const relaxed = INSIGHT_ARTICLE.replace(
+    'Fed decision looms over narrow equity participation',
+    'Fed holds rates steady after core inflation cools for a third month',
+  );
+  const audit = auditOpeningDigestInsight(relaxed);
+  assert.equal(audit.warnings.some((item) => /动态标题/.test(item)), false);
 });
 
 test('Opening Digest rejects routine market-move headlines and over-long evidence and matters sections', () => {

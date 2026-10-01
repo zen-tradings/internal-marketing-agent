@@ -8,7 +8,12 @@ import {
 } from '../lib/opening-digest-content.js';
 import { collectOpeningDigestUniverseContext } from '../lib/opening-digest-universe.js';
 import { decorateOpeningDigestWithEarnings } from '../lib/opening-digest-earnings.js';
-import { openingDigestPhaseGuidance } from '../lib/opening-digest-editorial.js';
+import {
+  OPENING_DIGEST_HEADLINE_MAX_CHARS,
+  OPENING_DIGEST_HEADLINE_MAX_WORDS,
+  OPENING_DIGEST_HEADLINE_MIN_WORDS,
+  openingDigestPhaseGuidance,
+} from '../lib/opening-digest-editorial.js';
 
 const MARKET_PRIORITY_SOURCES = [
   'reuters.com', 'apnews.com', 'ft.com', 'wsj.com', 'bloomberg.com', 'cnbc.com',
@@ -43,7 +48,7 @@ The schedule is inserted later as Earnings ahead, so do not create that heading 
 Return Markdown only with this frontmatter:
 ---
 title: Zen Opening Digest
-headline: An event-anchored professional headline naming today's single most market-moving or most distinctive development, 5-11 words, no more than 60 characters
+headline: An event-anchored professional headline naming today's single most market-moving or most distinctive development, written in clear natural English, ${OPENING_DIGEST_HEADLINE_MIN_WORDS}-${OPENING_DIGEST_HEADLINE_MAX_WORDS} words, no more than ${OPENING_DIGEST_HEADLINE_MAX_CHARS} characters
 stance: constructive|neutral|defensive
 confidence: high|medium|low
 preheader: One specific sentence, no more than 140 characters
@@ -58,7 +63,7 @@ Write exactly two short paragraphs. Together the two paragraphs must stay within
 ## What to watch
 Write 3-5 observable, evidence-bound bullets. Do not give entry, exit, position, stop-loss, or take-profit instructions.
 
-Headline rules (apply strictly): the headline must anchor today's single most market-moving or most distinctive development (a specific event, data release, policy decision, company result, or genuine surprise), written like a senior sell-side strategist's daily note title: precise, restrained, and accurate. NEVER write a routine recurring daily move as the headline subject — daily oil price gains or losses, day-to-day Treasury yield drift, or a generic index up/down day are all forbidden and make the headline repetitive and worthless. Exception: a genuine one-off event in oil or rates (for example an OPEC+ output decision, a CPI surprise, or an FOMC decision) may be named. Do not sensationalize and do not overstate causality.`;
+Headline rules (apply strictly): the headline must anchor today's single most market-moving or most distinctive development (a specific event, data release, policy decision, company result, or genuine surprise), written like a senior sell-side strategist's daily note title: precise, restrained, and accurate. Accuracy always comes first: never add, stretch, or imply any fact to make the headline clearer. Clarity is a hard floor, not a stylistic option: the headline must read as a natural, complete English sentence that a general financial reader understands in one pass — spell out what happened and to what, and do not use telegraphic ellipsis, unexplained market jargon, metaphor, wordplay, or cryptic noun stacks. A headline that must be reread to be parsed has failed these rules even when it is precise and within the length limits. NEVER write a routine recurring daily move as the headline subject — daily oil price gains or losses, day-to-day Treasury yield drift, or a generic index up/down day are all forbidden and make the headline repetitive and worthless. Exception: a genuine one-off event in oil or rates (for example an OPEC+ output decision, a CPI surprise, or an FOMC decision) may be named. Do not sensationalize and do not overstate causality.`;
 }
 
 export default {
