@@ -16,7 +16,11 @@
 
 ### Opening Digest 当前实现
 
-英文邮件仍是主投递，Opening Digest 专用 Customer.io 模板为 `zen-customerio/zen-research@9`，正文下方固定显示 `https://discord.gg/EtNErjaN8` 社区链接，随后是 `OPENING_DIGEST_TAIL_IMAGE_URL` 指向的固定品牌尾图（未配置时静默省略，不发 Slack warning）。正式邮件的 Customer.io 后台名称为 `Zen Opening Digest · YYYY-MM-DD`，收件主题为 `动态主标题 | Zen Opening Digest`；人工验收邮件保留 `[TEST]` 前缀。英文主稿由 `OPENING_DIGEST_MODEL` 专属配置（生产为 `z-ai/glm-5.3-flash`）；Kimi 仅负责规划，GLM 5.2 负责事实审核与局部压缩，中文微信直译使用 GLM 5.3 Flash 翻译模型。GLM 5.3 Flash 在 OpenRouter 上强制 reasoning(`effort:'none'` 会被路由层 400 拒绝),首次空正文后的应用级重试保持 `low` reasoning;若 `none` 请求仍被拒,同一轮自动升级为 `low` 重试，不会把整单降级失败；正文模型的 HTTP、超时、空正文或损坏响应属于技术硬失败，不得再发布“数据/解读不可用”占位稿。`OPENING_DIGEST_WECHAT_ENABLED=true` 时，Customer.io 成功发送或确认排期后才把冻结英文 payload 写入 SQLite outbox；微信消费端确定性删除引用标记、括号来源、Markdown 目标和裸来源 URL，再按块校验顺序、数字、Ticker、时间与机构品牌。净化范围同时覆盖 † 引用（无论是否带 URL）、含全角数字的【N】标记、ASCII 脚注 [N] 与残留空括号；未被删除的残留不新增硬失败门禁。英文邮件和 Discord 保留完整来源链接；中文微信仅保留承担语义的纯文本 label。正式微信动态标题不超过 16 字，修复耗尽或响应损坏时降级为 `今日开市要点` 并写 trace；验收稿保留 `[测试]` 前缀和 `MM-DD` 后缀。正文继续使用 `zen-wechat/zen-trading@9`、固定图片、九格行情、20 个 OIC 记录及纯文本 Discord 地址。创建前记录草稿快照和 payload 哈希，最多两次 `draft/add`；`media_id` 一经取得立即落库，重启后只回读该稿。前两次回读不一致只更新同一稿，第三次仍不一致才终态告警。瞬时错误最多自动尝试八次；微信异常不会改变邮件的 `done` 结果。微信草稿最终 verified 后会通过 notification outbox 发送一条包含标题与 media_id 的成功通知，Slack 不可用时自动补发。
+英文邮件仍是主投递，Opening Digest 专用 Customer.io 模板为 `zen-customerio/zen-research@9`，正文下方固定显示 `https://discord.gg/EtNErjaN8` 社区链接，随后是 `OPENING_DIGEST_TAIL_IMAGE_URL` 指向的固定品牌尾图（未配置时静默省略，不发 Slack warning）。正式邮件的 Customer.io 后台名称为 `Zen Opening Digest · YYYY-MM-DD`，收件主题为 `动态主标题 | Zen Opening Digest`；人工验收邮件保留 `[TEST]` 前缀。英文主稿由 `OPENING_DIGEST_MODEL` 专属配置（生产为 `z-ai/glm-5.3-flash`）；规划使用 `OPENROUTER_PLANNER_MODEL`（当前生产为 `z-ai/glm-5.3-flash`），事实审核与局部压缩使用 `OPENROUTER_REVIEW_MODEL`（当前生产为 `deepseek/deepseek-v4.1-flash`），中文微信直译使用 GLM 5.3 Flash 翻译模型。GLM 5.3 Flash 在 OpenRouter 上强制 reasoning(`effort:'none'` 会被路由层 400 拒绝),首次空正文后的应用级重试保持 `low` reasoning;若 `none` 请求仍被拒,同一轮自动升级为 `low` 重试，不会把整单降级失败；正文模型的 HTTP、超时、空正文或损坏响应属于技术硬失败，不得再发布“数据/解读不可用”占位稿。
+
+`OPENING_DIGEST_WECHAT_ENABLED=true` 时，Customer.io 成功发送或确认排期后才把冻结英文 payload 写入 SQLite outbox；微信消费端确定性删除引用标记、括号来源、Markdown 目标和裸来源 URL，再按块校验顺序、数字、Ticker、时间与机构品牌。净化范围同时覆盖 † 引用（无论是否带 URL）、含全角数字的【N】标记、ASCII 脚注 [N] 与残留空括号；未被删除的残留不新增硬失败门禁。英文邮件和 Discord 保留完整来源链接；中文微信仅保留承担语义的纯文本 label。正式微信动态标题不超过 16 字，修复耗尽或响应损坏时降级为 `今日开市要点` 并写 trace；验收稿保留 `[测试]` 前缀和 `MM-DD` 后缀。正文继续使用 `zen-wechat/zen-trading@10`、固定图片、九格行情、20 个 OIC 记录及纯文本 Discord 地址。
+
+创建前记录草稿快照和 payload 哈希，每个持久化创建操作最多调用一次 `draft/add`；`media_id` 一经取得立即落库。仅本次明确返回成功的新建草稿允许在前两次回读不一致时更新同一稿；普通重试、重启恢复及结果不明后的恢复均只读核对，不重新创建或替换封面。旧版 `@9` 操作仅在原请求指纹匹配时接受；无法唯一确认或只读核对仍不一致则保留 `needs_review`，不自动写入。显式正文纠错才允许更新已有草稿，并保留原封面。瞬时错误最多自动尝试八次，但已尝试的创建操作不会再次调用 `draft/add`；微信异常不会改变邮件的 `done` 结果。微信草稿最终 verified 后会通过 notification outbox 发送一条包含标题与 media_id 的成功通知，Slack 不可用时自动补发。
 
 `DISCORD_OPENING_DIGEST_ENABLED=true` 时，只有正式 cron 在 Customer.io 成功发送或确认排期后，才把同一冻结英文 payload 加入 SQLite delivery outbox，自动发往 `#newsletter-feed`。排期一经确认即入队，不等待邮件的 10:15 ET 目标发送时点，因此 Discord 可能先于邮件投递。Discord 以禁用 mentions 的 rich embeds 完整发布九格行情、带来源链接的正文和 OIC 20 行，并在每条成功后持久化 Discord message ID。网络、429 和 5xx 依 `Retry-After`/指数退避补发，进程重启后从下一条续传；最终失败仅发专用 Slack warning，邮件仍保持 `done`。
 
@@ -30,13 +34,27 @@ Slack 中人工触发 `opening-digest` 始终作为隔离测试运行。收件�
 
 生产环境在 DigitalOcean 的 Chrome 会从 OIC/iVolatility iframe 提取 20 行、8 个字段，截图仅用于同会话前后数据一致性校验并立即丢弃。开盘研究阶段同时抓取 72 个 ticker 的当日最新价和昨收，绝对涨跌幅达 5% 时生成结构化候选；单标的失败不影响其他标的。OIC 同次结果会被 run 内 artifact 复用于正文表格，并仅对进入 OIC Top 20 的池内标的判断 `IVX30 >= 60%` 或反推单日增加至少 5 个波动率点。这是受限的 Top 20 覆盖，不得表述为全池 IV 扫描。SQLite 保留最近 60 个成功交易日的池内入榜历史。OIC 授权、会话、浏览器、页面、报价或历史写入失败均只记录 trace；无预采集 artifact 时发布阶段仍会尝试原有 OIC 抓取。市场快照始终渲染固定 9 格，不可用项显示 `—`；2Y UST 使用美国财政部最新可用的 daily par yield。受众名称成功读取且标准化后不是 `test1` 时仍硬停；预检失败或人数为 0 只记 trace，最终以 Customer.io 请求结果为准。
 
-封面固定以 `assets/zen-opening-digest-background.png` 为唯一底图；源图尺寸、SHA-256 和输出 1240×620 尺寸在渲染器内仍严格校验。Chrome 只在底图中部留白区叠加 `OPENING DIGEST` 和当日美东日期。底图、浏览器渲染或 Customer.io 上传失败时，渠道改为发送无封面版并把原因写入 trace。
+英文邮件封面固定以 `assets/zen-opening-digest-background.png` 为唯一底图；源图尺寸、SHA-256 和输出 1240×620 尺寸在渲染器内仍严格校验。Chrome 只在底图中部留白区叠加 `OPENING DIGEST` 和当日美东日期。底图、浏览器渲染或 Customer.io 上传失败时，渠道改为发送无封面版并把原因写入 trace。
+
+中文微信封面独立使用 900×383 Canvas 横版，日期取冻结日报的 `dateKey` 并显示为 `YYYY.MM.DD`，完整居中的主标题与草稿标题共用归一化结果（不含测试前缀和日期后缀）。底部固定为 `TREASURY YIELDS · SOFTWARE · MARKET SIGNALS`。本地 Logo、Montserrat、Noto Sans SC 及来源/校验值见[素材说明](../assets/opening-digest-wechat-cover/README.md)；运行时不访问网页，也不新增模型调用。PNG 与 JSON 缓存保存在该任务隔离目录，按日期、标题、模板及素材版本校验后复用。封面失败由微信派生投递重试处理，终态使用现有精确 Slack warning，邮件仍为 `done`。本地预览命令为 `npm run preview:opening-digest`。
 
 API 创建的邮件会被 Customer.io workspace layout 包裹。Opening Digest 正文不自行加入退订链接，渲染前会本地删除模型意外输出的 `{% unsubscribe_url %}`。发送链路不再调用 Customer.io `/contents` 读回接口，workspace layout 唯一负责法定退订链接。
 
 所有可继续发送的内容降级只写入 `research-trace.json`，不发 Slack warning。只有硬门禁或 Customer.io 客观执行失败使用 Slack failure；邮件成功后的微信异常与 Discord 持久补发最终失败使用精确 Slack warning，不改写邮件 `done` 结果。
 - newsletter ID `1` 的首次尝试因退订链接误用变量语法，在 Customer.io 渲染阶段 3 条全部失败；没有错误邮件离开平台。保留该记录用于审计，不复用或扩容。
 - 内部分组目前只包含 Customer.io 中已经存在的 3 位内部人员。扩充体验名单时，先把人员加入该手工 segment，再回到 Review 页核对人数。
+
+### 2026-10-02 中文封面发布记录
+
+以下是本次发布时的验收记录，不代表后续生产实时状态。
+
+- 实现提交 `fd881dcf9f58dfc0347ace1649892a6ead586241` 与内存修复提交 `d727a4cfe8bdc6db561bfed2943ba32da681563f` 已同步 GitHub；生产激活的是后者。[GitHub CI](https://github.com/zen-tradings/internal-marketing-agent/actions/runs/36992773723) 成功。
+- 初次独立 release 验证因大字体反复内嵌触发 OOM，未切换生产。改为校验后直接读取本地字体，再通过 `npm run deploy:digitalocean` 完成单实例切换；发布后 `.deploy-commit`、服务 active、`/ready` 与 Slack 连接均核对成功。
+- macOS 与 Linux 本地浏览器封面验收通过。Linux 完整门禁为 772 项测试（771 通过、1 跳过、0 失败），依赖审计为 0 漏洞；`check:runtime-offline` 验证断网封面渲染与解码，`check:backup-restore` 验证隔离备份恢复。生产备份文件校验通过。
+- 前版 `f4fcccbf8c75ddcefd7f5340f821353ccef498af` 保留在 `/opt/zen-content-hub.rollback-f4fcccbf8c75`；环境文件的部署前备份保留为 `/etc/zen-content-hub/zen-content-hub.env.pre-d727a4cfe8bd`。
+- 本次没有额外发送验收邮件或创建真实微信草稿；已验证部署和离线渲染，尚未以新生成的真实 `media_id` 验收下次日报。后续文档收尾单独同步 GitHub，不为纯文档变化重启生产。
+
+### 常规 Newsletter 发布路径
 
 Customer.io 的 App API 不能改写由 Design Studio 创建的邮件正文，因此保留两条发布路径：
 

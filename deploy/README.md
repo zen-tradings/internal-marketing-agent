@@ -261,6 +261,10 @@ then stop Xvfb/x11vnc. Never expose VNC/noVNC on a public interface.
 
 ## Opening Digest release acceptance
 
+This command writes to live channels and is used for an authorized end-to-end
+acceptance. Cover-only releases can validate rendering with `check:runtime-offline`
+and verify the active commit, service and `/ready` without sending extra editions.
+
 After an Opening Digest release is active, require `/ready` to show an idle
 queue before running the acceptance command. It starts no Slack socket-mode
 consumer and uses an isolated run directory, but exercises live research,
@@ -452,7 +456,7 @@ three delivery records and retire the held original email afterward. Never
 reuse the original newsletter ID or resend its frozen payload.
 
 
-New formal cron runs recover automatically through the SQLite `delivery_outbox`: transient translation and WeChat failures retry across restarts, and a known `media_id` is only read or updated. The command below is retained only for historical runs created before durable WeChat delivery was introduced.
+New formal cron runs recover automatically through the SQLite `delivery_outbox`: transient translation and WeChat failures retry across restarts. Each journaled create operation issues at most one `draft/add`; uncertain results and known `media_id` values use read-only reconciliation during ordinary recovery. Unresolved or mismatched historical drafts remain `needs_review`. The cover upgrade does not recreate drafts or replace existing covers. The command below is retained only for historical runs created before durable WeChat delivery was introduced.
 
 When a formal cron email succeeded but its Chinese WeChat derivative failed at the immutable-token translation gate before receiving any WeChat `media_id`, deploy and verify the fix first. Confirm `/ready` reports `active=0` and `pending=0`, then run the restricted recovery against the SQLite `runs.id`:
 
@@ -487,7 +491,7 @@ current ET date, a successful Customer.io delivery, an existing verified WeChat
 draft, and a trace proving the original body came from a technical model
 failure. It disables Discord, never sends or schedules Customer.io, regenerates
 into a run-scoped repair directory, and updates then verifies the existing
-WeChat draft instead of creating a duplicate.
+WeChat draft instead of creating a duplicate, retaining its original cover.
 
 If the current-day verified WeChat draft contains compact evidence markers such
 as `【5】`, `【２】`, `【5†Source】`, or `[5]` because an older sanitizer accepted
@@ -507,7 +511,7 @@ sudo systemd-run --wait --pipe --collect \
 This mode requires the same idle/current-day/successful-email/existing-verified
 gates plus a run-scoped Chinese cache that proves the marker leak. It disables
 Discord and updates then verifies the same WeChat `media_id`; it never sends or
-schedules Customer.io and never creates another WeChat draft.
+schedules Customer.io and never creates another WeChat draft; its original cover is retained.
 
 If that repair proves the stored `media_id` has since been deleted from WeChat
 with error 40007, and the regenerated cache has already passed the current
