@@ -2,21 +2,28 @@ const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?/;
 export const OPENING_DIGEST_STANCES = Object.freeze(['constructive', 'neutral', 'defensive']);
 export const OPENING_DIGEST_CONFIDENCE = Object.freeze(['high', 'medium', 'low']);
 export const OPENING_DIGEST_REQUIRED_HEADINGS = Object.freeze([
-  'What matters today',
+  "Today's focus",
   'Evidence and cross-currents',
-  'What to watch',
 ]);
 export const OPENING_DIGEST_HEADLINE_MAX_CHARS = 70;
 export const OPENING_DIGEST_HEADLINE_MIN_WORDS = 5;
 export const OPENING_DIGEST_HEADLINE_MAX_WORDS = 12;
 export const OPENING_DIGEST_EVIDENCE_MAX_WORDS = 85;
-export const OPENING_DIGEST_MATTERS_MAX_WORDS = 130;
+export const OPENING_DIGEST_FOCUS_MAX_WORDS = 100;
 const ROUTINE_HEADLINE_RE = new RegExp([
   '\\b(?:oil|crude|wti|brent)\\b[^,;.]{0,24}\\b(?:rises?|falls?|gains?|drops?|jumps?|slides?|climbs?|slips?|edges?|extends?|steadies?)\\b',
   '\\byields?\\b[^,;.]{0,24}\\b(?:rises?|falls?|edges?|climbs?|slips?|drifts?|steadies?|holds?|little changed)\\b',
   '\\bstocks?(?:\\s+(?:index|futures))?\\b[^,;.]{0,24}\\b(?:rises?|falls?|gains?|drops?|slips?|climbs?|edges?)\\b',
 ].join('|'), 'i');
 export const OPENING_DIGEST_NARRATIVE_MAX_WORDS = 650;
+
+export function openingDigestWritingGuidance() {
+  return `Keep the institutional research tone, necessary financial terminology, evidence qualifications, and uncertainty. Make the Opening call readable in one pass: at most two sentences in one paragraph, with an explicit subject and one main causal relationship per sentence. The first sentence states Constructive, Neutral, or Defensive and the primary support or constraint; the optional second states the most important counterweight or limitation. Avoid abstract noun stacks, metaphor, vague actors, and several unrelated drivers in one sentence. Do not simplify away causal qualifications or introduce trading instructions.
+Use exactly these model-authored headings in this order: ## Today's focus, then ## Evidence and cross-currents. Earnings ahead is inserted separately later.
+Today's focus merges the daily themes and signposts into 2-3 bullets. Begin each bullet with a bold judgment-led phrase, then briefly state its market implication and an observable confirmation or invalidation condition. Prioritize the dominant theme and the most material counterweight. Cover a source-reported major event within the next 48 hours when available, using an existing bullet or the third bullet. Target 70-100 visible English words in total (roughly 130-180 Chinese characters after translation), with a maximum of ${OPENING_DIGEST_FOCUS_MAX_WORDS}; shorter is fine when evidence is sparse. Never pad to reach a minimum word count or invent a secondary theme, condition, threshold, or event. Do not create separate What matters today or What to watch sections.
+Evidence and cross-currents remains exactly two short paragraphs, together roughly 60-75 visible English words. Begin each with a bold judgment-led phrase. The first presents the strongest supporting evidence and its transmission mechanism; the second presents the strongest sourced contrary evidence or cross-current. Keep facts linked to supplied sources and separate facts from interpretation. Do not repeat the focus bullets or their watch conditions, add a third paragraph, or write a reconciling summary.
+Keep the whole model-authored narrative within ${OPENING_DIGEST_NARRATIVE_MAX_WORDS} visible English words; there is no minimum total length. Do not move removed detail into another section to fill space.`;
+}
 
 export function openingDigestSourceIds(research = []) {
   return research.map((source, index) => ({ ...source, openingDigestSourceId: `OD${index + 1}` }));
@@ -81,6 +88,7 @@ Rules:
 - Give each transmission_chain item at least one alternative_explanations entry unless the mechanism is backed by official data; an empty list is not allowed for wire-report or weaker grades.
 - The structured attribution snapshot is a timestamped observation of the current market state. Plan the narrative around it: premarket or earlier source observations must be labeled as earlier in time, and a dominant theme that contradicts the snapshot must not be selected.
 - Signposts must include at least one observable upcoming event scheduled within the next 48 hours when a supplied source reports one (macro data, policy decisions, summits, or trade talks); omit this only when no supplied source reports one.
+- Plan 2-3 prioritized theme-and-signpost pairs for Today's focus: each judgment and its observable confirmation or invalidation must follow from the same supplied evidence. These merge the former theme and watch sections; do not select extra material just to fill space. Keep the strongest supporting and contrary evidence for Evidence and cross-currents, without repeating the full explanation in both sections.
 - If the supplied material does not observe what was priced, use priced_expectation.status=not_observed and leave text empty.
 - OIC Top 20 data shows only observed option volume/IVX for names appearing in that table. It does not prove direction, investor intent, market breadth, or the cause of a price move.
 - The fixed 72-name universe is not the whole market. Describe it only as tracked-universe participation or dispersion.
@@ -194,6 +202,13 @@ export function openingDigestBodyParts(markdown) {
   return { body, lead, sections };
 }
 
+// Include both current and historical section names, in document order. Earnings are
+// deterministically inserted and have their own checks; all authored analysis is audited.
+export function openingDigestNarrativeBlocks(markdown) {
+  const { lead, sections } = openingDigestBodyParts(markdown);
+  return [['lead', lead], ...[...sections].filter(([heading]) => heading !== 'Earnings ahead')];
+}
+
 export function auditOpeningDigestInsight(markdown) {
   const warnings = [];
   const meta = parseOpeningDigestMetadata(markdown);
@@ -212,10 +227,12 @@ export function auditOpeningDigestInsight(markdown) {
   if (JSON.stringify(headings) !== JSON.stringify(expected)) warnings.push(`Opening Digest 栏目顺序应为 ${expected.join(' → ')}`);
   const leadSentences = sentenceCount(parts.lead);
   if (leadSentences < 1 || leadSentences > 2) warnings.push(`Opening call 应为 1-2 句，当前 ${leadSentences} 句`);
-  const matters = paragraphCount(parts.sections.get('What matters today'));
-  if (matters !== 2) warnings.push(`What matters today 应为 2 个短段，当前 ${matters}`);
-  const watchCount = (parts.sections.get('What to watch')?.match(/^[-*]\s+/gm) || []).length;
-  if (watchCount < 3 || watchCount > 5) warnings.push(`What to watch 应为 3-5 条，当前 ${watchCount}`);
+  const focus = parts.sections.get("Today's focus") || '';
+  const focusItems = focus.split('\n').map((line) => line.trim()).filter((line) => /^[-*]\s+/.test(line));
+  const focusCount = focusItems.length;
+  if (focusCount < 2 || focusCount > 3) warnings.push(`Today's focus 应为 2-3 条主线与验证条件，当前 ${focusCount}`);
+  if (focus.split('\n').some((line) => line.trim() && !/^[-*]\s+/.test(line.trim()))) warnings.push("Today's focus 应只包含列表项");
+  if (focusItems.some((item) => !/^[-*]\s+\*\*[^*]+\*\*/.test(item))) warnings.push("Today's focus 每条应以加粗的判断短语起头");
   if (/\bUTC\b/i.test(parts.body)) warnings.push('Opening Digest 用户可见正文不得使用 UTC，应统一显示 ET');
   if (/\b(?:because|due to)\b[^.]{0,100}\b(?:option interest|options activity|IVX|implied volatility)\b|\b(?:option interest|options activity|IVX|implied volatility)\b[^.]{0,100}\b(?:drove|caused|pushed|lifted)\b/i.test(parts.body)) warnings.push('Opening Digest 不得用 OIC/IV 共现推断价格因果');
   if (/\b(?:options? (?:market )?(?:skew|flow|volume)|call demand|put demand|IVX)\b[^.]{0,140}\b(?:bullish|bearish|direction|presage|predict|signal)\b/i.test(parts.body)) warnings.push('Opening Digest 不得用有限 OIC/期权数据推断方向、意图或后续涨跌');
@@ -224,11 +241,12 @@ export function auditOpeningDigestInsight(markdown) {
   if (narrativeWords > OPENING_DIGEST_NARRATIVE_MAX_WORDS) warnings.push(`Opening Digest 分析正文超过 ${OPENING_DIGEST_NARRATIVE_MAX_WORDS} 词:${narrativeWords}`);
   const evidenceWords = visibleWords(parts.sections.get('Evidence and cross-currents') || '');
   if (evidenceWords > OPENING_DIGEST_EVIDENCE_MAX_WORDS) warnings.push(`Opening Digest Evidence and cross-currents 超过 ${OPENING_DIGEST_EVIDENCE_MAX_WORDS} 词:${evidenceWords}`);
-  const mattersWords = visibleWords(parts.sections.get('What matters today') || '');
-  if (mattersWords > OPENING_DIGEST_MATTERS_MAX_WORDS) warnings.push(`Opening Digest What matters today 超过 ${OPENING_DIGEST_MATTERS_MAX_WORDS} 词:${mattersWords}`);
+  const focusWords = visibleWords(focus);
+  if (focusWords > OPENING_DIGEST_FOCUS_MAX_WORDS) warnings.push(`Opening Digest Today's focus 超过 ${OPENING_DIGEST_FOCUS_MAX_WORDS} 词:${focusWords}`);
+  const narrativeComplete = Boolean(parts.lead && OPENING_DIGEST_REQUIRED_HEADINGS.every((heading) => parts.sections.get(heading)?.trim()));
   return {
     warnings,
-    stats: { headlineSpecific: !warnings.some((item) => item.includes('动态标题')), stance: meta.stance, confidence: meta.confidence, leadSentences, mattersCount: matters, mattersWords, observableSignpostCount: watchCount, narrativeWords, evidenceWords },
+    stats: { headlineSpecific: !warnings.some((item) => item.includes('动态标题')), stance: meta.stance, confidence: meta.confidence, leadSentences, focusCount, focusWords, narrativeComplete, mattersCount: focusCount, mattersWords: focusWords, observableSignpostCount: focusCount, narrativeWords, evidenceWords },
   };
 }
 
@@ -253,6 +271,17 @@ function sourceRank(source) {
 function clean(value, max) { return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max); }
 function cleanArray(value, limit, max) { return [...new Set((Array.isArray(value) ? value : []).map((item) => clean(item, max)).filter(Boolean))].slice(0, limit); }
 function stripQuotes(value) { return String(value || '').replace(/^(['"])([\s\S]*)\1$/, '$2'); }
-function visibleWords(value) { return (String(value || '').match(/[A-Za-z0-9][A-Za-z0-9'’./+%-]*/g) || []).length; }
-function sentenceCount(value) { return (String(value || '').match(/[^.!?]+[.!?]+(?:\s|$)/g) || []).length; }
-function paragraphCount(value) { return String(value || '').trim() ? String(value).trim().split(/\n\s*\n+/).filter(Boolean).length : 0; }
+function visibleText(value) {
+  return String(value || '')
+    .replace(/!?\[([^\]]*)]\(https?:\/\/[^\s)]+\)/g, '$1')
+    .replace(/<https?:\/\/[^>]+>/g, '')
+    .replace(/https?:\/\/[^\s)>\]}"']+/g, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/[`*_~>#|]/g, '');
+}
+function visibleWords(value) { return (visibleText(value).match(/[A-Za-z0-9][A-Za-z0-9'’./+%-]*/g) || []).length; }
+function sentenceCount(value) {
+  const text = visibleText(value).trim();
+  if (!text) return 0;
+  return [...new Intl.Segmenter('en', { granularity: 'sentence' }).segment(text)].filter((part) => visibleWords(part.segment) > 0).length;
+}

@@ -110,3 +110,28 @@ test('Discord POST 使用 wait=true 取得 message id，429 暴露 Retry-After �
     fetchFn: async () => response({ message: 'rate limited', retry_after: 1.25 }, 429),
   }), (error) => error.retryable === true && error.retryAfterMs === 1250);
 });
+
+
+test('Discord renders the merged focus once and retains its source links and conditions', () => {
+  const body = `The opening stance is neutral.
+
+## Today's focus
+- **Rates constrain valuations.** Watch whether yields retreat ([source](https://example.com/a)).
+- **Oil offers a counterweight.** Lower costs do not confirm broad risk-on.
+
+## Evidence and cross-currents
+**Rates remain firm.** Valuation pressure persists.
+
+**Energy eases.** Oil supplies a counterweight.
+
+## Earnings ahead
+No major U.S.-listed earnings events were selected for the remainder of this week.`;
+  const messages = renderDiscordOpeningDigest({ ...payload(body), options: null });
+  assert.match(messages[0].embeds[0].description, /opening stance is neutral/);
+  const editorial = messages.slice(1).map((message) => message.embeds[0].description).join('');
+  assert.equal(editorial.split("## Today's focus").length - 1, 1);
+  assert.ok(editorial.indexOf("Today's focus") < editorial.indexOf('Evidence and cross-currents'));
+  assert.ok(editorial.indexOf('Evidence and cross-currents') < editorial.indexOf('Earnings ahead'));
+  assert.match(editorial, /whether yields retreat.*https:\/\/example\.com\/a/);
+  assert.doesNotMatch(editorial, /What matters today|What to watch/);
+});

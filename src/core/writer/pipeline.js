@@ -635,7 +635,7 @@ export async function runWriter({
 
 export function openingDigestFallbackArticle(asOf) {
   const date = easternDateKey(asOf);
-  return `---\ntitle: Zen Opening Digest\nheadline: Opening data, read unavailable\nstance: neutral\nconfidence: low\npreheader: Opening data are available; the evidence-bound editorial read could not be completed.\nedition: ${date}\n---\nEditorial update unavailable for this edition. Opening data are available, but the evidence-bound synthesis could not be completed, so no directional conclusion is presented.\n\n## What matters today\n\nNo evidence-ranked narrative is available.\n\nNo additional market implication is asserted.\n\n## Evidence and cross-currents\n\nThe available data are shown without a causal interpretation.\n\n## What to watch\n\n- Current index levels and volatility\n- Available Treasury yield observations\n- Scheduled earnings shown below\n`;
+  return `---\ntitle: Zen Opening Digest\nheadline: Opening data, read unavailable\nstance: neutral\nconfidence: low\npreheader: Opening data are available; the evidence-bound editorial read could not be completed.\nedition: ${date}\n---\nEditorial update unavailable for this edition. Opening data are available, but the evidence-bound synthesis could not be completed, so no directional conclusion is presented.\n\n## Today's focus\n\n- **Editorial read unavailable.** No evidence-ranked narrative is available.\n- **No directional conclusion.** No additional market implication is asserted.\n\n## Evidence and cross-currents\n\nThe available data are shown without a causal interpretation.\n`;
 }
 
 export function isOpeningDigestEditorialModelFailure(error) {

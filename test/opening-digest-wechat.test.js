@@ -721,12 +721,12 @@ test('封面和草稿共用归一化标题，缓存位于该任务的隔离目�
   assert.equal(draftInput.title, `${OPENING_DIGEST_SAFE_HEADLINE}（日报· 2026-08-10）`);
 });
 
-function legacyRecord(source, translation, { remoteId = '', attempts = 1 } = {}) {
+function legacyRecord(source, translation, { remoteId = '', attempts = 1, templateId = 'zen-wechat/zen-trading@9' } = {}) {
   const title = openingDigestWechatTitle(translation.translations.find((unit) => unit.id === 'headline').text, source.dateKey);
   const sort = (value) => Array.isArray(value) ? value.map(sort) : value && typeof value === 'object'
     ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sort(value[key])])) : value;
   const payloadSha256 = crypto.createHash('sha256').update(JSON.stringify(sort({
-    templateId: 'zen-wechat/zen-trading@9', title, digest: translation.translations.find((unit) => unit.id === 'preheader').text,
+    templateId, title, digest: translation.translations.find((unit) => unit.id === 'preheader').text,
     payload: source, translations: translation.translations,
   }))).digest('hex');
   const operations = memoryRemoteOperations();
@@ -736,26 +736,26 @@ function legacyRecord(source, translation, { remoteId = '', attempts = 1 } = {})
   return { operations, title, payloadSha256 };
 }
 
-function savedWechatDraft(source, translation, title) {
+function savedWechatDraft(source, translation, title, templateId = 'zen-wechat/zen-trading@9') {
   return { content: { news_item: [{
     title, digest: translation.translations.find((unit) => unit.id === 'preheader').text,
     content: renderWechatOpeningDigestHtml({ payload: source, translation,
       images: { header: 'https://img/header', survey: 'https://img/survey', footer: 'https://img/footer' },
-    }).replaceAll(WECHAT_OPENING_DIGEST_TEMPLATE_ID, 'zen-wechat/zen-trading@9'),
+    }).replaceAll(WECHAT_OPENING_DIGEST_TEMPLATE_ID, templateId),
     thumb_media_id: 'original-cover',
   }] } };
 }
 
 test('旧版请求指纹匹配时只读恢复已知或唯一候选草稿，不渲染/上传/更新', async () => {
   const source = prepareOpeningDigestWechatPayload(payload()); const translation = translated(source);
-  for (const remoteId of ['legacy-draft', '']) {
-    const { operations, title, payloadSha256 } = legacyRecord(source, translation, { remoteId });
+  for (const templateId of ['zen-wechat/zen-trading@9', 'zen-wechat/zen-trading@10']) for (const remoteId of ['legacy-draft', '']) {
+    const { operations, title, payloadSha256 } = legacyRecord(source, translation, { remoteId, templateId });
     const channel = makeWechatOpeningDigestChannel({
       renderCover: async () => { throw new Error('不应生成新封面'); }, sleep: async () => {},
       api: {
         getAccessToken: async () => 'token',
         listDrafts: async () => ({ item: [{ media_id: 'legacy-draft', content: { news_item: [{ title }] } }] }),
-        getDraft: async () => savedWechatDraft(source, translation, title),
+        getDraft: async () => savedWechatDraft(source, translation, title, templateId),
       },
     });
     const result = await channel.publish({ payload: source, translation, config: config(), runId: 'legacy-run', remoteOperations: operations });
@@ -902,3 +902,74 @@ function memoryRemoteOperations() {
     },
   };
 }
+
+
+test('new focus translation preserves conditions, negation, tokens and renders one merged section', async () => {
+  const source = payload();
+  source.metrics = []; source.options = null;
+  source.article.body = `The opening stance is neutral as Treasury yields remain firm. Lower oil prices do not yet justify a more constructive view.
+
+## Today's focus
+- **Rates remain the constraint.** QQQ is down 0.25% at 10:00 ET ([report](https://example.com/a)); if 10Y yields retreat, valuation pressure may ease.
+- **Oil is a partial counterweight.** Lower WTI does not establish broad risk-on; watch whether VIX confirms SPY resilience.
+
+## Evidence and cross-currents
+**Rates limit valuation support.** Firm yields constrain growth shares.
+
+**Energy offers relief.** Cheaper oil may ease inflation pressure.
+
+## Earnings ahead
+No major U.S.-listed earnings events were selected for the remainder of this week.`;
+  const expected = new Map([
+    ['headline', '利率考验市场信心'], ['preheader', '早盘市场信号。'],
+    ['body-1', 'Treasury 收益率坚挺，开市判断维持中性。油价回落尚不足以支持更积极的判断。'],
+    ['body-3', '**利率仍是约束。** QQQ 在 10:00 ET 下跌 0.25%；若 10Y 收益率回落，估值压力可能缓解。'],
+    ['body-4', '**油价提供部分缓冲。** WTI 回落并不代表全面转向风险偏好；关注 VIX 是否确认 SPY 的韧性。'],
+    ['body-6', '**利率限制估值支撑。** 收益率坚挺制约成长股。'],
+    ['body-7', '**能源带来缓冲。** 低油价可能缓解通胀压力。'],
+  ]);
+  const prompts = [];
+  const result = await translateOpeningDigestPayload(source, {
+    writer: { model: 'test', openrouterApiKey: 'test-key' },
+    fetchFn: async (_url, options) => {
+      const request = JSON.parse(options.body); const prompt = request.messages.at(-1).content;
+      prompts.push(prompt);
+      const units = JSON.parse(prompt.slice(prompt.indexOf('\n\n') + 2));
+      return { ok: true, status: 200, async text() { return JSON.stringify({ choices: [{ message: { content: JSON.stringify({ translations: units.map((unit) => ({ id: unit.id, text: expected.get(unit.id) })) }) } }] }); } };
+    },
+  });
+  assert.equal(result.schemaVersion, 22);
+  assert.equal(result.repairs.length, 0);
+  assert.ok(prompts.every((prompt) => /自然调整中文语序/.test(prompt) && /严格保留否定、条件/.test(prompt)));
+  assert.match(result.translations.find((unit) => unit.id === 'body-3').text, /0\.25%.*若.*可能/);
+  assert.match(result.translations.find((unit) => unit.id === 'body-4').text, /并不.*是否/);
+  const html = renderWechatOpeningDigestHtml({ payload: prepareOpeningDigestWechatPayload(source), translation: result, images: {} });
+  const document = new JSDOM(html).window.document;
+  assert.deepEqual([...document.querySelectorAll('h2')].map((node) => node.textContent), ['开市判断', '市场快照', '今日关注', '证据与分歧', '财报预告']);
+  assert.equal(document.querySelectorAll('[data-zen-section="focus"]').length, 1);
+  assert.equal(document.querySelectorAll('a[href]').length, 0);
+  assert.doesNotMatch(html, /今日主线|今日观察/);
+});
+
+test('valid previous translation cache is reused for frozen old content without rewriting it', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'zen-opening-legacy-cache-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const source = payload(); const prepared = prepareOpeningDigestWechatPayload(source);
+  const cached = {
+    ...translated(source), schemaVersion: 21,
+    payloadHash: crypto.createHash('sha256').update(JSON.stringify({ version: 21, model: 'test', payload: prepared })).digest('hex'),
+  };
+  const cachePath = path.join(directory, 'opening-digest-zh-CN.json');
+  const saved = JSON.stringify(cached);
+  fs.writeFileSync(cachePath, saved);
+  const options = { cacheDir: directory, writer: { model: 'test' }, complete: () => { throw new Error('must reuse frozen translation'); } };
+  assert.deepEqual(await translateOpeningDigestPayload(source, options), cached);
+  assert.equal(fs.readFileSync(cachePath, 'utf8'), saved);
+  // A current-contract payload cannot use a preceding-version cache even when its hash is valid.
+  source.article.body = "## Today's focus\n- **Rates constrain valuations.** Watch yields.";
+  const current = prepareOpeningDigestWechatPayload(source);
+  const units = translationUnits(current).map((unit) => ({ id: unit.id, kind: unit.kind, source: unit.text, text: unit.text }));
+  const oldCacheForNewBody = { ...cached, translations: units, payloadHash: crypto.createHash('sha256').update(JSON.stringify({ version: 21, model: 'test', payload: current })).digest('hex') };
+  fs.writeFileSync(cachePath, JSON.stringify(oldCacheForNewBody));
+  await assert.rejects(translateOpeningDigestPayload(source, options), /must reuse frozen translation/);
+});

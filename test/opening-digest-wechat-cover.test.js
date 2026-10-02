@@ -89,7 +89,7 @@ test('同任务缓存命中免启动浏览器；损坏缓存和日期/标题/素
   const dependencies = { browserType: fake.browserType, loadAssets };
   await renderOpeningDigestWechatCover({ ...input, cacheDir }, dependencies);
   const metadata = JSON.parse(await fs.readFile(path.join(cacheDir, 'opening-digest-wechat-cover.json')));
-  assert.equal(metadata.templateId, 'zen-wechat/zen-trading@10');
+  assert.equal(metadata.templateId, 'zen-wechat/zen-trading@11');
   assert.deepEqual(metadata.cover_keywords, [input.headline]);
   await renderOpeningDigestWechatCover({ ...input, cacheDir, executablePath: '' }, dependencies);
   assert.equal(fake.calls.launched, 1);

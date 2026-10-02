@@ -1,4 +1,4 @@
-import { openingDigestBodyParts } from './opening-digest-editorial.js';
+import { openingDigestNarrativeBlocks } from './opening-digest-editorial.js';
 
 // Deterministic attribution audit for the Opening Digest. Every finding is a warning that
 // feeds the existing refine/repair round; none of them hard-fails an edition.
@@ -52,9 +52,7 @@ export function splitSentences(text) {
 
 export function auditOpeningDigestAttribution({ article, snapshot = null, asOf = new Date() } = {}) {
   const warnings = [];
-  const { lead, sections } = openingDigestBodyParts(article);
-  const narrative = [lead, sections.get('What matters today') || '', sections.get('Evidence and cross-currents') || '', sections.get('What to watch') || '']
-    .filter(Boolean).join('\n\n');
+  const narrative = openingDigestNarrativeBlocks(article).map(([, text]) => text).filter(Boolean).join('\n\n');
   const metrics = new Map((snapshot?.metrics || [])
     .filter((metric) => !metric.unavailable && Number.isFinite(metric.changePct))
     .map((metric) => [metric.key || metric.label, metric]));

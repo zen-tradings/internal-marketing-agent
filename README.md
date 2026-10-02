@@ -40,14 +40,23 @@ Its date follows the original digest edition (`YYYY.MM.DD`); its centered Chines
 headline matches the draft title without the date suffix. The bottom line is fixed:
 `TREASURY YIELDS · SOFTWARE · MARKET SIGNALS`. Logo and fonts are bundled, with no
 additional model calls or runtime website access. The English email cover keeps its
-existing design. The WeChat template is `zen-wechat/zen-trading@10`.
+existing design. The WeChat template is `zen-wechat/zen-trading@11`; the dedicated email template is
+`zen-customerio/zen-research@10`.
 
 Each run caches `opening-digest-wechat-cover.png` and its JSON fields/checksums in
 the same isolated artifact directory as its translation. Invalid caches regenerate;
 known or previously attempted draft operations are reconciled through reads before
 rendering or uploading a cover. An explicit correction to an existing draft keeps
 its original cover. Run `npm run preview:opening-digest` to preview the HTML and
-new cover locally, without sending email or creating drafts.
+new cover locally, without sending email or creating drafts. The fictional bilingual sample,
+mobile screenshots, and Discord preview are saved to `output/opening-digest-preview/`.
+
+The opening call keeps an institutional tone in at most two clear sentences. “Today's focus”
+(今日关注) merges daily themes and watch conditions into 2–3 bullets, targeting 70–100 visible
+English words. It follows the market snapshot and precedes Evidence and cross-currents;
+earnings and options follow when available. There is no minimum total word count.
+Chinese translation preserves facts, conditions, negation, and uncertainty with natural wording.
+Frozen historical deliveries retain their original section structure and matching translations.
 
 ## Set up your local instance
 

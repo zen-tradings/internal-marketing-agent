@@ -18,7 +18,7 @@ import {
 import { withRuntimeResource } from '../config/runtime.js';
 
 export const WECHAT_OPENING_DIGEST_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['wechat-opening-digest'];
-const LEGACY_WECHAT_TEMPLATE_ID = 'zen-wechat/zen-trading@9';
+const LEGACY_WECHAT_TEMPLATE_IDS = ['zen-wechat/zen-trading@9', 'zen-wechat/zen-trading@10'];
 const CREATE_OPERATION = 'create-opening-digest-wechat';
 export const WECHAT_DRAFT_MAX_CHARS = 20000;
 export const WECHAT_DRAFT_MAX_BYTES = 1024 * 1024;
@@ -50,7 +50,7 @@ export function makeWechatOpeningDigestChannel({
       })).digest('hex');
       const payloadSha256 = fingerprint(WECHAT_OPENING_DIGEST_TEMPLATE_ID);
       const record = remoteOperations?.get(CREATE_OPERATION);
-      const legacyRecord = record?.payload_sha256 === fingerprint(LEGACY_WECHAT_TEMPLATE_ID);
+      const legacyRecord = LEGACY_WECHAT_TEMPLATE_IDS.some((templateId) => record?.payload_sha256 === fingerprint(templateId));
       if (record && record.payload_sha256 !== payloadSha256 && !legacyRecord) {
         throw needsReview('微信后台操作请求哈希与当前日报不一致，拒绝复用旧操作');
       }
@@ -349,7 +349,8 @@ function renderNarrative(markdown, translated) {
     if (heading) {
       seenHeading = true;
       section = unit.source === 'Earnings ahead' ? 'earnings'
-        : unit.source === 'What matters today' ? 'matters'
+        : /^(?:Today's focus|Today’s focus)$/.test(unit.source) ? 'focus'
+          : unit.source === 'What matters today' ? 'matters'
           : unit.source === 'Evidence and cross-currents' ? 'evidence'
             : unit.source === 'What to watch' ? 'watch' : `body-${index + 1}`;
       html = `<h2 data-zen-section="${section}" data-block-id="${id}" style="margin:22px 0 9px;font-size:18px;color:#08272b">${inlineMarkup(unit.text)}</h2>`;

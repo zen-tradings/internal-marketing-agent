@@ -806,21 +806,16 @@ edition: 2026-08-10
 ---
 The market opened neutral as firm long yields constrain duration-sensitive equities. Lower oil offsets part of that pressure without changing the overall tone.
 
-## What matters today
+## Today's focus
 
-**Rates remain the constraint.** Firm yields keep confirmation dependent on a retreat in long rates【https://example.com/a】.
+- **Rates remain the constraint.** Firm yields keep confirmation dependent on a retreat in long rates【https://example.com/a】.
 
-**The counterweight is narrower.** Lower oil would help inflation sensitivity, but it does not establish a broad risk-on signal.
+- **The counterweight is narrower.** Lower oil would help inflation sensitivity, but does not establish a broad risk-on signal; watch whether participation broadens.
 
 ## Evidence and cross-currents
 
 Firm yields constrain the read, while lower oil is a counter-current; the evidence therefore supports medium rather than high confidence.
-
-## What to watch
-
-- Whether long yields ease
-- Whether volatility confirms index resilience
-- Whether participation broadens`;
+`;
   const models = [];
   const result = await runWriter({
     workflow, input: 'opening', config,

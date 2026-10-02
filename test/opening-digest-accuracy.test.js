@@ -16,11 +16,11 @@ const FRONTMATTER = '---\ntitle: Zen Opening Digest\nheadline: Fed decision loom
 const ARTICLE = `${FRONTMATTER}
 The market opened neutral as supply concerns support energy.
 
-## What matters today
+## Today's focus
 
-**Oil holds the tape.** WTI traded at 91.99 dollars while yields sat at 5.00 percent [CNBC](https://example.com/a).
+- **Oil holds the tape.** WTI traded at 91.99 dollars while yields sat at 5.00 percent [CNBC](https://example.com/a).
 
-**Growth holds.** The composite PMI registered 58.4, up from 56.0 [Reuters](https://example.com/b).
+- **Growth holds.** The composite PMI registered 58.4, up from 56.0 [Reuters](https://example.com/b).
 
 ## Evidence and cross-currents
 
@@ -147,4 +147,12 @@ test('归因快照证据源包含可核对的数值与捕获时间', () => {
   assert.ok(evidence.text.includes('WTI: 89.41'));
   assert.ok(evidence.text.includes('-1.20% versus prior close'));
   assert.ok(!evidence.text.includes('VIX'));
+});
+
+test('focus bullets retain numeric provenance and release-period audits', () => {
+  const article = `${FRONTMATTER}\n## Today's focus\n- **Survey point.** The September 2025 PMI was 99.9 ([report](https://example.com/a)). Watch new orders.`;
+  const numbers = auditOpeningDigestNumberProvenance({ article, research: [{ url: 'https://example.com/a', text: 'PMI was 58.4.' }] });
+  assert.ok(numbers.warnings.some((warning) => warning.includes('99.9')));
+  const period = auditOpeningDigestPeriodConsistency({ article, asOf: new Date('2026-09-23T14:00:00Z') });
+  assert.ok(period.warnings.some((warning) => warning.includes('September 2025')));
 });

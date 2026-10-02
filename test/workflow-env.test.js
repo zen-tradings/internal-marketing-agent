@@ -301,7 +301,9 @@ test('Opening Digest 保留价格事实，但禁止解释没有催化原因', as
     assert.match(prompt, /never comment that a cause is missing, unknown, or unasserted/i);
     assert.doesNotMatch(prompt, /without asserting a cause/i);
     assert.match(prompt, /exactly two short paragraphs/i);
-    assert.match(prompt, /roughly 90-120 visible English words \(about 150-200 Chinese characters after translation\)/i);
+    assert.match(prompt, /Target 70-100 visible English words in total/i);
+    assert.match(prompt, /2-3 bullets/i);
+    assert.match(prompt, /no minimum total length/i);
     assert.doesNotMatch(prompt, /one compact paragraph/i);
     assert.match(
       openingDigestPhaseGuidance(new Date('2026-08-10T14:00:00.000Z')),

@@ -1,4 +1,4 @@
-import { openingDigestBodyParts } from './opening-digest-editorial.js';
+import { openingDigestNarrativeBlocks } from './opening-digest-editorial.js';
 import { splitSentences } from './opening-digest-attribution.js';
 
 // Deterministic numeric provenance and period-consistency audits for the Opening Digest.
@@ -33,13 +33,7 @@ export function auditOpeningDigestNumberProvenance({
     .filter((source) => source?.url)
     .map((source) => [normalizeProvenanceUrl(source.url), source]));
   const snapshotValues = snapshotNumbers(snapshot);
-  const { lead, sections } = openingDigestBodyParts(article);
-  const blocks = [
-    ['lead', lead],
-    ['What matters today', sections.get('What matters today') || ''],
-    ['Evidence and cross-currents', sections.get('Evidence and cross-currents') || ''],
-    ['What to watch', sections.get('What to watch') || ''],
-  ];
+  const blocks = openingDigestNarrativeBlocks(article);
   const stats = { checkedSentences: 0, unverifiableSentences: 0, unverifiedNumbers: 0 };
   for (const [, text] of blocks) {
     if (!text) continue;
@@ -85,9 +79,7 @@ export function auditOpeningDigestPeriodConsistency({ article, asOf = new Date()
     }).format(asOf));
   } catch { currentYear = asOf.getUTCFullYear(); }
   if (!Number.isFinite(currentYear)) return { warnings, stats: { priorPeriodMentions: 0 } };
-  const { lead, sections } = openingDigestBodyParts(article);
-  const text = [lead, sections.get('What matters today') || '', sections.get('Evidence and cross-currents') || '', sections.get('What to watch') || '']
-    .filter(Boolean).join('\n\n');
+  const text = openingDigestNarrativeBlocks(article).map(([, text]) => text).filter(Boolean).join('\n\n');
   let priorPeriodMentions = 0;
   for (const match of text.matchAll(MONTH_YEAR_RE)) {
     const year = Number(match[2]);

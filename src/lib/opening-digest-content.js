@@ -358,13 +358,13 @@ function auditModernOpeningDigestArticle({ article, research, asOf, requireFresh
     earningsLinks,
     earningsPresent: /(^|\n)## Earnings ahead\s*$/m.test(body),
     earningsCount: earningsLinks.length,
-    catalystCount: insight.stats.mattersCount,
+    catalystCount: insight.stats.focusCount,
     catalystWordCounts: [],
     marketReadLength: 0,
     marketReadWordCount: insight.stats.narrativeWords,
     marketReadSentenceCount: insight.stats.leadSentences,
     marketReadParagraphCount: 1,
-    marketReadStructureValid: insight.stats.mattersCount === 2,
+    marketReadStructureValid: insight.stats.focusCount >= 2 && insight.stats.focusCount <= 3,
   };
 }
 

@@ -89,7 +89,7 @@ The cover generator and its OFL-licensed Resource Han Rounded CN Medium display 
 in `tools/cover-generator`, so cover rendering does not depend on host-installed CJK fonts.
 The Chinese Opening Digest cover separately bundles the Zen Trading Canvas artwork,
 Logo, Montserrat and Noto Sans SC fonts in `assets/opening-digest-wechat-cover`.
-It renders offline at 900×383 with a same-run cache. Template `zen-wechat/zen-trading@10`
+It renders offline at 900×383 with a same-run cache. Template `zen-wechat/zen-trading@11`
 applies to new drafts; existing/attempted drafts are read-only during ordinary
 recovery, and explicit body repairs retain the original cover. `check:runtime-offline`
 also renders and decodes this cover, so run it in the Linux release before deployment.

@@ -1,4 +1,4 @@
-import { openingDigestBodyParts } from './opening-digest-editorial.js';
+import { openingDigestNarrativeBlocks } from './opening-digest-editorial.js';
 
 // Deterministic evidence ledger for the Opening Digest. Extracts, for every narrative
 // sentence, the supplied sources it links to, the evidence grade of those sources, and any
@@ -19,13 +19,7 @@ function splitSentences(text) {
 const CLAIM_MAX_CHARS = 320;
 
 export function buildOpeningDigestEvidenceLedger({ article, research = [], snapshot = null, plan = null } = {}) {
-  const { lead, sections } = openingDigestBodyParts(article);
-  const blocks = [
-    ['lead', lead],
-    ['What matters today', sections.get('What matters today') || ''],
-    ['Evidence and cross-currents', sections.get('Evidence and cross-currents') || ''],
-    ['What to watch', sections.get('What to watch') || ''],
-  ];
+  const blocks = openingDigestNarrativeBlocks(article);
   const byUrl = new Map(research
     .filter((source) => source?.url)
     .map((source) => [normalizeEvidenceUrl(source.url), source]));

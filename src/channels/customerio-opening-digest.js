@@ -414,7 +414,6 @@ async function withFrozenPublication(bundle, { publicationJournal, remoteOperati
 export function renderOpeningDigestContentHtml({ body, metrics = [], options = null } = {}) {
   return [
     renderOpeningNarrativeStart(body),
-    '<h2 style="margin:24px 0 10px;font-size:17px;line-height:1.35;font-weight:500;color:#08272b">Market snapshot</h2>',
     renderMetricsHtml(metrics),
     renderOpeningNarrativeSections(body),
     options ? renderOptionsHtml(options) : '',

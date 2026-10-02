@@ -16,7 +16,7 @@ const SNAPSHOT = {
 const AS_OF = new Date('2026-09-22T14:00:00.000Z');
 
 function article(body) {
-  return `---\ntitle: Zen Opening Digest\nheadline: Markets open with data\nstance: neutral\nconfidence: medium\npreheader: Opening hour read.\nedition: 2026-09-22\n---\nOpening call sentence stays factual.\n\n## What matters today\n\n${body}\n\n## Evidence and cross-currents\n\nCross-currents remain supplied by sources.\n\n## What to watch\n\n- Current index levels and volatility\n- Treasury yields\n- Scheduled earnings\n`;
+  return `---\ntitle: Zen Opening Digest\nheadline: Markets open with data\nstance: neutral\nconfidence: medium\npreheader: Opening hour read.\nedition: 2026-09-22\n---\nOpening call sentence stays factual.\n\n## Today's focus\n\n${body}\n\n## Evidence and cross-currents\n\nCross-currents remain supplied by sources.\n\n## What to watch\n\n- Current index levels and volatility\n- Treasury yields\n- Scheduled earnings\n`;
 }
 
 test('snapshot conflicts are flagged when narrative direction contradicts the snapshot without an earlier-time label', () => {
@@ -259,4 +259,16 @@ test('evidence sources capture the exact excerpt the writer received with per-so
   assert.equal(sources[1].excerpt.length, 3000);
   assert.equal(evidenceGradeFor([{ official: true }]), 'official-data');
   assert.equal(evidenceGradeFor([]), 'unlinked');
+});
+
+
+test('new focus and legacy headings both remain covered by attribution and evidence extraction', () => {
+  const body = '**Oil claim.** WTI rebounded by 5.44% ([source](https://example.com/a)).';
+  for (const heading of ["Today's focus", 'What matters today']) {
+    const draft = article(body).replace("Today's focus", heading);
+    const audit = auditOpeningDigestAttribution({ article: draft, snapshot: SNAPSHOT, asOf: AS_OF });
+    assert.ok(audit.stats.snapshotConflicts > 0);
+    const ledger = buildOpeningDigestEvidenceLedger({ article: draft, research: [{ url: 'https://example.com/a', official: true }] });
+    assert.ok(ledger.claims.some((claim) => claim.section === heading && claim.source_urls.includes('https://example.com/a')));
+  }
 });

@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { JSDOM } from 'jsdom';
+import { refineOpeningDigestDraft } from '../src/core/writer/opening-editor.js';
 import { isUsEquitySession, easternDateKey } from '../src/lib/us-equity-calendar.js';
 import {
   coverHtml,
@@ -67,23 +68,18 @@ confidence: medium
 preheader: Falling oil offsets firm yields, leaving confirmation to equity participation.
 edition: 2026-08-10
 ---
-The market opened neutral as firm long yields constrain duration-sensitive equities. Lower oil supplies support, but participation is too narrow to change the overall tone.
+The opening stance is neutral as firm long yields constrain growth-stock valuations. Lower oil offers a counterweight, but does not establish a broad risk-on signal.
 
-## What matters today
+## Today's focus
 
-**Rates remain the binding constraint.** The [Treasury move](https://example.com/a) matters because sustained long yields would keep valuation pressure concentrated in duration-sensitive shares; a retreat would weaken that reading.
-
-**Energy supplies the counterweight.** The [oil move](https://example.com/b) reduces one inflationary pressure, but it does not by itself establish a broad risk-on regime.
+- **Rates remain the binding constraint.** The [Treasury move](https://example.com/a) keeps valuation pressure concentrated in growth shares; watch whether the 10Y yield holds its opening range or retreats enough to weaken that reading.
+- **Energy supplies the counterweight.** The [oil move](https://example.com/b) reduces one inflationary pressure without establishing a broad risk-on regime; watch whether VIX confirms or contradicts index resilience and whether participation broadens beyond isolated tracked names.
 
 ## Evidence and cross-currents
 
-The rate and oil signals offset each other, while [tracked-universe participation](https://example.com/c) is too narrow to establish whole-market breadth. That tension keeps confidence medium rather than high.
+**Rates limit valuation support.** Firm yields keep pressure on growth shares ([Treasury move](https://example.com/a)). A sustained retreat would ease that constraint.
 
-## What to watch
-
-- Whether the 10Y yield holds its opening range
-- Whether VIX confirms or contradicts index resilience
-- Whether participation broadens beyond isolated tracked names
+**The counterweight remains incomplete.** [Tracked-universe participation](https://example.com/c) does not establish whole-market breadth. The mixed evidence keeps confidence medium rather than high.
 `;
 
 const DATA_ONLY_ARTICLE = `---
@@ -334,7 +330,7 @@ test('new Opening Digest contract is thesis-first and rejects sample failure mod
   const bad = INSIGHT_ARTICLE
     .replace('Fed decision looms over narrow equity participation', 'This headline is far too long to work on a mobile email subject line')
     .replace('10Y yield holds its opening range', 'MARA rose because options activity drove the price at 14:15 UTC')
-    .replace('Whether VIX confirms or contradicts index resilience', 'Options market skew may presage a bullish signal');
+    .replace('whether VIX confirms or contradicts index resilience', 'Options market skew may presage a bullish signal');
   const audit = auditOpeningDigestInsight(bad);
   assert.ok(audit.warnings.some((item) => /动态标题/.test(item)));
   assert.ok(audit.warnings.some((item) => /UTC/.test(item)));
@@ -351,37 +347,64 @@ test('Opening Digest headline gate accepts headlines up to 12 words and 70 chara
   assert.equal(audit.warnings.some((item) => /动态标题/.test(item)), false);
 });
 
-test('Opening Digest rejects routine market-move headlines and over-long evidence and matters sections', () => {
+test('Opening Digest audits merged focus counts, format, and visible length without a minimum', () => {
   const routine = INSIGHT_ARTICLE.replace('Fed decision looms over narrow equity participation', 'Oil gains lift energy shares higher');
   const audit = auditOpeningDigestInsight(routine);
   assert.ok(audit.warnings.some((item) => /常规每日行情/.test(item)));
   assert.equal(audit.warnings.some((item) => /动态标题应为/.test(item)), false);
-  const verboseEvidence = INSIGHT_ARTICLE.replace(
-    '## What to watch',
-    'Padding sentence one carries words. '.repeat(12) + '\n## What to watch',
-  );
-  const over = auditOpeningDigestInsight(verboseEvidence);
-  assert.ok(over.warnings.some((item) => /Evidence and cross-currents 超过 85 词/.test(item)));
-  assert.equal(auditOpeningDigestInsight(INSIGHT_ARTICLE).warnings.some((item) => /Evidence and cross-currents/.test(item)), false);
-  const verboseMatters = INSIGHT_ARTICLE.replace(
-    '## Evidence and cross-currents',
-    'Padding sentence one carries words. '.repeat(18) + '\n## Evidence and cross-currents',
-  );
-  const mattersOver = auditOpeningDigestInsight(verboseMatters);
-  assert.ok(mattersOver.warnings.some((item) => /What matters today 超过 130 词/.test(item)));
-  const threeMatters = INSIGHT_ARTICLE.replace(
-    '## Evidence and cross-currents',
-    '**A third matter pads the section.** Extra sentence without new facts.\n\n## Evidence and cross-currents',
-  );
-  assert.ok(auditOpeningDigestInsight(threeMatters).warnings.some((item) => /应为 2 个短段/.test(item)));
-  const singleMatter = INSIGHT_ARTICLE.replace(
-    '\n\n**Energy supplies the counterweight.** The [oil move](https://example.com/b) reduces one inflationary pressure, but it does not by itself establish a broad risk-on regime.',
-    '',
-  );
-  assert.ok(auditOpeningDigestInsight(singleMatter).warnings.some((item) => /应为 2 个短段/.test(item)));
-  const cleanMatters = auditOpeningDigestInsight(INSIGHT_ARTICLE);
-  assert.equal(cleanMatters.stats.mattersCount, 2);
-  assert.equal(cleanMatters.warnings.some((item) => /What matters today/.test(item)), false);
+  const verboseEvidence = INSIGHT_ARTICLE + '\n' + 'Padding sentence one carries words. '.repeat(12);
+  assert.ok(auditOpeningDigestInsight(verboseEvidence).warnings.some((item) => /Evidence and cross-currents 超过 85 词/.test(item)));
+  const verboseFocus = INSIGHT_ARTICLE.replace('## Evidence and cross-currents', 'Padding sentence one carries words. '.repeat(18) + '\n## Evidence and cross-currents');
+  assert.ok(auditOpeningDigestInsight(verboseFocus).warnings.some((item) => /Today's focus 超过 100 词/.test(item)));
+  const extra = '- **A third focus.** Watch the sourced event.\n';
+  const three = INSIGHT_ARTICLE.replace('## Evidence and cross-currents', extra + '\n## Evidence and cross-currents');
+  assert.equal(auditOpeningDigestInsight(three).stats.focusCount, 3);
+  assert.equal(auditOpeningDigestInsight(three).warnings.some((item) => /应为 2-3 条/.test(item)), false);
+  const four = three.replace('## Evidence and cross-currents', extra + '\n## Evidence and cross-currents');
+  assert.ok(auditOpeningDigestInsight(four).warnings.some((item) => /应为 2-3 条/.test(item)));
+  const one = INSIGHT_ARTICLE.replace(/^[-*] \*\*Energy supplies[^\n]*\n/m, '');
+  assert.ok(auditOpeningDigestInsight(one).warnings.some((item) => /应为 2-3 条/.test(item)));
+  const short = INSIGHT_ARTICLE.replace(/## Today's focus[\s\S]*?## Evidence/, "## Today's focus\n\n- **Rates constrain valuations.** Watch yields.\n- **Oil is the counterweight.** Watch participation.\n\n## Evidence");
+  assert.deepEqual(auditOpeningDigestInsight(short).warnings, []);
+  assert.equal(auditOpeningDigestInsight(short).stats.narrativeComplete, true);
+  const plain = short.replace('**Rates constrain valuations.**', 'Rates constrain valuations.');
+  assert.ok(auditOpeningDigestInsight(plain).warnings.some((item) => /加粗/.test(item)));
+  const linked = short.replace('Watch yields.', 'Watch [yields](https://example.com/' + 'word/'.repeat(200) + ').');
+  assert.equal(auditOpeningDigestInsight(linked).stats.focusWords, auditOpeningDigestInsight(short).stats.focusWords);
+  assert.deepEqual(auditOpeningDigestInsight(linked).warnings, []);
+  const oldHeading = short.replace("Today's focus", 'What matters today');
+  assert.ok(auditOpeningDigestInsight(oldHeading).warnings.some((item) => /栏目顺序/.test(item)));
+  assert.equal(auditOpeningDigestInsight(oldHeading).stats.narrativeComplete, false);
+});
+
+test('complete short focus drafts repair once without enabling truncated reconstruction', async () => {
+  const short = INSIGHT_ARTICLE.replace(/## Today's focus[\s\S]*?## Evidence/, "## Today's focus\n\n- Rates constrain valuations. Watch yields.\n- **Oil is the counterweight.** Watch participation.\n\n## Evidence");
+  const before = auditOpeningDigestInsight(short);
+  assert.ok(before.stats.narrativeWords < 150);
+  assert.equal(before.stats.narrativeComplete, true);
+  const fixed = short.replace('- Rates constrain valuations.', '- **Rates constrain valuations.**');
+  for (const addsNumber of [false, true]) {
+    let calls = 0;
+    const candidate = addsNumber ? fixed.replace('Watch yields.', 'Watch yields at 4.75%.') : fixed;
+    const result = await refineOpeningDigestDraft({
+      article: short,
+      research: ['a', 'b', 'c'].map((id) => ({ url: `https://example.com/${id}` })),
+      workflow: { timeoutMs: 1000 }, writer: { model: 'test', openrouterApiKey: 'test-key' },
+      fetchFn: async (_url, options) => {
+        calls += 1;
+        const request = JSON.parse(options.body);
+        assert.match(request.messages.at(-1).content, /Editorial contract:/);
+        return { ok: true, status: 200, async text() { return JSON.stringify({ choices: [{ message: { content: JSON.stringify({ revised_markdown: candidate }) } }] }); } };
+      },
+    });
+    assert.equal(calls, 1);
+    assert.equal(result.trace.applied, !addsNumber);
+    assert.equal(result.article, addsNumber ? short : fixed.trim());
+    if (addsNumber) assert.match(result.trace.diagnostic, /changed URLs, numbers, tickers, dates, or times/);
+    else assert.deepEqual(result.trace.after.warnings, []);
+  }
+  const clean = await refineOpeningDigestDraft({ article: fixed, research: [], workflow: {}, writer: {}, fetchFn: () => { throw new Error('unnecessary model call'); } });
+  assert.equal(clean.trace.attempted, false);
 });
 
 test('opening content rules are diagnostics rather than hard gates', () => {
@@ -577,8 +600,9 @@ test('dynamic headline becomes recipient subject and H1 while fixed publication 
   assert.equal(create.body.subject, 'Fed decision looms over narrow equity participation | Zen Opening Digest');
   assert.match(create.body.body, />Fed decision looms over narrow equity participation<\/h1>/);
   assert.match(create.body.body, /data-zen-publication-subtitle[^>]*>Zen Opening Digest · August 10, 2026<\/p>/);
-  assert.ok(create.body.body.indexOf('Opening call') < create.body.body.indexOf('Market snapshot'));
-  assert.ok(create.body.body.indexOf('Market snapshot') < create.body.body.indexOf('What matters today'));
+  const headings = [...new JSDOM(create.body.body).window.document.querySelectorAll('h2')].map((node) => node.textContent);
+  assert.deepEqual(headings.slice(0, 4), ['Opening call', 'Market snapshot', "Today's focus", 'Evidence and cross-currents']);
+  assert.equal(headings.includes('What to watch'), false);
 });
 
 test('complete digest renders template, address, options and schedules without contents readback', async () => {
@@ -597,7 +621,7 @@ test('complete digest renders template, address, options and schedules without c
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
   assert.equal(create.body.name, 'Zen Opening Digest · 2026-08-10');
   assert.equal(create.body.subject, 'Opening signals stay mixed | Zen Opening Digest');
-  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@9"/);
+  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@10"/);
   assert.match(create.body.body, /href="https:\/\/example\.com\/a"/, '英文邮件必须继续保留来源链接');
   assert.match(create.body.body, new RegExp(`href="${OPENING_DIGEST_DISCORD_INVITE_URL}"[^>]*>Join us on Discord</a>`));
   assert.equal(create.body.body.split(OPENING_DIGEST_DISCORD_INVITE_URL).length - 1, 1);

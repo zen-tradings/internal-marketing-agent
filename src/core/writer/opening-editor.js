@@ -1,5 +1,5 @@
 import { referenceUrlKey } from '../analysis-v2.js';
-import { auditOpeningDigestInsight, buildOpeningDigestPlanningPrompt, normalizeOpeningDigestPlan } from '../../lib/opening-digest-editorial.js';
+import { auditOpeningDigestInsight, buildOpeningDigestPlanningPrompt, normalizeOpeningDigestPlan, openingDigestWritingGuidance } from '../../lib/opening-digest-editorial.js';
 import { compactOpeningDigestArticle, OPENING_DIGEST_CATALYST_MAX_WORDS, OPENING_DIGEST_MARKET_READ_MAX_SENTENCES, OPENING_DIGEST_MARKET_READ_MAX_WORDS, OPENING_DIGEST_MARKET_READ_MIN_SENTENCES } from '../../lib/opening-digest-content.js';
 import { completeReviewJson } from './model-client.js';
 import { extractArticleUrls, sourceExcerptLimitFor, normalizeArticle, hasTitleFrontmatter } from './shared.js';
@@ -17,7 +17,7 @@ export async function refineOpeningDigestDraft({ article, research, workflow, wr
   try {
     const selected = openingCompactionSources(research, article);
     const response = await completeReviewJson({
-      prompt: `Repair only the structural and analytical-quality issues in this Zen Opening Digest. Keep the same evidence-bound viewpoint and causal strength. Do not add facts, causes, numbers, tickers, dates, times, URLs, expectations, market levels, or advice. Preserve every existing URL and immutable token. You may delete an unsupported or conflicting assertion instead of rewriting it. Return strict JSON {"revised_markdown":"complete Markdown with frontmatter"}.\n\nIssues:${JSON.stringify(warnings)}\n\nAllowed sources:${JSON.stringify(selected)}\n\nDraft:\n${article}`,
+      prompt: `Repair only the structural and analytical-quality issues in this Zen Opening Digest. Keep the same evidence-bound viewpoint and causal strength. Do not add facts, causes, numbers, tickers, dates, times, URLs, expectations, market levels, or advice. Preserve every existing URL and immutable token. You may delete an unsupported or conflicting assertion instead of rewriting it. Return strict JSON {"revised_markdown":"complete Markdown with frontmatter"}.\n\nEditorial contract:\n${openingDigestWritingGuidance()}\n\nIssues:${JSON.stringify(warnings)}\n\nAllowed sources:${JSON.stringify(selected)}\n\nDraft:\n${article}`,
       model: writer.reviewModel || writer.model,
       writer: { ...writer, temperature: 0 },
       fetchFn,
@@ -28,8 +28,7 @@ export async function refineOpeningDigestDraft({ article, research, workflow, wr
     const candidate = normalizeArticle(response.revised_markdown || '');
     if (!hasTitleFrontmatter(candidate)) throw new Error('refinement omitted frontmatter');
     const evidenceBoundaryRepair = before.warnings.some((warning) => /OIC\/IV|期权方向/.test(warning));
-    const truncatedRecovery = before.stats.narrativeWords < 150
-      && (before.stats.mattersCount < 2 || before.stats.observableSignpostCount < 3);
+    const truncatedRecovery = before.stats.narrativeWords < 150 && !before.stats.narrativeComplete;
     if (attributionRepair) {
       // Attribution repair may delete flagged assertions (and their numbers/times) but must
       // never add a token and must keep every remaining URL exactly.
@@ -107,7 +106,8 @@ export function normalizeOpeningDigestCitations(article, research = []) {
     return `([${label}](${url}))`;
   });
   return linked
-    .replace(/^## Evidence and cross[‐‑‒–—−]currents\s*$/gmi, '## Evidence and cross-currents');
+    .replace(/^## Evidence and cross[‐‑‒–—−]currents\s*$/gmi, '## Evidence and cross-currents')
+    .replace(/^## Today[’']s focus\s*$/gmi, "## Today's focus");
 }
 
 export async function planOpeningDigestEditorial({ research, editorialContext, history, asOf, model, writer, workflow, fetchFn }) {
