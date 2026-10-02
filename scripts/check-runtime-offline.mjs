@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { browserExecutable } from '../src/lib/translation/assets.js';
+import { renderOpeningDigestWechatCover } from '../src/lib/opening-digest-wechat-cover.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 function command(executable, args, input) {
@@ -32,6 +33,9 @@ try {
   assert.equal(worker('opening_digest_worker.py', { action: 'self_test' }).ok, true);
   const executablePath = browserExecutable({ browserExecutablePath: process.env.TRANSLATION_BROWSER_EXECUTABLE });
   if (!executablePath) throw new Error('Chromium/Chrome 未安装；配置 TRANSLATION_BROWSER_EXECUTABLE');
+  const cover = await renderOpeningDigestWechatCover({ dateKey: '2026-10-02', headline: '利率考验科技股信心', executablePath, cacheDir: temporary });
+  const coverPath = path.join(temporary, 'opening-digest-wechat-cover.png');
+  assert.ok(cover.length > 10000);
   browser = await chromium.launch({ executablePath, headless: true, args: ['--disable-background-networking'] });
   const context = await browser.newContext({ offline: true });
   await context.route('**/*', route => route.abort());
@@ -45,8 +49,8 @@ try {
   command('pdftoppm', ['-f', '1', '-singlefile', '-scale-to', '300', '-png', pdf, path.join(temporary, 'poppler')]);
   const parsed = worker('qdii_worker.py', { action: 'extract_pdf', pdfPath: pdf, fundCode: '000001' });
   assert.equal(parsed.identity_verified, true); assert.equal(parsed.scan_detected, false);
-  command(python, ['-c', 'from PIL import Image; import sys; [Image.open(p).verify() for p in sys.argv[1:]]', png, path.join(temporary, 'poppler.png')]);
-  console.log(JSON.stringify({ platform: process.platform, pythonWorkers: 'ok', chromiumPdfAndPng: 'ok', popplerTextAndImage: 'ok', pythonPdfExtraction: 'ok', network: 'disabled for fixtures' }));
+  command(python, ['-c', 'from PIL import Image; import sys; [Image.open(p).verify() for p in sys.argv[1:]]', png, coverPath, path.join(temporary, 'poppler.png')]);
+  console.log(JSON.stringify({ platform: process.platform, pythonWorkers: 'ok', chromiumPdfAndPng: 'ok', wechatDailyCover: 'ok', popplerTextAndImage: 'ok', pythonPdfExtraction: 'ok', network: 'disabled for fixtures' }));
 } finally {
   await browser?.close();
   fs.rmSync(temporary, { recursive: true, force: true });

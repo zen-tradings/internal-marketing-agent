@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const roots = ['src', 'scripts', 'test', 'tools'];
+const roots = ['src', 'scripts', 'test', 'tools', 'assets/opening-digest-wechat-cover'];
 const files = roots.flatMap((root) => walk(root)).filter((file) => /\.(?:m?js)$/.test(file));
 for (const file of files) {
   const result = spawnSync(process.execPath, ['--check', file], { stdio: 'inherit' });

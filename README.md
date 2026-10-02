@@ -34,6 +34,21 @@ succeeds, enabled WeChat delivery creates a Chinese draft. Enabled Discord deliv
 frozen content for formal cron runs only. A manual Slack run uses an isolated test audience and
 never posts to Discord.
 
+The Chinese Opening Digest draft uses the local 900×383
+[Zen Trading cover design](https://github.com/jfojellyfish-glitch/zentradings-cover).
+Its date follows the original digest edition (`YYYY.MM.DD`); its centered Chinese
+headline matches the draft title without the date suffix. The bottom line is fixed:
+`TREASURY YIELDS · SOFTWARE · MARKET SIGNALS`. Logo and fonts are bundled, with no
+additional model calls or runtime website access. The English email cover keeps its
+existing design. The WeChat template is `zen-wechat/zen-trading@10`.
+
+Each run caches `opening-digest-wechat-cover.png` and its JSON fields/checksums in
+the same isolated artifact directory as its translation. Invalid caches regenerate;
+known or previously attempted draft operations are reconciled through reads before
+rendering or uploading a cover. An explicit correction to an existing draft keeps
+its original cover. Run `npm run preview:opening-digest` to preview the HTML and
+new cover locally, without sending email or creating drafts.
+
 ## Set up your local instance
 
 Use Node.js 22 or later. Configure OpenRouter, Slack, and WeChat credentials for the core service.

@@ -81,6 +81,7 @@ export async function flushOpeningDigestWechatOutbox({
         runId: row.run_id,
         existingRemoteId: mediaId,
         remoteOperations,
+        artifactDir,
         onCreated: ({ remoteId, title }) => {
           mediaId = String(remoteId);
           store.upsertDelivery(row.run_id, {

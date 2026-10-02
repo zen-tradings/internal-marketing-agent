@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { JSDOM } from 'jsdom';
 import { chromium } from 'playwright-core';
 import {
@@ -692,6 +693,156 @@ test('创建响应不明出现多个新候选时停止，不继续新增草稿',
     payload: source, translation: translated(source), config: config(), runId: 'run-ambiguous', remoteOperations: operations,
   }), /2 个同日同标题新草稿/);
   assert.equal(creates, 1);
+});
+
+test('封面和草稿共用归一化标题，缓存位于该任务的隔离目录', async () => {
+  const source = prepareOpeningDigestWechatPayload(payload());
+  const translation = translated(source);
+  translation.translations.find((unit) => unit.id === 'headline').text = '这是一句超过十六个字符限制需要回退的日报标题';
+  let coverInput, draftInput;
+  const channel = makeWechatOpeningDigestChannel({
+    renderCover: async (value) => { coverInput = value; return Buffer.from('cover'); },
+    api: {
+      getAccessToken: async () => 'token', uploadMaterial: async () => ({ media_id: 'cover-id', url: 'https://img/header.gif' }),
+      uploadContentImage: async () => 'https://img/fixed',
+      listDrafts: async () => ({ item: [] }),
+      addDraft: async (_token, value) => { draftInput = value; return { media_id: 'draft' }; },
+      getDraft: async () => ({ content: { news_item: [{ title: draftInput.title, digest: draftInput.digest, content: draftInput.content }] } }),
+    },
+  });
+  const result = await channel.publish({
+    payload: source, translation, runId: 'cover/input', remoteOperations: memoryRemoteOperations(),
+    config: { ...config(), workDir: '/tmp/zen-fixture' },
+  });
+  assert.equal(result.status, 'verified');
+  assert.equal(coverInput.headline, OPENING_DIGEST_SAFE_HEADLINE);
+  assert.equal(coverInput.dateKey, source.dateKey);
+  assert.match(coverInput.cacheDir, /^\/tmp\/zen-fixture\/opening-digest\/runs\/cover_input-[a-f0-9]{12}$/);
+  assert.equal(draftInput.title, `${OPENING_DIGEST_SAFE_HEADLINE}（日报· 2026-08-10）`);
+});
+
+function legacyRecord(source, translation, { remoteId = '', attempts = 1 } = {}) {
+  const title = openingDigestWechatTitle(translation.translations.find((unit) => unit.id === 'headline').text, source.dateKey);
+  const sort = (value) => Array.isArray(value) ? value.map(sort) : value && typeof value === 'object'
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sort(value[key])])) : value;
+  const payloadSha256 = crypto.createHash('sha256').update(JSON.stringify(sort({
+    templateId: 'zen-wechat/zen-trading@9', title, digest: translation.translations.find((unit) => unit.id === 'preheader').text,
+    payload: source, translations: translation.translations,
+  }))).digest('hex');
+  const operations = memoryRemoteOperations();
+  operations.prepare({ operation: 'create-opening-digest-wechat', payloadSha256, beforeIds: ['prior-draft'] });
+  for (let i = 0; i < attempts; i++) operations.increment('create-opening-digest-wechat');
+  if (remoteId) operations.update('create-opening-digest-wechat', { remoteId, state: 'confirmed' });
+  return { operations, title, payloadSha256 };
+}
+
+function savedWechatDraft(source, translation, title) {
+  return { content: { news_item: [{
+    title, digest: translation.translations.find((unit) => unit.id === 'preheader').text,
+    content: renderWechatOpeningDigestHtml({ payload: source, translation,
+      images: { header: 'https://img/header', survey: 'https://img/survey', footer: 'https://img/footer' },
+    }).replaceAll(WECHAT_OPENING_DIGEST_TEMPLATE_ID, 'zen-wechat/zen-trading@9'),
+    thumb_media_id: 'original-cover',
+  }] } };
+}
+
+test('旧版请求指纹匹配时只读恢复已知或唯一候选草稿，不渲染/上传/更新', async () => {
+  const source = prepareOpeningDigestWechatPayload(payload()); const translation = translated(source);
+  for (const remoteId of ['legacy-draft', '']) {
+    const { operations, title, payloadSha256 } = legacyRecord(source, translation, { remoteId });
+    const channel = makeWechatOpeningDigestChannel({
+      renderCover: async () => { throw new Error('不应生成新封面'); }, sleep: async () => {},
+      api: {
+        getAccessToken: async () => 'token',
+        listDrafts: async () => ({ item: [{ media_id: 'legacy-draft', content: { news_item: [{ title }] } }] }),
+        getDraft: async () => savedWechatDraft(source, translation, title),
+      },
+    });
+    const result = await channel.publish({ payload: source, translation, config: config(), runId: 'legacy-run', remoteOperations: operations });
+    assert.equal(result.mediaId, 'legacy-draft'); assert.equal(result.status, 'verified');
+    assert.equal(operations.get('create-opening-digest-wechat').payload_sha256, payloadSha256);
+    assert.equal(operations.get('create-opening-digest-wechat').attempt_count, 1);
+    assert.ok(result.attempts.every((item) => !item.updated));
+  }
+});
+
+test('旧版未能唯一核对、未尝试的旧版准备记录和错误指纹均进入 needs_review', async () => {
+  const source = prepareOpeningDigestWechatPayload(payload()); const translation = translated(source);
+  for (const kind of ['missing', 'multiple', 'prepared', 'hash']) {
+    const { operations, title } = legacyRecord(source, translation, { attempts: kind === 'prepared' ? 0 : 1 });
+    if (kind === 'hash') operations.get('create-opening-digest-wechat').payload_sha256 = 'unknown';
+    const channel = makeWechatOpeningDigestChannel({
+      renderCover: async () => { throw new Error('不应生成新封面'); }, sleep: async () => {},
+      api: { getAccessToken: async () => 'token', listDrafts: async () => ({ item: kind === 'multiple'
+        ? ['a', 'b'].map((media_id) => ({ media_id, content: { news_item: [{ title }] } })) : [] }) },
+    });
+    await assert.rejects(channel.publish({ payload: source, translation, config: config(), runId: 'legacy-review', remoteOperations: operations }), (error) => error.stage === 'needs_review');
+    assert.equal(operations.get('create-opening-digest-wechat').attempt_count, kind === 'prepared' ? 0 : 1);
+  }
+});
+
+test('已有 media_id 回读不一致只标记待复核，不改写草稿', async () => {
+  const source = prepareOpeningDigestWechatPayload(payload()); const translation = translated(source);
+  const title = openingDigestWechatTitle('利率考验市场信心', source.dateKey);
+  let reads = 0;
+  const channel = makeWechatOpeningDigestChannel({
+    renderCover: async () => { throw new Error('不应生成新封面'); },
+    api: { getAccessToken: async () => 'token', getDraft: async () => {
+      reads++; const saved = savedWechatDraft(source, translation, title);
+      saved.content.news_item[0].title = '错误标题'; return saved;
+    } },
+  });
+  await assert.rejects(channel.publish({ payload: source, translation, config: config(), existingRemoteId: 'known-draft' }), (error) => {
+    assert.equal(error.stage, 'needs_review'); assert.equal(error.remoteId, 'known-draft'); return true;
+  });
+  assert.equal(reads, 3);
+});
+
+test('新版草稿创建后回读失败，重启从持久操作恢复而不再次生成封面或创建', async () => {
+  const source = prepareOpeningDigestWechatPayload(payload()); const translation = translated(source);
+  const operations = memoryRemoteOperations();
+  let input, creates = 0, renders = 0;
+  const api = {
+    getAccessToken: async () => 'token', uploadMaterial: async () => ({ media_id: 'cover-id', url: 'https://img/header.gif' }),
+    uploadContentImage: async () => 'https://img/fixed', listDrafts: async () => ({ item: [] }),
+    addDraft: async (_token, value) => { input = value; creates++; return { media_id: 'new-draft' }; },
+    getDraft: async () => { throw new Error('read unavailable'); },
+  };
+  const request = { payload: source, translation, config: config(), runId: 'new-run', remoteOperations: operations };
+  const first = makeWechatOpeningDigestChannel({ api, renderCover: async () => { renders++; return Buffer.from('cover'); } });
+  await assert.rejects(first.publish(request), /draft\/get 暂不可用/);
+  const restarted = makeWechatOpeningDigestChannel({
+    api: { getAccessToken: api.getAccessToken, getDraft: async () => ({ content: { news_item: [{ title: input.title, digest: input.digest, content: input.content }] } }) },
+    renderCover: async () => { throw new Error('不能再次渲染'); },
+  });
+  const result = await restarted.publish(request);
+  assert.equal(result.status, 'verified'); assert.equal(result.mediaId, 'new-draft');
+  assert.equal(creates, 1); assert.equal(renders, 1);
+  assert.equal(operations.get('create-opening-digest-wechat').attempt_count, 1);
+});
+
+test('显式正文纠错使用原封面，更新同一草稿而不生成新的日报封面', async () => {
+  const source = prepareOpeningDigestWechatPayload(payload()); const translation = translated(source);
+  const title = openingDigestWechatTitle('利率考验市场信心', source.dateKey);
+  let updated, reads = 0;
+  const uploads = [];
+  const channel = makeWechatOpeningDigestChannel({
+    renderCover: async () => { throw new Error('不应生成新封面'); },
+    api: {
+      getAccessToken: async () => 'token',
+      uploadMaterial: async (_token, _buffer, filename) => { uploads.push(filename); return { url: 'https://img/header' }; },
+      uploadContentImage: async () => 'https://img/fixed',
+      getDraft: async () => {
+        reads++; const saved = savedWechatDraft(source, translation, title);
+        if (reads === 2) saved.content.news_item[0].title = '旧标题'; return saved;
+      },
+      updateDraft: async (_token, mediaId, value) => { assert.equal(mediaId, 'known-draft'); updated = value; },
+    },
+  });
+  const result = await channel.publish({ payload: source, translation, config: config(), existingRemoteId: 'known-draft', repairExisting: true });
+  assert.equal(result.status, 'verified');
+  assert.equal(updated.thumbMediaId, 'original-cover');
+  assert.deepEqual(uploads, ['zen-header-banner.gif']);
 });
 
 test('320/375/390/430px Chromium 无横向溢出、裁切，长公司名可换行', async (t) => {

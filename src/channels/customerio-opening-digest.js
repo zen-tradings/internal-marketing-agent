@@ -336,6 +336,8 @@ export function makeChannel({
                 config,
                 acceptance,
                 existingRemoteId: wechatRepair ? prior.media_id : '',
+                repairExisting: wechatRepair,
+                artifactDir: path.dirname(articlePath),
               });
             const delivery = { destination: 'wechat', status: wechat.status, mediaId: wechat.mediaId, title: wechat.title, details: { errors: wechat.errors, attempts: wechat.attempts } };
             deliveries.push(delivery);
@@ -526,7 +528,7 @@ export async function publishHistoricalOpeningDigestWechat({
     const translated = await translatePayload(wechatPayload, {
       writer: config.writer, fetchFn, cacheDir: resolvedDir, timeoutMs: config.defaultTimeoutMs,
     });
-    const wechat = await wechatChannel.publish({ payload: wechatPayload, translation: translated, config, acceptance: false });
+    const wechat = await wechatChannel.publish({ payload: wechatPayload, translation: translated, config, acceptance: false, artifactDir: resolvedDir });
     traceMetadata = {
       ...traceMetadata,
       translation: {

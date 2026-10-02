@@ -6,6 +6,8 @@ import { renderOpeningDigestContentHtml, CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID }
 import { renderWechatOpeningDigestHtml } from '../src/channels/wechat-opening-digest.js';
 import { renderDiscordOpeningDigest } from '../src/channels/discord-opening-digest.js';
 import { translationUnits } from '../src/lib/opening-digest-translation.js';
+import { renderOpeningDigestWechatCover } from '../src/lib/opening-digest-wechat-cover.js';
+import { browserExecutable } from '../src/lib/translation/assets.js';
 
 const dateKey = '2026-08-10';
 const markdown = `---
@@ -75,6 +77,10 @@ const translation = {
 const wechat = renderWechatOpeningDigestHtml({ payload, translation, images: {} });
 const discord = renderDiscordOpeningDigest(payload);
 const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'zen-opening-preview-'));
+await renderOpeningDigestWechatCover({
+  dateKey, headline: fixed.get('headline'), cacheDir: directory,
+  executablePath: browserExecutable({ browserExecutablePath: process.env.OPENING_DIGEST_BROWSER_EXECUTABLE || process.env.TRANSLATION_BROWSER_EXECUTABLE }),
+});
 await Promise.all([
   fs.writeFile(path.join(directory, 'customerio.html'), email),
   fs.writeFile(path.join(directory, 'wechat.html'), wechat),

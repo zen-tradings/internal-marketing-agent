@@ -8,9 +8,9 @@ import { createWechatClient } from '@wenyan-md/core/wechat';
 import { defaultHttpAdapter } from '@wenyan-md/core/http';
 import { FIXED_DRAFT_TEMPLATE_IDS, OPENING_DIGEST_DISCORD_INVITE_URL } from '../lib/draft-template.js';
 import { fetchWithTimeout } from '../lib/http-timeout.js';
-import { renderOpeningDigestCover } from '../lib/opening-digest-cover.js';
+import { normalizeOpeningDigestWechatHeadline, renderOpeningDigestWechatCover } from '../lib/opening-digest-wechat-cover.js';
+import { runWorkDir } from '../lib/run-workdir.js';
 import {
-  OPENING_DIGEST_SAFE_HEADLINE,
   assertOpeningDigestWechatPayloadClean,
   stripOpeningDigestReferences,
   translationMap,
@@ -18,11 +18,13 @@ import {
 import { withRuntimeResource } from '../config/runtime.js';
 
 export const WECHAT_OPENING_DIGEST_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['wechat-opening-digest'];
+const LEGACY_WECHAT_TEMPLATE_ID = 'zen-wechat/zen-trading@9';
+const CREATE_OPERATION = 'create-opening-digest-wechat';
 export const WECHAT_DRAFT_MAX_CHARS = 20000;
 export const WECHAT_DRAFT_MAX_BYTES = 1024 * 1024;
 
 export function makeWechatOpeningDigestChannel({
-  renderCover = renderOpeningDigestCover,
+  renderCover = renderOpeningDigestWechatCover,
   api,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 } = {}) {
@@ -34,90 +36,115 @@ export function makeWechatOpeningDigestChannel({
     templateLocked: true,
     async publish({
       payload, translation, config, acceptance = false, runId = '', existingRemoteId = '',
-      onCreated, remoteOperations,
+      onCreated, remoteOperations, artifactDir, repairExisting = false,
     }) {
       assertLivePublication(config);
       assertOpeningDigestWechatPayloadClean(payload);
       const activeApi = api || createWechatApi({ timeoutMs: config.wechat.timeoutMs });
       const translatedHeadline = translationMap(translation).get('headline')?.text || payload.article.headline || '开市数据可用，判断暂缺';
-      const title = openingDigestWechatTitle(translatedHeadline, payload.dateKey, { acceptance });
-      const cover = await renderCover({
-        dateLabel: chineseDate(payload.dateKey), label: '开市日报',
+      const headline = normalizeOpeningDigestWechatHeadline(translatedHeadline);
+      const title = openingDigestWechatTitle(headline, payload.dateKey, { acceptance });
+      const digest = translationMap(translation).get('preheader')?.text || '';
+      const fingerprint = (templateId) => crypto.createHash('sha256').update(stableJson({
+        templateId, title, digest, payload, translations: translation?.translations || [],
+      })).digest('hex');
+      const payloadSha256 = fingerprint(WECHAT_OPENING_DIGEST_TEMPLATE_ID);
+      const record = remoteOperations?.get(CREATE_OPERATION);
+      const legacyRecord = record?.payload_sha256 === fingerprint(LEGACY_WECHAT_TEMPLATE_ID);
+      if (record && record.payload_sha256 !== payloadSha256 && !legacyRecord) {
+        throw needsReview('微信后台操作请求哈希与当前日报不一致，拒绝复用旧操作');
+      }
+      if (existingRemoteId && record?.remote_id && String(record.remote_id) !== String(existingRemoteId)) {
+        throw needsReview('微信已知 media_id 与持久化操作不一致');
+      }
+      let readOnly = Boolean(existingRemoteId || record?.remote_id || Number(record?.attempt_count || 0) > 0 || legacyRecord);
+      if (repairExisting && (!existingRemoteId || record)) throw needsReview('微信正文纠错必须指定已有草稿，且不能覆盖待核对操作');
+      const cover = readOnly ? null : await renderCover({
+        dateKey: payload.dateKey, headline,
         executablePath: config.openingDigest.browserExecutablePath,
         timeoutMs: config.openingDigest.captureTimeoutMs,
+        cacheDir: artifactDir || (runId && config.workDir ? runWorkDir(path.join(config.workDir, 'opening-digest'), runId) : undefined),
       });
       return withRuntimeResource('wechat-write', async () => {
-      const coverHash = crypto.createHash('sha256').update(cover).digest('hex');
-      const token = await activeApi.getAccessToken(config.wechat.appId, config.wechat.appSecret);
-      let coverAsset = coverCache.get(coverHash);
-      if (!coverAsset) {
-        coverAsset = await activeApi.uploadMaterial(token, cover, `zen-opening-digest-${payload.dateKey}.png`);
-        coverCache.set(coverHash, coverAsset);
-      }
-      const images = await uploadBodyImages(activeApi, token, config.assets, bodyImageCache);
-      const html = renderWechatOpeningDigestHtml({ payload, translation, images });
-      const digest = translationMap(translation).get('preheader')?.text || '';
-      assertWechatLimits(html, { title, digest });
-      const input = { title, digest, content: html, thumbMediaId: coverAsset.media_id };
-      const payloadSha256 = crypto.createHash('sha256').update(stableJson({
-        templateId: WECHAT_OPENING_DIGEST_TEMPLATE_ID,
-        title,
-        digest,
-        payload,
-        translations: translation?.translations || [],
-      })).digest('hex');
-      const mediaId = String(existingRemoteId || await createDraftIdempotently({
-        api: activeApi, token, input, payloadSha256, runId, remoteOperations, onCreated, sleep,
-      }));
-      if (existingRemoteId) await onCreated?.({ remoteId: mediaId, title });
-      const attempts = [];
-      let final = { mediaId, title, status: 'unverified', errors: [] };
-      for (let read = 1; read <= 3; read++) {
-        let saved;
-        try {
-          saved = await activeApi.getDraft(token, mediaId);
-        } catch (error) {
-          const wrapped = wechatError(`微信 draft/get 暂不可用:${error.message}`, { retryable: true });
-          wrapped.remoteId = mediaId;
-          throw wrapped;
+        const token = await activeApi.getAccessToken(config.wechat.appId, config.wechat.appSecret);
+        let input, html = '';
+        if (cover || repairExisting) {
+          let thumbMediaId;
+          if (repairExisting) {
+            const saved = await readDraft(activeApi, token, String(existingRemoteId));
+            const savedArticle = saved?.content?.news_item?.[0] || saved?.news_item?.[0] || saved?.articles?.[0];
+            thumbMediaId = savedArticle?.thumb_media_id;
+            if (!thumbMediaId) throw Object.assign(needsReview('微信正文纠错无法读取原封面 media_id，拒绝替换封面'), { remoteId: String(existingRemoteId) });
+          } else {
+            const coverHash = crypto.createHash('sha256').update(cover).digest('hex');
+            let coverAsset = coverCache.get(coverHash);
+            if (!coverAsset) {
+              coverAsset = await activeApi.uploadMaterial(token, cover, `zen-opening-digest-${payload.dateKey}.png`);
+              coverCache.set(coverHash, coverAsset);
+            }
+            thumbMediaId = coverAsset.media_id;
+          }
+          const images = await uploadBodyImages(activeApi, token, config.assets, bodyImageCache);
+          html = renderWechatOpeningDigestHtml({ payload, translation, images });
+          assertWechatLimits(html, { title, digest });
+          input = { title, digest, content: html, thumbMediaId };
         }
-        const validation = validateWechatOpeningDigestDraft(saved, { title, payload, translation });
-        attempts.push({ attempt: read, mediaId, operation: 'read', status: validation.ok ? 'verified' : 'invalid', errors: validation.errors });
-        final = { mediaId, title, status: validation.ok ? 'verified' : 'invalid', errors: validation.errors };
-        if (validation.ok) break;
-        if (read < 3) {
-          try {
-            await activeApi.updateDraft(token, mediaId, input);
-            attempts.at(-1).updated = true;
-          } catch (error) {
-            const wrapped = wechatError(`微信 draft/update 暂不可用:${error.message}`, { retryable: true });
-            wrapped.remoteId = mediaId;
-            throw wrapped;
+        const mediaId = String(existingRemoteId || await createDraftIdempotently({
+          api: activeApi, token, input, title, payloadSha256: record?.payload_sha256 || payloadSha256,
+          runId, remoteOperations, onCreated, sleep, readOnly,
+          onReconciled: () => { readOnly = true; },
+        }));
+        if (existingRemoteId) await onCreated?.({ remoteId: mediaId, title });
+        const attempts = [];
+        let final = { mediaId, title, status: 'unverified', errors: [] };
+        for (let read = 1; read <= 3; read++) {
+          const saved = await readDraft(activeApi, token, mediaId);
+          const validation = validateWechatOpeningDigestDraft(saved, { title, payload, translation });
+          attempts.push({ attempt: read, mediaId, operation: 'read', status: validation.ok ? 'verified' : 'invalid', errors: validation.errors });
+          final = { mediaId, title, status: validation.ok ? 'verified' : 'invalid', errors: validation.errors };
+          if (validation.ok) break;
+          if (read < 3 && (!readOnly || repairExisting)) {
+            try {
+              await activeApi.updateDraft(token, mediaId, input);
+              attempts.at(-1).updated = true;
+            } catch (error) {
+              const wrapped = wechatError(`微信 draft/update 暂不可用:${error.message}`, { retryable: true });
+              wrapped.remoteId = mediaId;
+              throw wrapped;
+            }
           }
         }
-      }
-      return { ...final, htmlChars: html.length, htmlBytes: Buffer.byteLength(html), attempts };
+        if (readOnly && !repairExisting && final.status !== 'verified') {
+          throw Object.assign(needsReview(`微信已有草稿只读核对不一致:${final.errors.join('；')}`), { remoteId: mediaId });
+        }
+        return { ...final, htmlChars: html.length, htmlBytes: Buffer.byteLength(html), attempts };
       });
     },
   };
 }
 
 export function openingDigestWechatTitle(headline, dateKey, { acceptance = false } = {}) {
-  const candidate = String(headline || '').trim();
-  const normalizedHeadline = candidate && [...candidate].length <= 16 ? candidate : OPENING_DIGEST_SAFE_HEADLINE;
+  const normalizedHeadline = normalizeOpeningDigestWechatHeadline(headline);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey || ''))) throw wechatError('微信日报标题日期无效', { retryable: false });
   const dateLabel = acceptance ? dateKey.slice(5) : dateKey;
   return `${acceptance ? '[测试] ' : ''}${normalizedHeadline}（日报· ${dateLabel}）`;
 }
 
-async function createDraftIdempotently({ api, token, input, payloadSha256, runId, remoteOperations, onCreated, sleep }) {
+async function readDraft(api, token, mediaId) {
+  try { return await api.getDraft(token, mediaId); }
+  catch (error) {
+    throw Object.assign(wechatError(`微信 draft/get 暂不可用:${error.message}`, { retryable: true }), { remoteId: mediaId });
+  }
+}
+
+async function createDraftIdempotently({ api, token, input, title, payloadSha256, runId, remoteOperations, onCreated, sleep, readOnly, onReconciled }) {
   if (!runId || !remoteOperations) {
     const created = await api.addDraft(token, input);
     const mediaId = requireMediaId(created);
     await onCreated?.({ remoteId: mediaId, title: input.title });
     return mediaId;
   }
-  const operation = 'create-opening-digest-wechat';
+  const operation = CREATE_OPERATION;
   let record = remoteOperations.get(operation);
   if (!record) {
     const before = await listDraftCandidates(api, token);
@@ -133,15 +160,18 @@ async function createDraftIdempotently({ api, token, input, payloadSha256, runId
   }
   if (record.remote_id) {
     const mediaId = String(record.remote_id);
-    await onCreated?.({ remoteId: mediaId, title: input.title });
+    await onCreated?.({ remoteId: mediaId, title });
     return mediaId;
   }
   const beforeIds = new Set(parseIdSnapshot(record.before_ids_json));
   if (Number(record.attempt_count || 0) > 0) {
-    const recovered = await recoverCreatedDraft({ api, token, title: input.title, beforeIds, sleep });
-    if (recovered) return confirmCreatedDraft({ recovered, remoteOperations, operation, onCreated, title: input.title });
+    const recovered = await recoverCreatedDraft({ api, token, title, beforeIds, sleep });
+    if (recovered) {
+      onReconciled();
+      return confirmCreatedDraft({ recovered, remoteOperations, operation, onCreated, title });
+    }
   }
-  while (Number(record.attempt_count || 0) < 1) {
+  while (!readOnly && Number(record.attempt_count || 0) < 1) {
     record = remoteOperations.increment(operation);
     if (!record || Number(record.attempt_count || 0) > 1) break;
     try {
@@ -153,7 +183,10 @@ async function createDraftIdempotently({ api, token, input, payloadSha256, runId
     } catch (error) {
       record = remoteOperations.update(operation, { state: 'ambiguous', lastError: error.message });
       const recovered = await recoverCreatedDraft({ api, token, title: input.title, beforeIds, sleep });
-      if (recovered) return confirmCreatedDraft({ recovered, remoteOperations, operation, onCreated, title: input.title });
+      if (recovered) {
+        onReconciled();
+        return confirmCreatedDraft({ recovered, remoteOperations, operation, onCreated, title });
+      }
     }
   }
   remoteOperations.update(operation, {
@@ -171,7 +204,7 @@ async function recoverCreatedDraft({ api, token, title, beforeIds, sleep }) {
     const matches = candidates.filter((item) => !beforeIds.has(item.mediaId) && item.title === title);
     if (matches.length === 1) return matches[0];
     if (matches.length > 1) {
-      throw wechatError(`微信创建响应不明且发现 ${matches.length} 个同日同标题新草稿，无法唯一恢复`, { retryable: false });
+      throw needsReview(`微信创建响应不明且发现 ${matches.length} 个同日同标题新草稿，无法唯一恢复`);
     }
   }
   return undefined;
@@ -418,7 +451,6 @@ function normalizedBodyText(unit, value = unit.text) {
     : text;
 }
 function formatCapturedAt(value) { try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)); } catch { return String(value || ''); } }
-function chineseDate(dateKey) { const [year, month, day] = dateKey.split('-'); return `${year}年${Number(month)}月${Number(day)}日`; }
 function cssEscape(value) { return String(value).replace(/["\\]/g, '\\$&'); }
 function escapeAttr(value) { return escapeHtml(value); }
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char])); }

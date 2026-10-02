@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "referenceCommit": "61cda322a248c28c5a9dc9d9e97bd2120d399b68",
+  "fontCommit": "9710da1eacb3be272583c3224dcb70f9da6eadbb",
+  "assets": {
+    "logo.png": {
+      "source": "https://raw.githubusercontent.com/jfojellyfish-glitch/zentradings-cover/61cda322a248c28c5a9dc9d9e97bd2120d399b68/index.html",
+      "sha256": "b55f253c85937be6ab96620304420fb01258de14396f221aa6fd552324bfa1e6"
+    },
+    "Montserrat.woff2": {
+      "source": "https://raw.githubusercontent.com/jfojellyfish-glitch/zentradings-cover/61cda322a248c28c5a9dc9d9e97bd2120d399b68/index.html",
+      "sha256": "6438d7b8ea9c7c3992d5e2fd2afdb1ff948570a3ef0bedae76247b51632960ba"
+    },
+    "NotoSansSC.ttf": {
+      "source": "https://raw.githubusercontent.com/google/fonts/9710da1eacb3be272583c3224dcb70f9da6eadbb/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf",
+      "sha256": "a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da"
+    },
+    "OFL-NotoSansSC.txt": {
+      "source": "https://raw.githubusercontent.com/google/fonts/9710da1eacb3be272583c3224dcb70f9da6eadbb/ofl/notosanssc/OFL.txt",
+      "sha256": "1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9"
+    },
+    "OFL-Montserrat.txt": {
+      "source": "https://raw.githubusercontent.com/google/fonts/9710da1eacb3be272583c3224dcb70f9da6eadbb/ofl/montserrat/OFL.txt",
+      "sha256": "8b7141c03fa4f8d44e6345d5d4931709290f0f67875e452e95ac1fd3a027802e"
+    },
+    "render.js": {
+      "source": "https://github.com/jfojellyfish-glitch/zentradings-cover/blob/61cda322a248c28c5a9dc9d9e97bd2120d399b68/index.html",
+      "sha256": "e09723ea9baa002156fc5909e49ded25a5511489f4c670a9644ef62d214a0f0b",
+      "adaptation": "Wide Canvas artwork; local fonts; one centered headline; fixed tags; explicit readiness and overflow validation."
+    }
+  }
+}
