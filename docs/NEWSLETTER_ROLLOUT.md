@@ -20,7 +20,7 @@
 
 `OPENING_DIGEST_WECHAT_ENABLED=true` 时，Customer.io 成功发送或确认排期后才把冻结英文 payload 写入 SQLite outbox；微信消费端确定性删除引用标记、括号来源、Markdown 目标和裸来源 URL，再按块校验顺序、数字、Ticker、时间与机构品牌。中文允许自然调整语序、衔接和措辞，但完整保留事实、判断、否定、验证或失效条件、因果强度及不确定性，不独立摘要。翻译缓存版本为 22；旧栏目映射继续保留，已冻结旧结构且 payload/model 哈希与块映射匹配的版本 21 缓存可原样复用。微信版本 9/10 的已记录请求仍只读核对，不因模板升级重生成正文、上传封面或创建新稿。净化范围同时覆盖 † 引用（无论是否带 URL）、含全角数字的【N】标记、ASCII 脚注 [N] 与残留空括号；未被删除的残留不新增硬失败门禁。英文邮件和 Discord 保留完整来源链接；中文微信仅保留承担语义的纯文本 label。正式微信动态标题不超过 16 字，修复耗尽或响应损坏时降级为 `今日开市要点` 并写 trace；验收稿保留 `[测试]` 前缀和 `MM-DD` 后缀。正文继续使用 `zen-wechat/zen-trading@11`、固定图片、九格行情、20 个 OIC 记录及纯文本 Discord 地址。
 
-创建前记录草稿快照和 payload 哈希，每个持久化创建操作最多调用一次 `draft/add`；`media_id` 一经取得立即落库。仅本次明确返回成功的新建草稿允许在前两次回读不一致时更新同一稿；普通重试、重启恢复及结果不明后的恢复均只读核对，不重新创建或替换封面。旧版 `@9` 操作仅在原请求指纹匹配时接受；无法唯一确认或只读核对仍不一致则保留 `needs_review`，不自动写入。显式正文纠错才允许更新已有草稿，并保留原封面。瞬时错误最多自动尝试八次，但已尝试的创建操作不会再次调用 `draft/add`；微信异常不会改变邮件的 `done` 结果。微信草稿最终 verified 后会通过 notification outbox 发送一条包含标题与 media_id 的成功通知，Slack 不可用时自动补发。
+创建前记录草稿快照和 payload 哈希，每个持久化创建操作最多调用一次 `draft/add`；`media_id` 一经取得立即落库。仅本次明确返回成功的新建草稿允许在前两次回读不一致时更新同一稿；普通重试、重启恢复及结果不明后的恢复均只读核对，不重新创建或替换封面。旧版 `@9` / `@10` 操作仅在原请求指纹匹配时接受；无法唯一确认或只读核对仍不一致则保留 `needs_review`，不自动写入。显式正文纠错才允许更新已有草稿，并保留原封面。瞬时错误最多自动尝试八次，但已尝试的创建操作不会再次调用 `draft/add`；微信异常不会改变邮件的 `done` 结果。微信草稿最终 verified 后会通过 notification outbox 发送一条包含标题与 media_id 的成功通知，Slack 不可用时自动补发。
 
 `DISCORD_OPENING_DIGEST_ENABLED=true` 时，只有正式 cron 在 Customer.io 成功发送或确认排期后，才把同一冻结英文 payload 加入 SQLite delivery outbox，自动发往 `#newsletter-feed`。排期一经确认即入队，不等待邮件的 10:15 ET 目标发送时点，因此 Discord 可能先于邮件投递。Discord 以禁用 mentions 的 rich embeds 完整发布九格行情、带来源链接的正文和 OIC 20 行，并在每条成功后持久化 Discord message ID。网络、429 和 5xx 依 `Retry-After`/指数退避补发，进程重启后从下一条续传；最终失败仅发专用 Slack warning，邮件仍保持 `done`。
 
@@ -28,9 +28,19 @@ Slack 中人工触发 `opening-digest` 始终作为隔离测试运行。收件�
 
 生产环境在美东交易日 10:00 生成 Opening Digest；若完成时距 10:15 仍超过 Customer.io 要求的 5 分钟最小提前量，则排期到 10:15，否则立即发送。OIC 标注延迟 20 分钟，因此 10:00 开始采集时名义上可覆盖到约 9:40、即开盘后的前 10 分钟，但数据源额外延迟可能导致覆盖不完整。这里的“opening”是开盘后摘要，不是 9:30 开盘铃时点。
 
-内容检索使用上一交易日 16:00 ET 到当前时刻的专用美股开盘窗口，保留市场、宏观与地缘/供应侧查询（macro lane 拆为两条，`extraQueryLimit=12`），并对固定 72 个 ticker 按七组检索重大公司事件与明确升降级。英文编辑先由规划模型按大盘影响范围、增量、持续性和证据强度筛选最多 10 个来源，显式检查反向解释，并与最近 20 个正式交易日判断比较；规划产物为每条证据标注 `evidence_grade`（official-data/wire-report/market-commentary/price-observation-only）与 `observation_time`，每条传导链附 `alternative_explanations`，并在来源存在未来 48 小时重大宏观/地缘事件时强制 watch 覆盖。规划阶段与写作阶段都会看到注入的 attribution snapshot（SPY/QQQ/WTI/10Y/DXY/VIX 六项，与 Market snapshot 同源），它只作为带时点的观察事实，不得充当 catalyst；叙事以快照时点为“现在”，更早的来源事实必须带时间戳，与快照冲突时以快照为准。正文因果语言按三档校准：官方数据或至少两个独立来源才可用强因果动词；单一 wire 来源用对冲措辞并单独一句写传导机制；仅共现只能写 coincided。断言买盘/流动性结构（如“缺乏增量买家”）必须有实际观察 flow/breadth 的来源链接；“超过/超越”类比较必须带来源给出的可比口径。正文采用动态主标题（事件锚定；事实准确性优先，必须是自然完整、普通金融读者一眼可懂的英文句子，5-12 个英文词且不超过 70 字符）。Opening call 保留机构研报语气，以最多两句明确市场立场、首要驱动与关键限制；主语明确，每句聚焦一条传导关系，保留专业术语、因果限定与不确定性。原 `What matters today` 与 `What to watch` 合并为 `Today's focus`（中文“今日关注”），固定 2-3 条以加粗判断短语起头的列表，每条融合主线、市场影响及可观察的确认或失效条件；合计目标 70-100 个可见英文词（中文约 130-180 字），超过 100 词只记录结构 warning 并进入现有一次局部修复，不足 70 词不触发补写。来源明确报道的未来 48 小时重大事件仍需覆盖。`Evidence and cross-currents`（证据与分歧）继续以两段呈现支持和反向证据，合计约 60-75 词，避免重复今日关注。最终顺序为 Opening call、Market snapshot、Today's focus、Evidence and cross-currents、可选 Earnings ahead、可选期权成交量趋势。正文不设总词数下限，保留 650 词上限，不生成独立观察栏或情景地图。归因、数字来源、发布期一致性审计及逐句证据记录覆盖全部模型正文栏目，财报预告继续使用独立确定性检查。完整短稿不会因缺少旧观察栏或不足三条观察而被当作截断稿重建。中文微信派生稿隐藏正文证据标记和所有站外来源链接，但有语义的 ticker、公司和标题 label 保留为纯文本。普通结构问题只尝试一次证据约束的局部修复，链接、数字、Ticker、日期或时间发生变化即回退；归因审计的 warnings 与结构 warnings 合并后走同一修复轮，归因修复轮放宽为“允许删除被标记断言及其数字/时间，禁止新增任何 token、保留既有 URL”。只有明显截断稿，或违反 OIC/期权方向解释边界的区块，才允许在保留已有链接、且新增链接全部匹配已选来源的前提下重建；重建结果仍进入严重事实审核。高置信度核心因果、实体分类、数据发布状态、数字日期、来源链接或事实矛盾才进入两轮严重事实修复。`Evidence and cross-currents` 下方的 `Earnings ahead` 使用锁定的 `yfinance`/Yahoo 日历查询当前时刻至本周五：从美国 region 最高 100 条候选中核验主要美股交易所，排除 OTC 和非股票，再以广泛市场与 AI/科技尽量 3+3 的编辑规则选取最多 6 家。Yahoo 的 BMO/AMC 只按“预计”展示；精确电话会时间必须匹配发行人 IR、正式公告或发行人新闻稿的公司、日期、时间和时区。日历成功但无重点事件时显示中性空结果；日历本身失败时整段省略并只写 trace。Yahoo 数据的内部邮件/微信使用以已取得相应授权为运维前提。Opening Digest 保留每个检索来源及链接，但把普通来源摘录限制为 1,200 字符；若总 prompt 仍逼近全局上限，会按固定档位继续压缩摘录并把实际预算写入 trace。财报预告由结构化数据确定性插入，模型不能改写 ticker、日期、链接或时间，也不得把单纯即将发布财报重复为 catalyst。偏差只写入 `research-trace.json`，不阻止发送；只有严重事实问题修复耗尽才 fail closed。
+内容检索使用上一交易日 16:00 ET 到当前时刻的专用美股开盘窗口，保留市场、宏观与地缘/供应侧查询（macro lane 拆为两条，`extraQueryLimit=12`），并对固定 72 个 ticker 按七组检索重大公司事件与明确升降级。英文编辑先由规划模型按大盘影响范围、增量、持续性和证据强度筛选最多 10 个来源，显式检查反向解释，并与最近 20 个正式交易日判断比较；规划产物为每条证据标注 `evidence_grade`（official-data/wire-report/market-commentary/price-observation-only）与 `observation_time`，每条传导链附 `alternative_explanations`，并在来源存在未来 48 小时重大宏观/地缘事件时强制 watch 覆盖。规划阶段与写作阶段都会看到注入的 attribution snapshot（SPY/QQQ/WTI/10Y/DXY/VIX 六项，与 Market snapshot 同源），它只作为带时点的观察事实，不得充当 catalyst；叙事以快照时点为“现在”，更早的来源事实必须带时间戳，与快照冲突时以快照为准。正文因果语言按三档校准：官方数据或至少两个独立来源才可用强因果动词；单一 wire 来源用对冲措辞并单独一句写传导机制；仅共现只能写 coincided。断言买盘/流动性结构（如“缺乏增量买家”）必须有实际观察 flow/breadth 的来源链接；“超过/超越”类比较必须带来源给出的可比口径。
 
-归因质量由确定性审计 `auditOpeningDigestAttribution` 把关，全部为 warning 并进入修复轮，不硬失败：①快照一致性——正文对 WTI/10Y/DXY/SPY/QQQ/VIX 的方向或涨跌幅与快照相反且未标注更早观察时点；②时态纪律（规则式，不引入经济日历源）——将来时描述的当日事件时间必须带来源链接，且不得晚于 asOf 仍用将来时；③因果强度——强因果动词或买盘/流动性断言无句内来源链接；④口径限定——超越性比较缺少可比口径。审计结果写入 `research-trace.json` 的 `openingDigestAttributionAudit`（before/after 统计与遗留 warning）。每期另在 run 目录写入 `opening-digest-evidence.json`（逐句 claim→来源 URL→证据分级→快照引用，附冻结编辑计划全文）与 `evidence-sources.json`（写作时实际送入模型的逐来源精确摘录），供人工核对归因链条；trace 只保留轻量摘要，两份文件随 run 按 `RUN_RETENTION_DAYS` 一并清理。`npm run trace:research <workflowId>` 会打印归因审计与证据链摘要。
+正文采用动态主标题（事件锚定；事实准确性优先，必须是自然完整、普通金融读者一眼可懂的英文句子，5-12 个英文词且不超过 70 字符）。Opening call 保留机构研报语气，以最多两句明确市场立场、首要驱动与关键限制；主语明确，每句聚焦一条传导关系，保留专业术语、因果限定与不确定性。原 `What matters today` 与 `What to watch` 合并为 `Today's focus`（中文“今日关注”），固定 2-3 条以加粗判断短语起头的列表，每条融合主线、市场影响及可观察的确认或失效条件；合计目标 70-100 个可见英文词（中文约 130-180 字），超过 100 词只记录结构 warning 并进入现有一次局部修复，不足 70 词不触发补写。来源明确报道的未来 48 小时重大事件仍需覆盖。`Evidence and cross-currents`（证据与分歧）继续以两段呈现支持和反向证据，合计约 60-75 词，避免重复今日关注。最终顺序为 Opening call、Market snapshot、Today's focus、Evidence and cross-currents、可选 Earnings ahead、可选期权成交量趋势。正文不设总词数下限，保留 650 词上限，不生成独立观察栏或情景地图。归因、数字来源、发布期一致性审计及逐句证据记录覆盖全部模型正文栏目，财报预告继续使用独立确定性检查。完整短稿不会因缺少旧观察栏或不足三条观察而被当作截断稿重建。
+
+中文微信派生稿隐藏正文证据标记和所有站外来源链接，但有语义的 ticker、公司和标题 label 保留为纯文本。
+
+普通结构问题只尝试一次证据约束的局部修复，链接、数字、Ticker、日期或时间发生变化即回退；归因审计的 warnings 与结构 warnings 合并后走同一修复轮，归因修复轮放宽为“允许删除被标记断言及其数字/时间，禁止新增任何 token、保留既有 URL”。只有明显截断稿，或违反 OIC/期权方向解释边界的区块，才允许在保留已有链接、且新增链接全部匹配已选来源的前提下重建；重建结果仍进入严重事实审核。高置信度核心因果、实体分类、数据发布状态、数字日期、来源链接或事实矛盾才进入两轮严重事实修复。
+
+`Evidence and cross-currents` 下方的 `Earnings ahead` 使用锁定的 `yfinance`/Yahoo 日历查询当前时刻至本周五：从美国 region 最高 100 条候选中核验主要美股交易所，排除 OTC 和非股票，再以广泛市场与 AI/科技尽量 3+3 的编辑规则选取最多 6 家。Yahoo 的 BMO/AMC 只按“预计”展示；精确电话会时间必须匹配发行人 IR、正式公告或发行人新闻稿的公司、日期、时间和时区。日历成功但无重点事件时显示中性空结果；日历本身失败时整段省略并只写 trace。Yahoo 数据的内部邮件/微信使用以已取得相应授权为运维前提。
+
+Opening Digest 保留每个检索来源及链接，但把普通来源摘录限制为 1,200 字符；若总 prompt 仍逼近全局上限，会按固定档位继续压缩摘录并把实际预算写入 trace。财报预告由结构化数据确定性插入，模型不能改写 ticker、日期、链接或时间，也不得把单纯即将发布财报重复为 catalyst。结构、新鲜度等可发送降级只写入 `research-trace.json`；严重事实问题修复耗尽或最终归因审计仍有遗留问题时阻止发送。
+
+归因质量由确定性审计 `auditOpeningDigestAttribution` 把关，初次发现的问题以 warning 进入修复轮；局部修复、严重事实修复和压缩结束后再审计，仍有任何归因 warning 时触发硬门禁，阻止发送。审计覆盖：①快照一致性——正文对 WTI/10Y/DXY/SPY/QQQ/VIX 的方向或涨跌幅与快照相反且未标注更早观察时点；②时态纪律（规则式，不引入经济日历源）——将来时描述的当日事件时间必须带来源链接，且不得晚于 asOf 仍用将来时；③因果强度——强因果动词或买盘/流动性断言无句内来源链接；④口径限定——超越性比较缺少可比口径。审计结果写入 `research-trace.json` 的 `openingDigestAttributionAudit`（before/after 统计与遗留 warning）。每期另在 run 目录写入 `opening-digest-evidence.json`（逐句 claim→来源 URL→证据分级→快照引用，附冻结编辑计划全文）与 `evidence-sources.json`（写作时实际送入模型的逐来源精确摘录），供人工核对归因链条；trace 只保留轻量摘要，两份文件随 run 按 `RUN_RETENTION_DAYS` 一并清理。`npm run trace:research <workflowId>` 会打印归因审计与证据链摘要。
 
 生产环境在 DigitalOcean 的 Chrome 会从 OIC/iVolatility iframe 提取 20 行、8 个字段，截图仅用于同会话前后数据一致性校验并立即丢弃。开盘研究阶段同时抓取 72 个 ticker 的当日最新价和昨收，绝对涨跌幅达 5% 时生成结构化候选；单标的失败不影响其他标的。OIC 同次结果会被 run 内 artifact 复用于正文表格，并仅对进入 OIC Top 20 的池内标的判断 `IVX30 >= 60%` 或反推单日增加至少 5 个波动率点。这是受限的 Top 20 覆盖，不得表述为全池 IV 扫描。SQLite 保留最近 60 个成功交易日的池内入榜历史。OIC 授权、会话、浏览器、页面、报价或历史写入失败均只记录 trace；无预采集 artifact 时发布阶段仍会尝试原有 OIC 抓取。市场快照始终渲染固定 9 格，不可用项显示 `—`；2Y UST 使用美国财政部最新可用的 daily par yield。受众名称成功读取且标准化后不是 `test1` 时仍硬停；预检失败或人数为 0 只记 trace，最终以 Customer.io 请求结果为准。
 
@@ -53,6 +63,17 @@ API 创建的邮件会被 Customer.io workspace layout 包裹。Opening Digest �
 - macOS 与 Linux 本地浏览器封面验收通过。Linux 完整门禁为 772 项测试（771 通过、1 跳过、0 失败），依赖审计为 0 漏洞；`check:runtime-offline` 验证断网封面渲染与解码，`check:backup-restore` 验证隔离备份恢复。生产备份文件校验通过。
 - 前版 `f4fcccbf8c75ddcefd7f5340f821353ccef498af` 保留在 `/opt/zen-content-hub.rollback-f4fcccbf8c75`；环境文件的部署前备份保留为 `/etc/zen-content-hub/zen-content-hub.env.pre-d727a4cfe8bd`。
 - 本次没有额外发送验收邮件或创建真实微信草稿；已验证部署和离线渲染，尚未以新生成的真实 `media_id` 验收下次日报。后续文档收尾单独同步 GitHub，不为纯文档变化重启生产。
+
+### 2026-10-02 日报结构改版发布记录
+
+以下记录对应本次发布；后续纯文档提交不改变生产代码版本。
+
+- 中英文日报改版提交 [`4b0f7b4b85fb`](https://github.com/zen-tradings/internal-marketing-agent/commit/4b0f7b4b85fb3598aabf2d5c81c9af68e98fd0f3) 已同步 GitHub，并通过 [GitHub CI](https://github.com/zen-tradings/internal-marketing-agent/actions/runs/37006477047)。专用模板升级为邮件 `@10`、微信 `@11`，翻译缓存升级为 22；旧冻结内容继续按原结构只读恢复。
+- macOS 和 Linux 完整 `npm run check` 均通过：778 项测试（777 通过、1 跳过、0 失败），高危依赖审计 0 漏洞。Linux `check:runtime-offline` 与 `check:backup-restore` 通过；恢复演练使用隔离样本，未恢复或改写真实生产数据。
+- 通过 `npm run deploy:digitalocean` 激活上述提交，核对 `.deploy-commit`、唯一 systemd 服务 active、`/ready` 和 Slack 连接；核验时队列 active/pending、待核对操作及未完成派生投递均为 0。生产备份 `runs-20261002T123223Z.db` 与 `artifacts-20261002T123223Z.tar.gz` 校验通过。
+- 前版保留在 `/opt/zen-content-hub.rollback-d727a4cfe8bd`；环境备份保留为 `/etc/zen-content-hub/zen-content-hub.env.pre-4b0f7b4b85fb`。保留回滚目录和备份，不因文档收尾删除。
+- `npm run preview:opening-digest` 使用同一份明确标注为示例的素材，输出中英文正文、邮件、微信和 Discord 预览至 gitignored 的 `output/opening-digest-preview/`；人工检查手机首屏与完整页面，320/375/390/430px 宽度无横向溢出。
+- 本次未额外发送测试邮件或创建真实微信草稿。已验证代码部署、离线内容与渲染；下一期真实生成内容、邮件实际送达和微信 `media_id` 尚未作为本次验收证据。
 
 ### 常规 Newsletter 发布路径
 
