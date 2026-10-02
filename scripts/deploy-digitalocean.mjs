@@ -703,6 +703,9 @@ export function parseRemoteDeployStatus(output) {
   if (!['running', 'complete'].includes(entries.state)) {
     throw new Error(`Invalid remote deployment state: ${entries.state || 'missing'}`);
   }
+  if (entries.state === 'running' && entries.unit_state === 'failed') {
+    throw new Error(`Remote activation failed before status completion: ${entries.unit_result || 'unknown systemd failure'}`);
+  }
   if (entries.state === 'complete' && !/^\d+$/.test(entries.exit_code || '')) {
     throw new Error('Completed remote deployment is missing an exit code');
   }
@@ -790,7 +793,7 @@ exit "$code"
     while (Date.now() - startedAt < REMOTE_DEPLOY_TIMEOUT_MS) {
       pause(REMOTE_DEPLOY_POLL_MS);
       try {
-        const output = run('ssh', [...SSH_OPTIONS, target, `cat ${remoteStatus}`], { quiet: true });
+        const output = run('ssh', [...SSH_OPTIONS, target, `cat ${remoteStatus}; printf 'unit_state=%s\\nunit_result=%s\\n' "$(systemctl show -p ActiveState --value ${remoteUnit})" "$(systemctl show -p Result --value ${remoteUnit})"`], { quiet: true });
         const status = parseRemoteDeployStatus(output);
         lastConnectionError = null;
         if (status.state !== 'complete') continue;

@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
 import { acquireRuntimeResource } from '../config/runtime.js';
 import { FIXED_DRAFT_TEMPLATE_IDS } from './draft-template.js';
@@ -66,7 +68,7 @@ export function openingDigestWechatCoverHtml(data, assets) {
   }).replaceAll('<', '\\u003c').replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029');
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     @font-face{font-family:'Zen Montserrat';src:url(data:font/woff2;base64,${assets['Montserrat.woff2'].toString('base64')}) format('woff2');font-weight:100 900;font-style:normal;font-display:block}
-    @font-face{font-family:'Zen Noto Sans SC';src:url(data:font/ttf;base64,${assets['NotoSansSC.ttf'].toString('base64')}) format('truetype');font-weight:100 900;font-style:normal;font-display:block}
+    @font-face{font-family:'Zen Noto Sans SC';src:url(${JSON.stringify(new URL('NotoSansSC.ttf', ASSET_DIR).href)}) format('truetype');font-weight:100 900;font-style:normal;font-display:block}
     html,body{margin:0;width:900px;height:383px;overflow:hidden;background:#0E1932}canvas{display:block}
   </style></head><body><canvas width="900" height="383"></canvas><script>${assets['render.js'].toString('utf8')}
     window.zenCoverReady = renderZenOpeningCover(${input});
@@ -78,7 +80,7 @@ export async function renderOpeningDigestWechatCover({
 }, { browserType = chromium, loadAssets = loadOpeningDigestWechatCoverAssets } = {}) {
   const data = openingDigestWechatCoverData({ dateKey, headline });
   const { assets, assetVersion } = await loadAssets();
-  const identity = { schemaVersion: 1, templateId: FIXED_DRAFT_TEMPLATE_IDS['wechat-opening-digest'], assetVersion, ...data };
+  const identity = { schemaVersion: 2, templateId: FIXED_DRAFT_TEMPLATE_IDS['wechat-opening-digest'], assetVersion, ...data };
   const cacheKey = sha256(JSON.stringify(identity));
   if (cacheDir) {
     try {
@@ -94,17 +96,24 @@ export async function renderOpeningDigestWechatCover({
   if (!executablePath) throw coverError('缺少 OPENING_DIGEST_BROWSER_EXECUTABLE');
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw coverError('微信日报封面超时配置无效');
   const releaseBrowser = await acquireRuntimeResource('browser');
-  let browser, timer;
+  let browser, timer, temporaryDir;
   const deadline = Date.now() + timeoutMs;
   try {
     browser = await browserType.launch({ executablePath, timeout: timeoutMs, headless: true,
       args: ['--disable-background-networking', '--disable-component-update', '--disable-dev-shm-usage'] });
     const capture = async () => {
+      if (cacheDir) await fs.mkdir(cacheDir, { recursive: true });
+      temporaryDir = await fs.mkdtemp(path.join(cacheDir || os.tmpdir(), '.zen-wechat-cover-render-'));
+      const htmlPath = path.join(temporaryDir, 'cover.html');
+      await fs.writeFile(htmlPath, openingDigestWechatCoverHtml(data, assets));
       const context = await browser.newContext({ offline: true, viewport: { width: 900, height: 383 }, deviceScaleFactor: 1 });
-      await context.route('**/*', (route) => route.abort());
+      // Let Chromium read the verified CJK font directly. Embedding its 17 MB
+      // bytes in every CDP HTML message multiplies memory on the 2 GB host.
+      const localFiles = new Set([pathToFileURL(htmlPath).href, new URL('NotoSansSC.ttf', ASSET_DIR).href]);
+      await context.route('**/*', (route) => localFiles.has(route.request().url()) ? route.continue() : route.abort());
       const page = await context.newPage();
       page.setDefaultTimeout(Math.max(1, deadline - Date.now()));
-      await page.setContent(openingDigestWechatCoverHtml(data, assets), { waitUntil: 'load' });
+      await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'load' });
       await page.evaluate(() => window.zenCoverReady);
       return assertPng(Buffer.from(await page.locator('canvas').screenshot({ type: 'png', animations: 'disabled' })), dimensions);
     };
@@ -123,7 +132,11 @@ export async function renderOpeningDigestWechatCover({
     throw coverError(`微信日报封面渲染失败:${error.message}`);
   } finally {
     clearTimeout(timer);
-    try { await browser?.close(); } finally { releaseBrowser(); }
+    try { await browser?.close(); }
+    finally {
+      try { if (temporaryDir) await fs.rm(temporaryDir, { recursive: true, force: true }); }
+      finally { releaseBrowser(); }
+    }
   }
 }
 

@@ -168,6 +168,7 @@ test('detached remote deployment status is strict and explicit', () => {
   });
   assert.throws(() => parseRemoteDeployStatus('state=unknown\n'), /Invalid remote deployment state/);
   assert.throws(() => parseRemoteDeployStatus('state=complete\n'), /missing an exit code/);
+  assert.throws(() => parseRemoteDeployStatus('state=running\nunit_state=failed\nunit_result=oom-kill\n'), /Remote activation failed.*oom-kill/);
 });
 
 test('Discord deployment config is loaded from a gitignored env file without a CLI secret', () => {

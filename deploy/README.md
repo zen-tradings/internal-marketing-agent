@@ -58,6 +58,10 @@ switches the single systemd service and verifies the marker, main PID and `/read
 The long-running remote validation is detached from the SSH output stream and
 polled through a small status file, so a transient SSH disconnect cannot stall
 the test runner or leave a half-finished interactive deployment session.
+Polling also checks the deployment unit itself: if systemd terminates validation
+(for example, for insufficient memory), the command reports that failure without
+waiting for a stale `running` status file to time out. Verify the active release
+before retrying; a killed runner may not have executed its rollback trap.
 A failed activation restores
 the previous release and protected environment file. The DigitalOcean metadata
 check is a deployment-target guard only; it is not an application startup,
@@ -89,6 +93,8 @@ It renders offline at 900×383 with a same-run cache. Template `zen-wechat/zen-t
 applies to new drafts; existing/attempted drafts are read-only during ordinary
 recovery, and explicit body repairs retain the original cover. `check:runtime-offline`
 also renders and decodes this cover, so run it in the Linux release before deployment.
+The large Chinese font is loaded from its verified local file to keep browser
+memory bounded on the 2 GB host; external browser requests remain blocked.
 Run `npm ci` in `/opt/zen-content-hub` and set these
 Linux-specific values (use the actual browser executable installed on the
 host):

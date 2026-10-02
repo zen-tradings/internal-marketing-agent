@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
 import { browserExecutable } from '../src/lib/translation/assets.js';
 import { installResourceGovernor } from '../src/config/runtime.js';
@@ -31,7 +32,7 @@ function fakeBrowser({ blocked = false, brokenPng = false, launchError = false }
       newContext: async (options) => {
         assert.equal(options.offline, true);
         return { route: async () => {}, newPage: async () => ({
-          setDefaultTimeout() {}, setContent: async () => {},
+          setDefaultTimeout() {}, goto: async () => {},
           evaluate: async () => blocked ? new Promise(() => {}) : {},
           locator: () => ({ screenshot: async () => { calls.screenshots++; return brokenPng ? Buffer.from('broken') : png; } }),
         }) };
@@ -77,6 +78,8 @@ test('封面注入转义脚本结束标记，日期不依赖当前时间', () =>
   assert.ok(html.includes('\\u003c/script>'));
   assert.ok(html.includes('2026.10.02'));
   assert.equal((html.match(/<\/script>/g) || []).length, 1);
+  assert.ok(Buffer.byteLength(html) < 200000);
+  assert.ok(!html.includes('data:font/ttf;base64,'));
 });
 
 test('同任务缓存命中免启动浏览器；损坏缓存和日期/标题/素材变化重新生成', async (t) => {
@@ -118,20 +121,29 @@ test('渲染超时、浏览器启动失败和错误 PNG 都释放资源且不缓
   assert.equal(acquired, 3); assert.equal(released, 3);
 });
 
-test('真实浏览器断网渲染：完整中文、16字、中英混排和特殊字符不溢出，PNG可复现', async (t) => {
+test('真实浏览器断网渲染：完整中文、16字、中英混排和特殊字符不溢出，PNG可复现', { timeout: 90000 }, async (t) => {
   const executablePath = browserExecutable({ browserExecutablePath: process.env.TRANSLATION_BROWSER_EXECUTABLE || chromium.executablePath() });
   if (!executablePath) { t.skip('Chrome/Chromium unavailable'); return; }
   const { assets } = await loadOpeningDigestWechatCoverAssets();
   const browser = await chromium.launch({ executablePath, headless: true });
   t.after(() => browser.close());
   const context = await browser.newContext({ offline: true, viewport: { width: 900, height: 383 }, deviceScaleFactor: 1 });
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'zen-wechat-cover-layout-'));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const htmlPath = path.join(temporary, 'cover.html');
+  const localFiles = new Set([pathToFileURL(htmlPath).href, new URL('../assets/opening-digest-wechat-cover/NotoSansSC.ttf', import.meta.url).href]);
   const requests = [];
-  await context.route('**/*', (route) => { requests.push(route.request().url()); return route.abort(); });
+  await context.route('**/*', (route) => {
+    const url = route.request().url();
+    if (localFiles.has(url)) return route.continue();
+    requests.push(url); return route.abort();
+  });
   const page = await context.newPage();
   let reference;
   for (const headline of ['利率考验科技股信心', '一二三四五六七八九十一二三四五六', 'NVDA上涨10.25%', '美债&科技<拐点>', '利率考验科技股信心']) {
-    await page.setContent(openingDigestWechatCoverHtml(openingDigestWechatCoverData({ ...input, headline }), assets));
-    const layout = await page.evaluate(() => window.zenCoverReady);
+    await fs.writeFile(htmlPath, openingDigestWechatCoverHtml(openingDigestWechatCoverData({ ...input, headline }), assets));
+    await page.goto(pathToFileURL(htmlPath).href);
+    const layout = await page.evaluate(() => Promise.race([window.zenCoverReady, new Promise((_, reject) => setTimeout(() => reject(new Error('font readiness timeout')), 15000))]));
     assert.equal(layout.headline, headline);
     assert.ok(layout.headlineWidth <= layout.maxWidth);
     assert.ok(layout.tagsWidth <= layout.maxWidth);
