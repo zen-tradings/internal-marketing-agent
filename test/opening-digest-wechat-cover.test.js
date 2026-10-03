@@ -49,7 +49,10 @@ test('封面只复用完整中文标题，保留网页导入字段、固定栏�
   const full = '一二三四五六七八九十一二三四五六';
   assert.equal([...full].length, 16);
   assert.equal(normalizeOpeningDigestWechatHeadline(full), full);
-  assert.equal(normalizeOpeningDigestWechatHeadline(`${full}七`), '今日开市要点');
+  const max = '一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十';
+  assert.equal([...max].length, 30);
+  assert.equal(normalizeOpeningDigestWechatHeadline(max), max);
+  assert.equal(normalizeOpeningDigestWechatHeadline(`${max}一`), '今日开市要点');
   assert.equal(normalizeOpeningDigestWechatHeadline(''), '今日开市要点');
   assert.equal(normalizeOpeningDigestWechatHeadline('标题\n第二行'), '今日开市要点');
   for (const dateKey of ['2026-02-30', '2025-02-29', '2026-13-01', 'invalid', '']) {
@@ -121,7 +124,7 @@ test('渲染超时、浏览器启动失败和错误 PNG 都释放资源且不缓
   assert.equal(acquired, 3); assert.equal(released, 3);
 });
 
-test('真实浏览器断网渲染：完整中文、16字、中英混排和特殊字符不溢出，PNG可复现', { timeout: 90000 }, async (t) => {
+test('真实浏览器断网渲染：完整中文、16字、30字缩字、中英混排和特殊字符不溢出，PNG可复现', { timeout: 90000 }, async (t) => {
   const executablePath = browserExecutable({ browserExecutablePath: process.env.TRANSLATION_BROWSER_EXECUTABLE || chromium.executablePath() });
   if (!executablePath) { t.skip('Chrome/Chromium unavailable'); return; }
   const { assets } = await loadOpeningDigestWechatCoverAssets();
@@ -140,7 +143,7 @@ test('真实浏览器断网渲染：完整中文、16字、中英混排和特殊
   });
   const page = await context.newPage();
   let reference;
-  for (const headline of ['利率考验科技股信心', '一二三四五六七八九十一二三四五六', 'NVDA上涨10.25%', '美债&科技<拐点>', '利率考验科技股信心']) {
+  for (const headline of ['利率考验科技股信心', '一二三四五六七八九十一二三四五六', '一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十', 'NVDA上涨10.25%', '美债&科技<拐点>', '利率考验科技股信心']) {
     await fs.writeFile(htmlPath, openingDigestWechatCoverHtml(openingDigestWechatCoverData({ ...input, headline }), assets));
     await page.goto(pathToFileURL(htmlPath).href);
     const layout = await page.evaluate(() => Promise.race([window.zenCoverReady, new Promise((_, reject) => setTimeout(() => reject(new Error('font readiness timeout')), 15000))]));

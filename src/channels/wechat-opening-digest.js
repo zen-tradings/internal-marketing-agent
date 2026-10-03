@@ -12,6 +12,7 @@ import { normalizeOpeningDigestWechatHeadline, renderOpeningDigestWechatCover } 
 import { runWorkDir } from '../lib/run-workdir.js';
 import {
   assertOpeningDigestWechatPayloadClean,
+  OPENING_DIGEST_ZH_HEADLINE_MAX_CHARS,
   stripOpeningDigestReferences,
   translationMap,
 } from '../lib/opening-digest-translation.js';
@@ -22,6 +23,10 @@ const LEGACY_WECHAT_TEMPLATE_IDS = ['zen-wechat/zen-trading@9', 'zen-wechat/zen-
 const CREATE_OPERATION = 'create-opening-digest-wechat';
 export const WECHAT_DRAFT_MAX_CHARS = 20000;
 export const WECHAT_DRAFT_MAX_BYTES = 1024 * 1024;
+// Composed title budget: zh headline (capped by OPENING_DIGEST_ZH_HEADLINE_MAX_CHARS)
+// plus the 16-code-point formal suffix （日报· YYYY-MM-DD）. The TEST prefix "[测试] "
+// plus its short-date suffix is also exactly 16 code points, so one limit covers both.
+const WECHAT_OPENING_TITLE_MAX_CHARS = OPENING_DIGEST_ZH_HEADLINE_MAX_CHARS + 16;
 
 export function makeWechatOpeningDigestChannel({
   renderCover = renderOpeningDigestWechatCover,
@@ -427,7 +432,7 @@ async function uploadBodyImages(api, token, assets, cache = new Map()) {
 }
 
 function assertWechatLimits(html, { title = '', digest = '' } = {}) {
-  if ([...title].length > 32) throw wechatError(`微信标题超过 32 字:${[...title].length}`, { retryable: false });
+  if ([...title].length > WECHAT_OPENING_TITLE_MAX_CHARS) throw wechatError(`微信标题超过 ${WECHAT_OPENING_TITLE_MAX_CHARS} 字:${[...title].length}`, { retryable: false });
   if ([...digest].length > 120) throw wechatError(`微信摘要超过 120 字:${[...digest].length}`, { retryable: false });
   if (html.length >= WECHAT_DRAFT_MAX_CHARS) throw wechatError(`微信正文超过 20,000 字符:${html.length}`, { retryable: false });
   if (Buffer.byteLength(html) >= WECHAT_DRAFT_MAX_BYTES) throw wechatError(`微信正文超过 1MB:${Buffer.byteLength(html)}`, { retryable: false });

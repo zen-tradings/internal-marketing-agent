@@ -3,8 +3,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assessTranslationUnit } from './translation/validation.js';
 
-export const OPENING_DIGEST_TRANSLATION_VERSION = 22;
+export const OPENING_DIGEST_TRANSLATION_VERSION = 23;
 export const OPENING_DIGEST_SAFE_HEADLINE = '今日开市要点';
+export const OPENING_DIGEST_ZH_HEADLINE_MAX_CHARS = 30;
 const MODEL_TRANSLATION_BATCH_SIZE = 1;
 const MODEL_TRANSLATION_MAX_TOKENS = 4096;
 
@@ -264,7 +265,7 @@ export function translationMap(result) {
   return new Map((result?.translations || []).map((unit) => [unit.id, unit]));
 }
 
-function compactHeadlineSeparators(value, maxLength = 16) {
+function compactHeadlineSeparators(value, maxLength = OPENING_DIGEST_ZH_HEADLINE_MAX_CHARS) {
   let text = String(value || '').trim();
   if ([...text].length <= maxLength) return text;
   // Separators do not carry the headline's market direction, condition, number,
@@ -288,8 +289,8 @@ function assessUnit(unit, text, afterRepair) {
     };
   }
   const invariant = assessTranslationUnit(unit, text, { afterRepair });
-  const titleError = unit.kind === 'headline' && [...String(text || '')].length > 16
-    ? `微信动态标题超过 16 字:${[...String(text || '')].length}`
+  const titleError = unit.kind === 'headline' && [...String(text || '')].length > OPENING_DIGEST_ZH_HEADLINE_MAX_CHARS
+    ? `微信动态标题超过 ${OPENING_DIGEST_ZH_HEADLINE_MAX_CHARS} 字:${[...String(text || '')].length}`
     : '';
   return { ...invariant, hardErrors: [...new Set([...invariant.hardErrors, ...(brandError ? [brandError] : []), ...(titleError ? [titleError] : [])])] };
 }
@@ -468,7 +469,7 @@ async function completeTranslation({ units, writer, fetchFn, round, timeoutMs })
   if (!writer?.openrouterApiKey) throw translationError('Opening Digest 中文直译缺少 OPENROUTER_API_KEY');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Number(timeoutMs) || 5 * 60 * 1000);
-  const prompt = `将下列 Opening Digest 文本块完整直译为简体中文，保留机构研报语气和必要的金融术语。允许自然调整中文语序、衔接和措辞，使主语明确、句子顺畅；不得摘要、解释、增删或改写事实、判断与观察条件。严格保留否定、条件、验证或失效方向、因果强度和不确定性，不得把可能性改成确定结论。输入已专门为微信净化，不含来源 URL 或引用标记，不得自行补充链接、脚注或出处。kind=headline 的标题允许在不改变判断、方向、条件和因果强度的前提下紧凑本地化；标题标点也计入长度，目标不超过 15 个字符，硬上限为 16 个字符。严格保留所有数字、百分比、Ticker、指数代码、型号、时间和机构品牌。每个形如 ⟦ZEN_KEEP_AAA⟧ 的占位符都代表一个不可变原文 token：必须逐字保留，而且每块中占位符的数量、拼写和顺序必须完全不变。公司品牌与无法可靠判断的专名保留原文；只翻译法律后缀和通用描述，例如 NVIDIA Corporation -> NVIDIA 公司。保留 Markdown 行内标记。返回与输入 ID 数量、顺序完全一致的 JSON。${round ? `这是第 ${round} 次局部修复，重点修复每块 issues。` : ''}\n\n${JSON.stringify(units)}`;
+  const prompt = `将下列 Opening Digest 文本块完整直译为简体中文，保留机构研报语气和必要的金融术语。允许自然调整中文语序、衔接和措辞，使主语明确、句子顺畅；不得摘要、解释、增删或改写事实、判断与观察条件。严格保留否定、条件、验证或失效方向、因果强度和不确定性，不得把可能性改成确定结论。输入已专门为微信净化，不含来源 URL 或引用标记，不得自行补充链接、脚注或出处。kind=headline 的标题允许在不改变判断、方向、条件和因果强度的前提下紧凑本地化；标题标点也计入长度，15 至 ${OPENING_DIGEST_ZH_HEADLINE_MAX_CHARS} 个字符之内均可，硬上限为 ${OPENING_DIGEST_ZH_HEADLINE_MAX_CHARS} 个字符，不得为缩短字数而删改语义。严格保留所有数字、百分比、Ticker、指数代码、型号、时间和机构品牌。每个形如 ⟦ZEN_KEEP_AAA⟧ 的占位符都代表一个不可变原文 token：必须逐字保留，而且每块中占位符的数量、拼写和顺序必须完全不变。公司品牌与无法可靠判断的专名保留原文；只翻译法律后缀和通用描述，例如 NVIDIA Corporation -> NVIDIA 公司。保留 Markdown 行内标记。返回与输入 ID 数量、顺序完全一致的 JSON。${round ? `这是第 ${round} 次局部修复，重点修复每块 issues。` : ''}\n\n${JSON.stringify(units)}`;
   try {
     const response = await fetchFn(`${String(writer.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')}/chat/completions`, {
       method: 'POST', signal: controller.signal,

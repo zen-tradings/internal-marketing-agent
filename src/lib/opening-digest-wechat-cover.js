@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core';
 import { acquireRuntimeResource } from '../config/runtime.js';
 import { FIXED_DRAFT_TEMPLATE_IDS } from './draft-template.js';
 import { assertPng } from './opening-digest-cover.js';
-import { OPENING_DIGEST_SAFE_HEADLINE } from './opening-digest-translation.js';
+import { OPENING_DIGEST_SAFE_HEADLINE, OPENING_DIGEST_ZH_HEADLINE_MAX_CHARS } from './opening-digest-translation.js';
 
 export const WECHAT_OPENING_COVER_WIDTH = 900;
 export const WECHAT_OPENING_COVER_HEIGHT = 383;
@@ -22,7 +22,7 @@ const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex'
 
 export function normalizeOpeningDigestWechatHeadline(headline) {
   const candidate = String(headline || '').trim();
-  return candidate && [...candidate].length <= 16 && !/[\r\n\u0000-\u001f]/.test(candidate)
+  return candidate && [...candidate].length <= OPENING_DIGEST_ZH_HEADLINE_MAX_CHARS && !/[\r\n\u0000-\u001f]/.test(candidate)
     ? candidate : OPENING_DIGEST_SAFE_HEADLINE;
 }
 

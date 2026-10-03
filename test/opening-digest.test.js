@@ -338,13 +338,18 @@ test('new Opening Digest contract is thesis-first and rejects sample failure mod
   assert.ok(audit.warnings.some((item) => /期权数据推断方向/.test(item)));
 });
 
-test('Opening Digest headline gate accepts headlines up to 12 words and 70 characters', () => {
+test('Opening Digest headline gate accepts headlines up to 12 words and 80 characters', () => {
   const relaxed = INSIGHT_ARTICLE.replace(
     'Fed decision looms over narrow equity participation',
-    'Fed holds rates steady after core inflation cools for a third month',
+    'Fed holds rates steady after better-than-expected core inflation read for August',
   );
   const audit = auditOpeningDigestInsight(relaxed);
   assert.equal(audit.warnings.some((item) => /动态标题/.test(item)), false);
+  const overlong = INSIGHT_ARTICLE.replace(
+    'Fed decision looms over narrow equity participation',
+    'Fed holds rates steady and signals patience while core inflation cools across the economy',
+  );
+  assert.ok(auditOpeningDigestInsight(overlong).warnings.some((item) => /动态标题/.test(item)));
 });
 
 test('Opening Digest audits merged focus counts, format, and visible length without a minimum', () => {

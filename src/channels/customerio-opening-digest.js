@@ -13,7 +13,7 @@ import { captureTrendingOptionsTable, validateTrendingOptionsData } from '../lib
 import { collectOpeningMetrics, normalizeOpeningMetrics, renderMetricsHtml } from '../lib/opening-digest-metrics.js';
 import { easternDateKey } from '../lib/us-equity-calendar.js';
 import { auditOpeningDigestArticle } from '../lib/opening-digest-content.js';
-import { openingDigestBodyParts, parseOpeningDigestMetadata } from '../lib/opening-digest-editorial.js';
+import { OPENING_DIGEST_HEADLINE_HARD_MAX_CHARS, openingDigestBodyParts, parseOpeningDigestMetadata } from '../lib/opening-digest-editorial.js';
 import { prepareOpeningDigestWechatPayload, translateOpeningDigestPayload } from '../lib/opening-digest-translation.js';
 import { makeWechatOpeningDigestChannel } from './wechat-opening-digest.js';
 import { renderDiscordOpeningDigest } from './discord-opening-digest.js';
@@ -65,8 +65,8 @@ export function makeChannel({
           throw publishError(`Opening Digest 标题或 edition 与当前美东日期不一致:${parsed.title} / ${parsed.edition}`);
         }
         const headline = editorialMeta.headline || 'Opening signals stay mixed';
-        if (headline.length > 80) {
-          throw publishError(`Opening Digest 动态标题超过安全上限 80 字符:${headline}`);
+        if (headline.length > OPENING_DIGEST_HEADLINE_HARD_MAX_CHARS) {
+          throw publishError(`Opening Digest 动态标题超过安全上限 ${OPENING_DIGEST_HEADLINE_HARD_MAX_CHARS} 字符:${headline}`);
         }
         const sanitized = sanitizeUnsubscribeTags(parsed.body);
         if (sanitized.removed) diagnostics.push(`Opening Digest 正文已移除 ${sanitized.removed} 个退订 Liquid 标签`);

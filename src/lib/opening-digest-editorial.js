@@ -5,7 +5,10 @@ export const OPENING_DIGEST_REQUIRED_HEADINGS = Object.freeze([
   "Today's focus",
   'Evidence and cross-currents',
 ]);
-export const OPENING_DIGEST_HEADLINE_MAX_CHARS = 70;
+export const OPENING_DIGEST_HEADLINE_MAX_CHARS = 80;
+// The publish gate sits 10 chars above the prompt/audit cap so a slightly
+// over-length headline triggers one repair round instead of blocking the send.
+export const OPENING_DIGEST_HEADLINE_HARD_MAX_CHARS = 90;
 export const OPENING_DIGEST_HEADLINE_MIN_WORDS = 5;
 export const OPENING_DIGEST_HEADLINE_MAX_WORDS = 12;
 export const OPENING_DIGEST_EVIDENCE_MAX_WORDS = 85;

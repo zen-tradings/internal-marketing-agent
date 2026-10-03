@@ -16,6 +16,7 @@ import {
 } from '../src/channels/wechat-opening-digest.js';
 import {
   OPENING_DIGEST_SAFE_HEADLINE,
+  OPENING_DIGEST_TRANSLATION_VERSION,
   prepareOpeningDigestWechatPayload,
   protectTranslationUnit,
   restoreTranslationUnit,
@@ -440,20 +441,23 @@ test('OIC 时点与归属用确定性中文前缀保留原始数字、时区和�
   assert.equal(result.translations.find((unit) => unit.id === 'oic-attribution').text, '数据由 IVolatility 提供');
 });
 
-test('17 字模型标题只移除必要分隔符，不截断判断或不可变 token', async () => {
+test('30 字内中文标题原样保留，超限只移除必要分隔符，不截断判断或不可变 token', async () => {
   const source = {
     article: { headline: 'Core CPI Hotter, Hike Odds Jump to 88%', body: '' },
     metrics: [],
   };
-  const result = await translateOpeningDigestPayload(source, {
+  const translateWith = (headline) => translateOpeningDigestPayload(source, {
     writer: { model: 'test' },
     complete: async ({ units }) => ({
-      translations: units.map((unit) => ({ id: unit.id, text: '核心CPI偏热，加息概率升至88%' })),
+      translations: units.map((unit) => ({ id: unit.id, text: headline })),
     }),
   });
-  const headline = result.translations.find((unit) => unit.id === 'headline').text;
-  assert.equal(headline, '核心CPI偏热加息概率升至88%');
-  assert.equal([...headline].length, 16);
+  const kept = await translateWith('核心CPI偏热，加息概率升至88%');
+  assert.equal(kept.translations.find((unit) => unit.id === 'headline').text, '核心CPI偏热，加息概率升至88%');
+  const compacted = await translateWith('核心CPI偏热，市场加息概率升至88%，重新定价秋季政策利率路径');
+  const headline = compacted.translations.find((unit) => unit.id === 'headline').text;
+  assert.equal(headline, '核心CPI偏热市场加息概率升至88%重新定价秋季政策利率路径');
+  assert.equal([...headline].length, 30);
   assert.match(headline, /CPI.*88%/);
 });
 
@@ -471,11 +475,11 @@ test('标题三轮仍损坏时使用固定安全标题，正文事实硬门禁�
   }), /650\.25/);
 });
 
-test('微信草稿标题使用“标题（日报·日期）”且测试身份保持在 32 字内', () => {
+test('微信草稿标题使用“标题（日报·日期）”且测试身份保持在 46 字内', () => {
   assert.equal(openingDigestWechatTitle('AI硬件下滑，收益率回落', '2026-09-03'), 'AI硬件下滑，收益率回落（日报· 2026-09-03）');
   assert.equal(openingDigestWechatTitle('利率考验市场信心', '2026-08-10', { acceptance: true }), '[测试] 利率考验市场信心（日报· 08-10）');
-  assert.equal([...openingDigestWechatTitle('1234567890123456', '2026-08-10', { acceptance: true })].length, 32);
-  assert.equal(openingDigestWechatTitle('12345678901234567', '2026-08-10'), `${OPENING_DIGEST_SAFE_HEADLINE}（日报· 2026-08-10）`);
+  assert.equal([...openingDigestWechatTitle('123456789012345678901234567890', '2026-08-10', { acceptance: true })].length, 46);
+  assert.equal(openingDigestWechatTitle('1234567890123456789012345678901', '2026-08-10'), `${OPENING_DIGEST_SAFE_HEADLINE}（日报· 2026-08-10）`);
 });
 
 test('中文微信 HTML 锁定新版模板、动态副标题、9 格行情与 OIC 20×8', () => {
@@ -698,7 +702,7 @@ test('创建响应不明出现多个新候选时停止，不继续新增草稿',
 test('封面和草稿共用归一化标题，缓存位于该任务的隔离目录', async () => {
   const source = prepareOpeningDigestWechatPayload(payload());
   const translation = translated(source);
-  translation.translations.find((unit) => unit.id === 'headline').text = '这是一句超过十六个字符限制需要回退的日报标题';
+  translation.translations.find((unit) => unit.id === 'headline').text = '这是一句明显超过三十个字符新上限因此必须回退安全标题的日报测试';
   let coverInput, draftInput;
   const channel = makeWechatOpeningDigestChannel({
     renderCover: async (value) => { coverInput = value; return Buffer.from('cover'); },
@@ -938,7 +942,7 @@ No major U.S.-listed earnings events were selected for the remainder of this wee
       return { ok: true, status: 200, async text() { return JSON.stringify({ choices: [{ message: { content: JSON.stringify({ translations: units.map((unit) => ({ id: unit.id, text: expected.get(unit.id) })) }) } }] }); } };
     },
   });
-  assert.equal(result.schemaVersion, 22);
+  assert.equal(result.schemaVersion, OPENING_DIGEST_TRANSLATION_VERSION);
   assert.equal(result.repairs.length, 0);
   assert.ok(prompts.every((prompt) => /自然调整中文语序/.test(prompt) && /严格保留否定、条件/.test(prompt)));
   assert.match(result.translations.find((unit) => unit.id === 'body-3').text, /0\.25%.*若.*可能/);

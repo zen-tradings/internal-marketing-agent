@@ -44,7 +44,7 @@ export const MUTATORS = [
       if (/^headline:/m.test(article)) {
         return {
           ...input,
-          article: article.replace(/^headline:.*$/m, 'headline: This headline is deliberately far too long for the mobile Opening Digest subject'),
+          article: article.replace(/^headline:.*$/m, 'headline: This headline is deliberately far too long for the mobile Opening Digest subject line'),
           articlePath: undefined,
         };
       }

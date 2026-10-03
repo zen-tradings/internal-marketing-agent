@@ -1,6 +1,6 @@
 ---
 title: Zen Opening Digest
-headline: This dynamic headline is much too long for any useful mobile subject line
+headline: This dynamic headline is much too long for any useful mobile email subject line here
 stance: bullish
 confidence: certain
 preheader: A malformed edition.
