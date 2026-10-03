@@ -59,6 +59,19 @@ function hasCJK(content) {
   return CJK_RE.test(content);
 }
 
+// A dollar preceded by an odd number of backslashes is an escaped literal $,
+// not a math delimiter: $\textbf{Brier}_{\$}$ must close at the final $ only.
+function unescapedDollarIndex(text, from) {
+  let index = text.indexOf('$', from);
+  while (index >= 0) {
+    let slashes = 0;
+    for (let p = index - 1; p >= 0 && text[p] === '\\'; p -= 1) slashes += 1;
+    if (slashes % 2 === 0) return index;
+    index = text.indexOf('$', index + 1);
+  }
+  return -1;
+}
+
 function maskInlineCode(line) {
   const holes = [];
   const masked = line.replace(INLINE_CODE_RE, (span) => {
@@ -134,7 +147,7 @@ function scanInlineMath(masked, equations) {
       nextCursor = closeIndex < 0 ? -1 : closeIndex + 2;
     } else {
       contentStart = opener + 1;
-      closeIndex = masked.indexOf('$', contentStart);
+      closeIndex = unescapedDollarIndex(masked, contentStart);
       nextCursor = closeIndex < 0 ? -1 : closeIndex + 1;
     }
     if (closeIndex < 0) {
@@ -162,10 +175,10 @@ function scanInlineMath(masked, equations) {
 // Visible output is unchanged. Stray \( \) pairs degrade to plain parentheses.
 function neutralizeStrayDelimiters(masked) {
   const span = '<span data-zen-math-currency="true">$</span>';
+  // Single pass: a second /\$/ pass would re-wrap the $ inside the span again.
   return masked
     .replace(/\\\(|\\\)/g, '(')
-    .replace(/\\\$/g, span)
-    .replace(/\$/g, span);
+    .replace(/\\\$|\$/g, span);
 }
 
 // Extract $...$, $$...$$, \(...\), \[...\] formulas into placeholder tokens that
@@ -421,7 +434,7 @@ export function compileEquationSvg(tex, display) {
     throw new Error(`公式编译失败:${error?.[1] || 'MathJax 无法识别的命令或语法错误'}`);
   }
   const svg = /<svg[\s\S]*?<\/svg>/.exec(html)?.[0];
-  if (!svg) throw new Error('公式编译未产出 SVG');
+  if (!svg) throw new Error(`公式编译未产出 SVG:${String(tex).slice(0, 80)}`);
   return { svg };
 }
 

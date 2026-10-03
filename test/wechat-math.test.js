@@ -75,6 +75,27 @@ test('公式保护:不配对的孤立 $ 不被提取为公式', () => {
   assert.ok(visible.includes('单个 $ 符号'));
 });
 
+test('公式保护:公式内部的转义 \\$ 不截断行内配对', () => {
+  const result = protectMathInMarkdown('盈亏加权变体 $\\textbf{Brier}_{\\$}$，信号 $x_t$ 有效。\n');
+  const texes = result.equations.map((equation) => equation.tex);
+  assert.ok(texes.includes('\\textbf{Brier}_{\\$}'), `应完整提取含转义美元的公式,实际:${JSON.stringify(texes)}`);
+  assert.ok(texes.includes('x_t'), '同一行后续公式仍应被提取');
+});
+
+test('公式保护:正文转义美元(货币)仍被中性化且可见文本不变', () => {
+  const source = '成本 \\$5 与 \\$10 之间，公式 $x_t$ 有效。\n';
+  const result = protectMathInMarkdown(source);
+  assert.deepEqual(result.equations.map((equation) => equation.tex), ['x_t']);
+  const visible = result.markdown.replace(/<span data-zen-math-currency="true">\$<\/span>/g, '$');
+  assert.ok(visible.includes('成本 $5 与 $10 之间'), '转义美元按字面 $ 呈现');
+});
+
+test('TeX 编译:含转义美元的公式可编译出 SVG', () => {
+  const ok = compileEquationSvg('\\textbf{Brier}_{\\$}', false);
+  assert.match(ok.svg, /^<svg[\s\S]*<\/svg>$/);
+  assert.ok(compileEquationSvg('\\mathbf{Brier_{\\$}}', false).svg.includes('<svg'));
+});
+
 test('公式保护:显示公式独占段落(避开 marked 段落级 $$ 检查)', () => {
   const result = protectMathInMarkdown(FIXTURE);
   const token = result.equations.find((equation) => equation.display).token;
