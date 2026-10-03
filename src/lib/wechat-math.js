@@ -37,6 +37,12 @@ const MATH_DISPLAY_MARGIN_PX = Math.round(MATH_BODY_FONT_EM * MATH_BASE_FONT_PX)
 const MATH_CAPTURE_PADDING = { x: 3, y: 2 };
 const MAX_INLINE_TEX_LENGTH = 1000;
 const MAX_DISPLAY_TEX_LENGTH = 4000;
+// Bar-like glyphs (a lone bold minus is 0.136ex tall) have intrinsically thin
+// bounding boxes, so MathJax itself certifies the render is correct. The
+// plausible-size floor below targets broken renders of normal-sized formulas;
+// intrinsically thin glyphs are allowed under it instead of hard-failing.
+const TINY_INLINE_GLYPH_MAX_HEIGHT_EX = 0.5;
+const TINY_DISPLAY_GLYPH_MAX_WIDTH_EX = 1.8;
 
 const TEX_FEATURE_RE = /\\[a-zA-Z]+|[_^]\s*[{A-Za-z0-9]|\{/;
 // Single variables ($t$, $N$, $W$, $x_i$) carry no TeX feature characters but are
@@ -357,10 +363,15 @@ export function validateMathRestored(html, { equations = [] } = {}) {
     const primary = isDisplay ? 'width' : 'height';
     const minPx = isDisplay ? 12 : 5;
     const maxPx = isDisplay ? 640 : 120;
+    // Intrinsically thin glyphs (tinyGlyph, certified by MathJax's own ex
+    // metrics at compile time) legitimately capture below the floor; any other
+    // sub-floor render still indicates a broken capture.
+    const equation = images.length === equations.length ? equations[index] : null;
+    const floorPx = equation?.image?.tinyGlyph ? 1 : minPx;
     const stylePx = readStylePx(image, primary);
     if (Number.isNaN(stylePx)) {
       errors.push(`第 ${index + 1} 张公式图片缺少 ${primary} px 尺寸`);
-    } else if (stylePx < minPx || stylePx > maxPx) {
+    } else if (stylePx < floorPx || stylePx > maxPx) {
       errors.push(`第 ${index + 1} 张${isDisplay ? '显示' : '行内'}公式 ${primary} ${stylePx}px 超出合理范围`);
     }
     const mismatches = ['width', 'height'].filter((property) => {
@@ -435,7 +446,11 @@ export function compileEquationSvg(tex, display) {
   }
   const svg = /<svg[\s\S]*?<\/svg>/.exec(html)?.[0];
   if (!svg) throw new Error(`公式编译未产出 SVG:${String(tex).slice(0, 80)}`);
-  return { svg };
+  return {
+    svg,
+    widthEx: Number(/width="([\d.]+)ex"/.exec(svg)?.[1]) || 0,
+    heightEx: Number(/height="([\d.]+)ex"/.exec(svg)?.[1]) || 0,
+  };
 }
 
 export function equationCaptureHtml(svg, color = MATH_INK_COLOR) {
@@ -517,8 +532,11 @@ export async function renderEquationPngs(equations, {
 
   const compiled = [];
   for (const group of groups.values()) {
-    const { svg } = compileEquationSvg(group.tex, group.display);
-    compiled.push({ ...group, svg });
+    const { svg, widthEx, heightEx } = compileEquationSvg(group.tex, group.display);
+    const tinyGlyph = group.display
+      ? widthEx <= TINY_DISPLAY_GLYPH_MAX_WIDTH_EX
+      : heightEx <= TINY_INLINE_GLYPH_MAX_HEIGHT_EX;
+    compiled.push({ ...group, svg, tinyGlyph });
   }
 
   const captured = await withRuntimeResource(
@@ -535,7 +553,7 @@ export async function renderEquationPngs(equations, {
       throw new Error(`公式 ${index + 1} 截图结果无效`);
     }
     for (const member of group.members) {
-      member.image = { src: image.src, width: image.width, height: image.height };
+      member.image = { src: image.src, width: image.width, height: image.height, tinyGlyph: group.tinyGlyph };
     }
   });
   return list;

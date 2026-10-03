@@ -96,6 +96,35 @@ test('TeX 编译:含转义美元的公式可编译出 SVG', () => {
   assert.ok(compileEquationSvg('\\mathbf{Brier_{\\$}}', false).svg.includes('<svg'));
 });
 
+test('TeX 编译:返回内秉 ex 尺寸供薄字形门禁判定', () => {
+  const minus = compileEquationSvg('\\boldsymbol{\\mathrm{-}}', false);
+  assert.ok(minus.heightEx > 0 && minus.heightEx < 0.5, `孤立减号内秉高度应低于 0.5ex,实际:${minus.heightEx}`);
+  const normal = compileEquationSvg('x_t', false);
+  assert.ok(normal.heightEx >= 0.5, `常规公式内秉高度应不低于 0.5ex,实际:${normal.heightEx}`);
+});
+
+test('恢复与校验:内秉薄字形低于下限放行,普通公式仍硬失败', () => {
+  const tiny = [{
+    token: 'ZENMATH0001XZENMATH',
+    tex: '\\boldsymbol{\\mathrm{-}}',
+    display: false,
+    hasCjk: false,
+    image: { src: 'm.png', width: 16, height: 2, tinyGlyph: true },
+  }];
+  const restoredTiny = restoreMathInHtml('<p>A ZENMATH0001XZENMATH B</p>', { equations: tiny });
+  assert.doesNotThrow(() => validateMathRestored(restoredTiny, { equations: tiny }), 'MathJax 认证的薄字形不应硬失败');
+
+  const broken = [{
+    token: 'ZENMATH0001XZENMATH',
+    tex: 'x_{i,t}',
+    display: false,
+    hasCjk: false,
+    image: { src: 'm.png', width: 16, height: 2 },
+  }];
+  const restoredBroken = restoreMathInHtml('<p>A ZENMATH0001XZENMATH B</p>', { equations: broken });
+  assert.throws(() => validateMathRestored(restoredBroken, { equations: broken }), /超出合理范围/);
+});
+
 test('公式保护:显示公式独占段落(避开 marked 段落级 $$ 检查)', () => {
   const result = protectMathInMarkdown(FIXTURE);
   const token = result.equations.find((equation) => equation.display).token;
