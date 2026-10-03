@@ -9,14 +9,15 @@ import {
   appendFinalFooter,
   appendFinalTailImages,
   normalizeBodyTypography,
+  normalizeClosingBrTags,
   normalizeCodeBreaks,
   normalizeListMarkers,
   removeDuplicateReferenceSections,
   styleKeyHighlights,
   validatePreparedWechatHtml,
 } from '../src/lib/wechat-render.js';
-import {
-  headingCardHtml,
+import { protectMathInMarkdown } from '../src/lib/wechat-math.js';
+import { headingCardHtml,
   renderHeadingCardImages,
   restyleSectionHeadings,
 } from '../src/lib/wechat-heading.js';
@@ -483,4 +484,22 @@ test('微信发布校验:超限动画 GIF 放行交给上传门禁降帧,超限 
     () => validateLocalImage('big.png', { absoluteDirPath: dir }),
     /图片超过微信 10MB 上限:/,
   );
+});
+
+test('微信渲染输入:闭合式 </br> 标签归一化为 <br>', () => {
+  assert.equal(normalizeClosingBrTags('段落一</br>段落二'), '段落一<br>段落二');
+  assert.equal(normalizeClosingBrTags('空格变体</br >与大小写</BR>'), '空格变体<br>与大小写<br>');
+  assert.equal(normalizeClosingBrTags('正常 <br> 与 <br/> 不受影响'), '正常 <br> 与 <br/> 不受影响');
+  assert.equal(normalizeClosingBrTags(null), '');
+});
+
+test('微信渲染输入:未归一化的 </br> 会让 wenyan MathJax pass 崩溃,归一化后可渲染', async () => {
+  const { createWenyanCore } = await import('@wenyan-md/core');
+  const core = await createWenyanCore({ isWechat: true });
+  const source = '附录见引用。</br>后续段落包含公式 $x_t$。\n';
+  const raw = protectMathInMarkdown(source).markdown;
+  await assert.rejects(() => core.renderMarkdown(raw), /Can't find handler for document/);
+  const normalized = protectMathInMarkdown(normalizeClosingBrTags(source)).markdown;
+  const html = await core.renderMarkdown(normalized);
+  assert.ok(!html.includes('</br>'), '归一化后渲染结果不再包含 </br>');
 });

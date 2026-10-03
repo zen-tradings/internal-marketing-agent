@@ -14,7 +14,8 @@ import {
 import { restyleSectionHeadings } from './wechat-heading.js';
 
 export async function renderAndPublishWithFinalFooter(inputContent, options, getInputContent) {
-  const { content, absoluteDirPath } = await getInputContent(inputContent, options.file);
+  const { content: rawContent, absoluteDirPath } = await getInputContent(inputContent, options.file);
+  const content = normalizeClosingBrTags(rawContent);
   // Protect math before the markdown renderer can fragment it, rasterize each
   // formula to a PNG inside the run directory, and restore the images after styling.
   const protection = protectMathInMarkdown(content);
@@ -98,6 +99,14 @@ export async function recoverWechatDraft({
     const accessToken = await wechatPublisher.getAccessTokenWithCache(appId, appSecret);
     return wechatPublisher.getDraft(accessToken, mediaId);
   });
+}
+
+// arXiv/laTeXML sources can carry closing-only </br> tags into translated markdown.
+// marked passes them through, and MathJax's lite DOM parser then throws on the
+// unmatched close tag, which prepareRenderContext surfaces as the misleading
+// "Can't find handler for document". Browsers render </br> as <br>, so normalize.
+export function normalizeClosingBrTags(markdown) {
+  return String(markdown ?? '').replace(/<\/br\s*>/gi, '<br>');
 }
 
 export function normalizeCodeBreaks(html) {
