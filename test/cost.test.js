@@ -191,3 +191,19 @@ test('request reuse propagates cancellation while waiting and bounds cache bytes
   });
   assert.equal(calls, 3);
 });
+
+test('read-only CLI distinguishes legacy receipt dates from live instrumentation coverage', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cost-cli-'));
+  try {
+    const filename = path.join(root, 'costs.db'); const store = openCostStore(filename);
+    store.record({ attemptId: 'legacy', source: 'legacy-trace', occurredAt: Date.parse('2026-09-10T12:00:00Z'), costUsd: .03 }); store.close();
+    const result = spawnSync(process.execPath, ['scripts/cost-report.mjs', '--ledger', filename, '--month', '2026-09', '--configuration', 'fixture'],
+      { encoding: 'utf8', env: { ...process.env, DOTENV_CONFIG_PATH: path.join(root, 'absent.env') } });
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.calendarMonth.legacyTraceRequests, 1);
+    assert.ok(report.coverage.instrumentedSince > report.coverage.firstRecordedAt);
+    assert.equal(report.currentConfiguration.requests, 0);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

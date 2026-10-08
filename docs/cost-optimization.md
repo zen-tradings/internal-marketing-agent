@@ -45,7 +45,7 @@
 
 ## 验证范围
 
-- 完整 `npm run check`：797 项通过、1 项平台相关跳过，语法、架构与高危依赖审计通过。
+- 完整 `npm run check`：798 项通过、1 项平台相关跳过，语法、架构与高危依赖审计通过。
 - 新增验证：未知与真实零费用、晚到费用回执、跨重试累计、请求去重、记录故障隔离、取消、缓存隔离和容量、历史费用保存、自然月/滚动窗口、14 天边界及待处理素材保护。
 - `check:runtime-offline`：真实 Chromium PDF/PNG、微信日报中文封面、Poppler、两个 Python worker；测试素材禁用网络。
 - `check:backup-restore`：费用账本、正文 checkpoint、发布结果不明状态及 pending outbox 的隔离恢复，损坏恢复单元拒绝。

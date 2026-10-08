@@ -22,9 +22,13 @@ try {
   configurationId ||= costConfigurationId(config);
 } catch {} // Reporting still works without service secrets/configuration.
 let events = [];
+let instrumentedSince = null;
 if (fs.existsSync(filename)) {
   const db = new Database(filename, { readonly: true, fileMustExist: true });
-  try { events = db.prepare('SELECT event_json FROM cost_events ORDER BY occurred_at').all().map(row => JSON.parse(row.event_json)); }
+  try {
+    events = db.prepare('SELECT event_json FROM cost_events ORDER BY occurred_at').all().map(row => JSON.parse(row.event_json));
+    instrumentedSince = db.prepare('SELECT applied_at FROM schema_migrations WHERE version=1').get()?.applied_at ?? null;
+  }
   finally { db.close(); }
 }
 const billing = options.billing ? JSON.parse(fs.readFileSync(options.billing, 'utf8')) : {};
@@ -35,7 +39,7 @@ console.log(JSON.stringify({
     // Separate accounting views; never add top-ups to metered inference.
     unallocatedVendors: billing.unallocatedVendors || ['DigitalOcean allocation', 'Datalab', 'Customer.io', 'offsite backup'],
   },
-  coverage: { ledgerExists: fs.existsSync(filename), firstRecordedAt: events[0]?.occurredAt || null,
+  coverage: { ledgerExists: fs.existsSync(filename), instrumentedSince, firstRecordedAt: events[0]?.occurredAt || null,
     lastRecordedAt: events.at(-1)?.occurredAt || null,
-    note: 'Known usage is partial when unknownCostRequests > 0 or the ledger started within the reporting period. Provider-wide bills and credits are not project attribution. Historical traces overwritten before instrumentation cannot be reconstructed.' },
+    note: 'A completed calendar month does not imply complete cost coverage. Live instrumentation starts at instrumentedSince; older legacy receipts are partial, regardless of unknownCostRequests. Provider-wide bills and credits are not project attribution. Historical traces overwritten before instrumentation cannot be reconstructed.' },
 }, null, 2));
