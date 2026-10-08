@@ -17,6 +17,7 @@ export async function refineOpeningDigestDraft({ article, research, workflow, wr
   try {
     const selected = openingCompactionSources(research, article);
     const response = await completeReviewJson({
+      inferenceContext: { stage: 'opening-format-repair' },
       prompt: `Repair only the structural and analytical-quality issues in this Zen Opening Digest. Keep the same evidence-bound viewpoint and causal strength. Do not add facts, causes, numbers, tickers, dates, times, URLs, expectations, market levels, or advice. Preserve every existing URL and immutable token. You may delete an unsupported or conflicting assertion instead of rewriting it. Return strict JSON {"revised_markdown":"complete Markdown with frontmatter"}.\n\nEditorial contract:\n${openingDigestWritingGuidance()}\n\nIssues:${JSON.stringify(warnings)}\n\nAllowed sources:${JSON.stringify(selected)}\n\nDraft:\n${article}`,
       model: writer.reviewModel || writer.model,
       writer: { ...writer, temperature: 0 },
@@ -112,6 +113,7 @@ export function normalizeOpeningDigestCitations(article, research = []) {
 
 export async function planOpeningDigestEditorial({ research, editorialContext, history, asOf, model, writer, workflow, fetchFn }) {
   const raw = await completeReviewJson({
+      inferenceContext: { stage: 'opening-plan' },
     prompt: buildOpeningDigestPlanningPrompt({
       research, editorialContext: editorialContext?.promptText || '', history, asOf,
     }),
@@ -134,6 +136,7 @@ export async function compactOpeningDigestEditorial({ article, research, workflo
         ? `Rewrite this single Markdown list item in no more than ${OPENING_DIGEST_CATALYST_MAX_WORDS} visible English words. Keep exactly one direct source link. Retain only the essential fact and its concise market implication; if it is a price-only item, retain only the timestamped price fact.`
         : `Rewrite this Market read as one paragraph of ${OPENING_DIGEST_MARKET_READ_MIN_SENTENCES} to ${OPENING_DIGEST_MARKET_READ_MAX_SENTENCES} sentences and no more than ${OPENING_DIGEST_MARKET_READ_MAX_WORDS} visible English words. Use an overview-details-optional synthesis structure: start with the overall interpretation, use the middle sentences for drivers, divergences, or validation conditions, and optionally end with a synthesis or invalidation condition.`;
       return completeReviewJson({
+      inferenceContext: { stage: 'opening-compaction' },
         prompt: `Compact exactly one Zen Opening Digest editorial block. ${instruction}
 
 Do not add facts, causes, advice, emphasis, or certainty. Do not change or remove any URL, number, percentage, ticker, date, or time. Preserve the original causal strength. Return strict JSON only: {"revised_text":"the complete revised block"}.
@@ -155,6 +158,7 @@ ${block.text}`,
     verifyBlock: async ({ block, candidate, before, after }) => {
       const allowedSources = openingCompactionSources(research, block.text);
       const verification = await completeReviewJson({
+      inferenceContext: { stage: 'opening-compaction-verify' },
         prompt: `Verify a compacted Zen Opening Digest block against the original and supplied sources. Approve only if the revision preserves every supported fact, qualification, and causal strength; adds no fact, cause, advice, emphasis, or certainty; and satisfies the requested editorial structure. For Market read, structure_valid requires one overview sentence followed by supporting detail sentences and an optional final synthesis or invalidation sentence. For a catalyst, structure_valid requires one concise Markdown list item with one direct source link.
 
 Return strict JSON only:
@@ -234,6 +238,7 @@ export async function reviewAndRepairOpeningDigest({ article, input, research, w
   let initial;
   try {
     initial = await completeReviewJson({
+      inferenceContext: { stage: 'opening-audit' },
       prompt: auditPrompt,
       model: writer.reviewModel || writer.model,
       writer: { ...writer, temperature: 0 },
@@ -296,6 +301,7 @@ export async function reviewAndRepairOpeningDigest({ article, input, research, w
     let verification;
     try {
       verification = await completeReviewJson({
+      inferenceContext: { stage: 'opening-audit-verify' },
         prompt: `You MUST adjudicate every previously severe issue below, one result item per issue, quoting enough of the issue's claim to make the mapping unambiguous. Identify the specific unsupported component of each issue (number, date, attribution, causal link, or URL). Use status "fixed" when that component is absent from the current draft, even if a different, directly sourced fact on the same topic remains. Use "unresolved" only when the unsupported component (or an equivalent unsupported claim) is still present; cite specific evidence from an allowed source. Do not carry a removed attribution forward from the previous issue into the revised draft. Compare approximate numbers against the cited source's wording and verify the link attached to the current claim. Never invent a fact. Return strict JSON {"results":[{"claim":"exact text of the previous severe issue's claim","status":"fixed|unresolved","evidence":"why"}]}.\n\nPrevious severe issues:${JSON.stringify(severe)}\n\nAllowed sources:${JSON.stringify(allowedWithSnapshot)}\n\nRevised draft:\n${current}`,
         model: writer.reviewModel || writer.model,
         writer: { ...writer, temperature: 0 },
@@ -430,6 +436,7 @@ export async function repairOpeningDigestSevereIssues({ article, severe, allowed
   let repair;
   try {
     repair = await completeReviewJson({
+      inferenceContext: { stage: 'opening-fact-repair' },
       prompt: `Repair only the listed severe issues. Do not change unrelated structure or viewpoints and do not add facts. For an unsupported number or attribution, remove the entire unsupported claim everywhere it occurs unless the revised claim uses the exact source wording and links directly to that source. Do not merely delete the named attribution while leaving an unsupported approximate number, or move the same claim to another section. For a wrong link, cite the source that actually supports the claim or remove it. Return strict JSON {"revised_markdown":"complete Markdown with the original frontmatter"}.\n\nSevere issues:${JSON.stringify(severe)}\n\nAllowed sources:${JSON.stringify(allowed)}\n\nDraft:\n${article}`,
       model: writer.reviewModel || writer.model,
       writer: { ...writer, temperature: 0 },

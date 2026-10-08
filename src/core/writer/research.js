@@ -1,3 +1,4 @@
+import { reuseTaskRequest } from '../../lib/task-request-cache.js';
 import { decodeBasicHtmlEntities } from '../../lib/html-entities.js';
 import { isDirectUserUrl, loadDirectUserSources, recoverOfficialDocumentMirrors } from '../user-sources.js';
 import { safeText, trimTrailingSlash } from './model-client.js';
@@ -508,16 +509,15 @@ export async function searchExaOpen({ query, options = {}, writer, fetchFn, trac
     startPublishedDate: body.startPublishedDate,
   });
   try {
-    const res = await fetchWithRetry(fetchFn, url, {
+    const { data, reused } = await fetchResearchJson(fetchFn, url, {
       method: 'POST',
       headers: {
         'x-api-key': writer.exaApiKey,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
-    }, { timeoutMs: writer.exaTimeoutMs || 45000 });
-    if (!res.ok) throw new Error(`Exa search failed: ${res.status} ${res.statusText} ${await safeText(res)}`.trim());
-    const data = await res.json();
+    }, writer.exaTimeoutMs || 45000);
+    event.cacheHit = reused;
     const roots = Array.isArray(data.results) ? data.results.slice(0, numResults) : [];
     const flattened = flattenExaResults(roots);
     const excluded = flattened.filter((result) => isGovernmentFundedMediaSource(result));
@@ -529,7 +529,7 @@ export async function searchExaOpen({ query, options = {}, writer, fetchFn, trac
         ...(options.kind && !['open-search', 'official-discovery'].includes(options.kind) ? { specialist: true } : {}),
       }));
     event.excludedGovernmentFundedMedia = excluded.map((result) => result.url).filter(Boolean);
-    finishTrace(event, { requestId: data.requestId, costDollars: data.costDollars, results });
+    finishTrace(event, { requestId: data.requestId, costDollars: reused ? 0 : data.costDollars, results });
     return results;
   } catch (e) {
     failTrace(event, e);
@@ -542,7 +542,7 @@ export async function searchExaPriority({ query, writer, prioritySources, fetchF
   const url = `${trimTrailingSlash(writer.exaBaseUrl || 'https://api.exa.ai')}/search`;
   const event = startTrace(trace, { kind, endpoint: '/search', query, includeDomains: prioritySources });
   try {
-  const res = await fetchWithRetry(fetchFn, url, {
+  const { data, reused } = await fetchResearchJson(fetchFn, url, {
     method: 'POST',
     headers: {
       'x-api-key': writer.exaApiKey,
@@ -558,16 +558,15 @@ export async function searchExaPriority({ query, writer, prioritySources, fetchF
         highlights: { query, maxCharacters: 1200 },
       },
     }),
-  }, { timeoutMs: writer.exaTimeoutMs || 45000 });
-  if (!res.ok) throw new Error(`Exa priority search failed: ${res.status} ${res.statusText} ${await safeText(res)}`.trim());
-  const data = await res.json();
+  }, writer.exaTimeoutMs || 45000, 'priority search');
+  event.cacheHit = reused;
   const rawResults = Array.isArray(data.results) ? data.results.slice(0, numResults) : [];
   const results = rawResults.filter((result) => !isGovernmentFundedMediaSource(result));
   event.excludedGovernmentFundedMedia = rawResults
     .filter((result) => isGovernmentFundedMediaSource(result))
     .map((result) => result.url)
     .filter(Boolean);
-  finishTrace(event, { requestId: data.requestId, costDollars: data.costDollars, results });
+  finishTrace(event, { requestId: data.requestId, costDollars: reused ? 0 : data.costDollars, results });
   return results.map((r) => ({
     ...r,
     ...(official
@@ -586,20 +585,19 @@ export async function fetchExaContents({ urls, writer, fetchFn, trace, kind = 'u
   const url = `${trimTrailingSlash(writer.exaBaseUrl || 'https://api.exa.ai')}/contents`;
   const event = startTrace(trace, { kind, endpoint: '/contents', urls });
   try {
-  const res = await fetchWithRetry(fetchFn, url, {
+  const { data, reused } = await fetchResearchJson(fetchFn, url, {
     method: 'POST',
     headers: {
       'x-api-key': writer.exaApiKey,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ urls, text: true }),
-  }, { timeoutMs: writer.exaTimeoutMs || 45000 });
-  if (!res.ok) throw new Error(`Exa contents failed: ${res.status} ${res.statusText} ${await safeText(res)}`.trim());
-  const data = await res.json();
+  }, writer.exaTimeoutMs || 45000, 'contents');
+  event.cacheHit = reused;
   const results = Array.isArray(data.results) ? data.results : [];
   finishTrace(event, {
     requestId: data.requestId,
-    costDollars: data.costDollars,
+    costDollars: reused ? 0 : data.costDollars,
     results,
     contentStatuses: data.statuses,
   });
@@ -608,4 +606,13 @@ export async function fetchExaContents({ urls, writer, fetchFn, trace, kind = 'u
     failTrace(event, e);
     throw e;
   }
+}
+
+async function fetchResearchJson(fetchFn, url, options, timeoutMs, label = 'search') {
+  const { value, reused } = await reuseTaskRequest('exa', { url, ...options, timeoutMs }, async () => {
+    const response = await fetchWithRetry(fetchFn, url, options, { timeoutMs });
+    if (!response.ok) throw new Error(`Exa ${label} failed: ${response.status} ${response.statusText} ${await safeText(response)}`.trim());
+    return response.json();
+  }, data => Buffer.byteLength(JSON.stringify(data)));
+  return { data: value, reused };
 }

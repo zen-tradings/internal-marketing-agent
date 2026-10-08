@@ -20,7 +20,7 @@ export function finishTrace(event, { requestId, costDollars, results, contentSta
   event.finishedAt = new Date().toISOString();
   event.durationMs = Date.parse(event.finishedAt) - Date.parse(event.startedAt);
   event.requestId = requestId || null;
-  event.costDollars = costDollars || null;
+  event.costDollars = costDollars ?? null;
   event.results = results.map(sourceForTrace);
   if (Array.isArray(contentStatuses)) {
     event.contentStatuses = contentStatuses.map((status) => ({

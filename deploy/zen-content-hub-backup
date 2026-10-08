@@ -12,6 +12,9 @@ artifact_temporary="$backup_dir/.artifacts-$stamp.tar.gz.tmp"
 artifact_snapshot="$backup_dir/artifacts-$stamp.tar.gz"
 manifest_temporary="$backup_dir/.backup-$stamp.sha256.tmp"
 manifest="$backup_dir/backup-$stamp.sha256"
+cost_database="$database.costs.sqlite3"
+cost_snapshot="$backup_dir/costs-$stamp.db"
+maintenance=/opt/zen-content-hub/deploy/zen-content-hub-maintenance.py
 
 install -d -o zenbot -g zenbot -m 0700 "$backup_dir"
 /usr/bin/sqlite3 "$database" ".timeout 5000" ".backup '$temporary'"
@@ -24,15 +27,31 @@ case "$work_dir" in
   *) printf 'Refusing unsafe WORK_DIR for backup: %s\n' "$work_dir" >&2; exit 1 ;;
 esac
 if [ -d "$work_dir" ]; then
-  tar -C "$work_dir" -czf "$artifact_temporary" .
+  tar --sort=name -C "$work_dir" -czf "$artifact_temporary" .
 else
   tar -C "$data_dir" -czf "$artifact_temporary" --files-from /dev/null
 fi
 chmod 0600 "$artifact_temporary"
 mv "$artifact_temporary" "$artifact_snapshot"
+if [ -f "$cost_database" ]; then
+  /usr/bin/sqlite3 "$cost_database" ".timeout 5000" ".backup '$cost_snapshot'"
+  chmod 0600 "$cost_snapshot"
+fi
+if [ -f "$maintenance" ]; then
+  python3 "$maintenance" --deduplicate-archive "$artifact_snapshot" "$backup_dir"
+fi
 (cd "$backup_dir" && sha256sum "$(basename "$snapshot")" "$(basename "$artifact_snapshot")") > "$manifest_temporary"
+if [ -f "$cost_snapshot" ]; then
+  (cd "$backup_dir" && sha256sum "$(basename "$cost_snapshot")") >> "$manifest_temporary"
+fi
 chmod 0600 "$manifest_temporary"
 mv "$manifest_temporary" "$manifest"
 
-# 同盘恢复单元保留 14 天；Droplet 灾难恢复仍需独立的异地备份。
-find "$backup_dir" -maxdepth 1 -type f \( -name 'runs-*.db' -o -name 'artifacts-*.tar.gz' -o -name 'backup-*.sha256' \) -mtime +14 -delete
+# Only complete, hash-verified recovery units are eligible for deletion.
+retention=$(awk -F= '$1 == "BACKUP_RETENTION_DAYS" { print $2 }' "$env_file" | tail -n 1)
+retention=${retention:-3}
+case "$retention" in *[!0-9]*|'') exit 1 ;; esac
+test "$retention" -gt 0
+if [ -f "$maintenance" ]; then
+  python3 "$maintenance" --prune-backups "$backup_dir" "$retention"
+fi

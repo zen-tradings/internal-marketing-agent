@@ -1,3 +1,4 @@
+import { withCostContext } from '../cost-context.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { JSDOM } from 'jsdom';
@@ -30,7 +31,7 @@ export async function convertPdfWithDatalab({
       stage: 'source',
       message: `正在通过 Datalab 解析 PDF${pageRange ? `（页码 ${pageRange}）` : ''}，模式 ${mode}`,
     });
-    result = await submitAndPoll({
+    result = await withCostContext({ stage: 'pdf-conversion', mode }, () => submitAndPoll({
       pdfBuffer,
       filename,
       pageRange,
@@ -42,7 +43,7 @@ export async function convertPdfWithDatalab({
       timeoutMs: positive(config.datalabTimeoutMs, 5 * 60 * 1000),
       pollIntervalMs: positive(config.datalabPollIntervalMs, 2000),
       expectedPageIds,
-    });
+    }));
     attempts.push({
       mode,
       requestId: result.requestId,

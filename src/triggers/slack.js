@@ -1,3 +1,4 @@
+import { COST_STAGE } from '../lib/cost-context.js';
 import { retainSlackMessages } from '../lib/slack-thread-context.js';
 import boltPkg from '@slack/bolt';
 import { extractExplicitEntityVersions, extractUserUrls } from '../core/analysis-v2.js';
@@ -198,7 +199,7 @@ export function createSlackIntentClassifier(config, fetchFn = globalThis.fetch) 
     const timer = setTimeout(() => controller.abort(), 12000);
     try {
       const response = await fetchFn(`${String(writer.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')}/chat/completions`, {
-        method: 'POST',
+        method: 'POST', [COST_STAGE]: 'router',
         signal: controller.signal,
         headers: {
           Authorization: `Bearer ${writer.openrouterApiKey}`,

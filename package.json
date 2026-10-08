@@ -48,7 +48,8 @@
     "check:runtime-offline": "node scripts/check-runtime-offline.mjs",
     "check:backup-restore": "node scripts/check-backup-restore.mjs",
     "check:production-inventory": "node scripts/check-production-inventory.mjs",
-    "check:rollback": "node scripts/check-rollback.mjs"
+    "check:rollback": "node scripts/check-rollback.mjs",
+    "cost:report": "node scripts/cost-report.mjs"
   },
   "dependencies": {
     "@antv/infographic": "^0.2.19",
@@ -71,6 +72,8 @@
     "mermaid": "11.16.1",
     "dompurify": "3.4.16",
     "nanoid": "3.3.18",
-    "@xmldom/xmldom": "^0.9.12"
+    "@xmldom/xmldom": "^0.9.12",
+    "proxy-addr": "2.0.8",
+    "source-map-js": "1.2.2"
   }
 }

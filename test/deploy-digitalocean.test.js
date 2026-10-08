@@ -26,6 +26,9 @@ test('DigitalOcean deploy defaults to read-only preflight and preserves protecte
   assert.deepEqual(parseDeployArgs([]), {
     activate: false,
     syncModelRoles: false,
+    maintenance: false,
+    applyMaintenance: false,
+    retireUnusedQdii: false,
     commit: 'HEAD',
     target: '',
     model: 'z-ai/glm-5.3-flash',

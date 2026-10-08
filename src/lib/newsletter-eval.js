@@ -1,3 +1,4 @@
+import { COST_STAGE } from './cost-context.js';
 // Newsletter quality evaluation. Pure and offline by default: evaluateNewsletter() runs deterministic
 // rubric checks against the email workflow output contract (frontmatter, sectioning, length, links,
 // compliance). judgeNewsletterWithModel() is an optional LLM rubric pass and only runs when explicitly
@@ -209,7 +210,7 @@ export async function judgeNewsletterWithModel(markdown, { config, fetchFn = glo
   if (!writer.openrouterApiKey) throw new Error('OpenRouter is not configured');
   const article = parseNewsletterArticle(markdown);
   const response = await fetchFn(`${String(writer.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')}/chat/completions`, {
-    method: 'POST',
+    method: 'POST', [COST_STAGE]: 'newsletter-eval',
     signal,
     headers: {
       Authorization: `Bearer ${writer.openrouterApiKey}`,

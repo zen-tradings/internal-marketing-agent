@@ -18,6 +18,7 @@ export async function reviewAndRepairArticle({ article, input, research, workflo
   // Without external factual material, announcement/welcome emails still check obvious fabrication but need no citations.
   const prompt = `审查下面的待发布稿件，只依据任务和允许来源判断。检查所有数字、日期、因果关系和关键事实；引用 URL 只能来自允许来源。${referenceInstruction}${legalInstruction}不要改变文章语言、结构或观点，除非为删除无支持内容、修正来源矛盾或修复引用所必需。\n\n返回严格 JSON，不要代码围栏:\n{"approved":true|false,"issues":["..."],"revised_markdown":"完整修订稿；无需修订时留空"}\n\n工作流:${workflow.id}\n任务:${input}\n\n允许来源:${JSON.stringify(allowed)}\n\n待审稿件:\n${article}`;
   const review = await completeReviewJson({
+      inferenceContext: { stage: 'review' },
     prompt,
     model: writer.reviewModel || writer.model,
     writer: { ...writer, temperature: 0 },
@@ -33,6 +34,7 @@ export async function reviewAndRepairArticle({ article, input, research, workflo
   const verificationHistory = [];
   for (let round = 0; round < 2; round++) {
     const verification = await completeReviewJson({
+      inferenceContext: { stage: 'review-verify' },
       prompt: `复核下面修订稿是否已解决列出的问题，且所有数字/事实都由允许来源支持、引用 URL 均在允许来源中，并符合这条引用格式要求:${referenceInstruction} 只返回 JSON:{"approved":true|false,"issues":["..."]}\n\n允许来源:${JSON.stringify(allowed)}\n\n原问题:${JSON.stringify(review.issues || [])}\n\n修订稿:\n${normalized}`,
       model: writer.reviewModel || writer.model,
       writer: { ...writer, temperature: 0 },
@@ -51,6 +53,7 @@ export async function reviewAndRepairArticle({ article, input, research, workflo
       throw new Error(`事实复核未通过:${(verification.issues || ['修订后仍存在问题']).join('; ')}`);
     }
     const followup = await completeReviewJson({
+      inferenceContext: { stage: 'review-followup' },
       prompt: `只修复复核指出的剩余问题，不增加新事实，不改变无关段落。必须返回完整 Markdown。${referenceInstruction}${legalInstruction}\n\n返回 JSON:{"approved":true,"issues":[],"revised_markdown":"完整修订稿"}\n\n允许来源:${JSON.stringify(allowed)}\n\n剩余问题:${JSON.stringify(verification.issues || [])}\n\n当前修订稿:\n${normalized}`,
       model: writer.reviewModel || writer.model,
       writer: { ...writer, temperature: 0 },

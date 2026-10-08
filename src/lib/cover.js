@@ -1,3 +1,4 @@
+import { COST_STAGE } from './cost-context.js';
 import { spawn as nodeSpawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -45,7 +46,7 @@ export async function buildCoverData({ title, markdown, writer, fetchFn = global
     if (!writer || !writer.openrouterApiKey || !writer.model) return null;
     const url = `${trimTrailingSlash(writer.baseUrl || 'https://openrouter.ai/api/v1')}/chat/completions`;
     const request = fetchFn(url, {
-      method: 'POST',
+      method: 'POST', [COST_STAGE]: 'cover',
       signal: controller.signal,
       headers: {
         Authorization: `Bearer ${writer.openrouterApiKey}`,

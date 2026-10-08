@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
+import { maintainProduction } from './maintain-digitalocean.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TARGET_FILE = path.join(REPO_ROOT, 'deploy', 'target.env');
@@ -22,6 +23,8 @@ const REMOTE_DEPLOY_TIMEOUT_MS = 30 * 60 * 1000;
 const REMOTE_DEPLOY_POLL_MS = 5 * 1000;
 
 export const DEPLOY_MANAGED_ENV_KEYS = Object.freeze([
+  'RUN_RETENTION_DAYS',
+  'BACKUP_RETENTION_DAYS',
   'MAX_CONCURRENCY',
   'BROWSER_CONCURRENCY',
   'WECHAT_WRITE_CONCURRENCY',
@@ -76,6 +79,9 @@ export function parseDeployArgs(argv) {
   const parsed = {
     activate: false,
     syncModelRoles: false,
+    maintenance: false,
+    applyMaintenance: false,
+    retireUnusedQdii: false,
     commit: 'HEAD',
     target: '',
     model: DEFAULT_MODEL,
@@ -100,6 +106,9 @@ export function parseDeployArgs(argv) {
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === '--activate') parsed.activate = true;
+    else if (arg === '--maintenance') parsed.maintenance = true;
+    else if (arg === '--apply-maintenance') parsed.applyMaintenance = true;
+    else if (arg === '--retire-unused-qdii') parsed.retireUnusedQdii = true;
     else if (arg === '--sync-model-roles') parsed.syncModelRoles = true;
     else if (arg === '--sync-discord-config') parsed.syncDiscordConfig = true;
     else if (['--commit', '--target', '--model', '--translation-model', '--reasoning', '--planner-model', '--planner-reasoning', '--max-concurrency', '--opening-digest-model', '--opening-digest-wechat-enabled', '--opening-digest-segment-id', '--options-strategy-model', '--options-strategy-reasoning', '--options-strategy-max-tokens', '--options-strategy-timeout-ms'].includes(arg)) {
@@ -470,6 +479,12 @@ if [ "$current_planner" != "$planner_model" ]; then
 fi
 
 phase=stage-release
+# Installation, validation and a complete recovery unit need temporary space.
+available_kb=$(df -Pk /opt | awk 'NR == 2 { print $4 }')
+if [ "$available_kb" -lt 8388608 ]; then
+  printf 'deployment_blocked=insufficient-disk; run reviewed maintenance first\n' >&2
+  exit 1
+fi
 sudo install -d -o zenbot -g zenbot -m 0750 "$stage"
 sudo tar -xzf "$archive" -C "$stage"
 printf '%s\n' "$sha" | sudo tee "$stage/.deploy-commit" >/dev/null
@@ -539,6 +554,8 @@ env_changed=1
 update_env OPENING_DIGEST_WECHAT_ENABLED "$opening_digest_wechat_enabled"
 update_env OPENING_DIGEST_MODEL "$opening_digest_model"
 update_env MAX_CONCURRENCY "$max_concurrency"
+update_env RUN_RETENTION_DAYS 14
+update_env BACKUP_RETENTION_DAYS 3
 update_env BROWSER_CONCURRENCY 1
 update_env WECHAT_WRITE_CONCURRENCY 1
 update_env CUSTOMERIO_WRITE_CONCURRENCY 1
@@ -821,6 +838,17 @@ exit "$code"
 
 export async function main(argv = process.argv.slice(2)) {
   const options = parseDeployArgs(argv);
+  if (options.maintenance) {
+    if (options.activate || options.syncModelRoles || argv.some(arg => !['--maintenance', '--apply-maintenance', '--retire-unused-qdii'].includes(arg))) throw new Error('Maintenance must be used separately');
+    const target = loadDeployTarget();
+    const before = preflightRemote(target);
+    console.log(JSON.stringify(await maintainProduction({ target, activeCommit: before.active_commit,
+      apply: options.applyMaintenance, retireQdii: options.retireUnusedQdii }), null, 2));
+    const after = preflightRemote(target);
+    if (before.active_commit !== after.active_commit) throw new Error('Active release changed during maintenance');
+    return;
+  }
+  if (options.applyMaintenance || options.retireUnusedQdii) throw new Error('Maintenance flags require --maintenance');
   if (options.syncModelRoles) {
     if (argv.length !== 1) throw new Error('--sync-model-roles must be used alone');
     const target = loadDeployTarget();
@@ -916,6 +944,12 @@ export async function main(argv = process.argv.slice(2)) {
     discordConfig,
   });
   console.log(output.trim());
+  // Deployment has succeeded. Cleanup failure preserves assets and does not
+  // undo a healthy release or report an already-completed deployment as failed.
+  try {
+    const after = preflightRemote(target);
+    console.log(JSON.stringify(await maintainProduction({ target, activeCommit: after.active_commit, apply: true }), null, 2));
+  } catch (error) { console.error('Release cleanup preserved assets:', error.message); }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

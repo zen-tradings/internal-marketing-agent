@@ -1,3 +1,4 @@
+import { COST_STAGE } from '../lib/cost-context.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -360,7 +361,7 @@ export async function generateQdiiAnalysis(payload, { config, fetchFn = globalTh
   const evidence = (payload.results || []).map((fund) => qdiiEvidenceText(fund)).join('\n\n');
   const language = payload.query?.language === 'zh' ? 'Chinese' : 'English';
   const response = await fetchFn(`${String(writer.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')}/chat/completions`, {
-    method: 'POST',
+    method: 'POST', [COST_STAGE]: 'qdii-analysis',
     signal,
     headers: {
       Authorization: `Bearer ${writer.openrouterApiKey}`,

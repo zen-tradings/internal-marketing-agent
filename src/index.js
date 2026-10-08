@@ -3,6 +3,10 @@ import { acquireInstanceLock } from './core/instance-lock.js';
 import { makeHandler, cleanupRunArtifacts } from './core/task-handler.js';
 export { runWithRetry, openingDigestPublishContext, makeHandler, cleanupRunArtifacts } from './core/task-handler.js';
 import { pruneHistory } from './core/retention.js';
+import { importLegacyCosts } from './core/cost-import.js';
+import { openCostStore } from './core/cost-store.js';
+import { createCostAwareFetch } from './lib/cost-telemetry.js';
+import { withCostContext } from './lib/cost-context.js';
 
 import dotenv from 'dotenv';
 
@@ -61,16 +65,27 @@ const CHANNELS = {
 
 export async function start() {
   const config = installRuntimeConfig(loadConfig());
+  let costs;
+  let legacyCostsSaved = false;
   const governor = installResourceGovernor(createResourceGovernor({
     ...config.resources,
-    fetchFn: globalThis.fetch,
+    fetchFn: createCostAwareFetch(globalThis.fetch, {
+      writer: config.writer, translation: config.translation, openingDigest: config.openingDigest,
+      record: event => costs?.record(event),
+    }),
   }));
   validateCronConfiguration({ workflows: WORKFLOWS, timezone: config.cronTimezone });
   const instanceLock = acquireInstanceLock(config.dbPath);
   process.once('exit', () => instanceLock.release());
   let store;
   try { store = openStore(config.dbPath); } catch (error) { instanceLock.release(); throw error; }
-  pruneHistory({ store, workflows: WORKFLOWS, config });
+  try {
+    costs = openCostStore(`${config.dbPath}.costs.sqlite3`);
+    costs.prune();
+    console.log('[hub] 历史费用保存:', JSON.stringify(importLegacyCosts({ costs, workflows: WORKFLOWS })));
+    legacyCostsSaved = true;
+  } catch (error) { console.error('[hub] 费用账本暂不可用:', error.message); }
+  if (legacyCostsSaved) pruneHistory({ store, workflows: WORKFLOWS, config });
   // Long translations persist chunk checkpoints and can safely resume after restart.
   // Other workflows remain interrupted pending explicit confirmation to avoid duplicate drafts.
   store.recoverPublications();
@@ -129,7 +144,9 @@ export async function start() {
     ]).finally(() => { deliveryFlushPromise = undefined; });
     return deliveryFlushPromise;
   };
-  const handler = makeHandler(deps);
+  const taskHandler = makeHandler(deps);
+  const handler = (run, options) => withCostContext({ runId: run.id, workflowId: run.workflowId,
+    signal: options?.signal, requestCache: new Map(), cacheBytes: 0 }, () => taskHandler(run, options));
 
   const queue = createQueue({
     store,
@@ -266,7 +283,7 @@ export async function start() {
   outboxTimer.unref?.();
   const retentionTimer = setInterval(() => {
     if (!shuttingDown) {
-      try { pruneHistory({ store, workflows: WORKFLOWS, config }); }
+      try { if (legacyCostsSaved) pruneHistory({ store, workflows: WORKFLOWS, config }); costs?.prune(); }
       catch (error) { console.error('[hub] 定期清理失败:', error.message); }
     }
   }, 60 * 60 * 1000);
@@ -306,6 +323,7 @@ export async function start() {
     });
     await Promise.race([Promise.all([queue.whenIdle(), deliveryFlushPromise].filter(Boolean)), timeout]);
     try { store.close(); } catch {}
+    try { costs?.close(); } catch {}
     process.exit(exitCode);
   }
   process.once('SIGTERM', () => { void shutdown('SIGTERM', 0); });

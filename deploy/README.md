@@ -600,18 +600,52 @@ sudo systemctl status zen-content-hub-backup.timer
 ```
 
 Snapshots are written to `/var/lib/zen-content-hub/backups/` and retained for
-14 days. Each timestamp contains a SQLite snapshot, a compressed `WORK_DIR`
-artifact/checkpoint snapshot, and a SHA-256 manifest. Restore and verify the
+3 days. Each timestamp contains a SQLite snapshot, a compressed `WORK_DIR`
+artifact/checkpoint snapshot, an optional content-free cost ledger snapshot, and a SHA-256 manifest. The cost ledger is retained for 90 days independently of 14-day task/material retention. Restore and verify the
 database and artifact archive as one recovery unit. These files protect against
 application-level mistakes but remain on the same Droplet; use a separately
 confirmed off-host or DigitalOcean backup for Droplet-level disaster recovery,
 and periodically test a restore into an isolated release directory.
 
-Release directories and uploaded `/tmp/zen-content-hub-*.tar` archives are not
-automatically pruned. Inventory them after live verification, preserve the
-active directory and the rollback releases required by the current retention
-decision, and remove only explicit reviewed paths. Never use a recursive
-wildcard that could match `/opt/zen-content-hub`.
+Deployments require 8 GiB of free space before staging. After successful activation,
+maintenance preserves the active release and the newest two verified rollback releases.
+It compares tracked files against local Git archives, rejects unique or modified files,
+checks process references and runs each candidate's rollback reader. Unknown, damaged,
+referenced or incompatible directories remain untouched. If two compatible rollback
+releases cannot be proved, cleanup stops. Uploaded archives are not included in this
+release cleanup.
+
+Use the existing deployment entry point for a read-only inventory or an explicit cleanup:
+
+```bash
+npm run deploy:digitalocean -- --maintenance
+npm run deploy:digitalocean -- --maintenance --apply-maintenance
+```
+
+Maintenance verifies DigitalOcean metadata, readiness and an idle queue. It verifies
+and actually restores the newest backup into an isolated temporary directory before
+removing expired complete units. Daily backup pruning uses the same restoration check;
+invalid or incomplete units remain protected. Byte-identical artifact archives share
+storage through hard links without changing the manifest or restore format. Each
+snapshot still contains all material required for its database, including pending work.
+
+The confirmed-unused independent `qdii-wechat` service can be retired with:
+
+```bash
+npm run deploy:digitalocean -- --maintenance --apply-maintenance --retire-unused-qdii
+```
+
+This archives `/opt/qdii-wechat`, `/etc/qdii-wechat` and the effective systemd unit into
+a private `/var/lib/zen-content-hub/retired-qdii-<timestamp>.tar.gz`, verifies the archive,
+then stops and disables that independent service. Original files remain in place;
+restore its configuration/unit and explicitly enable the service to roll back retirement.
+Zen Content Hub's internal QDII workflow is unaffected. Verify external callback users
+before using this flag for another installation.
+
+Maintenance runs as a bounded supervised job with a status file. A lost connection
+never launches a second cleanup automatically; inspect the reported status/error paths
+before retrying. Never remove instance locks or overwrite a newer live database to
+facilitate cleanup or rollback.
 
 
 ## Instance ownership, migrations and guarded rollback
@@ -625,3 +659,17 @@ Before a manual rollback, stop the sole service and use the new release's `npm r
 CI installs pinned Python dependencies, Chromium and Poppler, then runs `check:runtime-offline`, `check:backup-restore` and the full `check`. Release staging runs the same offline acceptance before the backup and switch. The runtime test disables fixture network access, generates and reads a real PDF, renders PNGs, and exercises both Python workers. The restoration drill uses synthetic records, including an ambiguous write and pending outboxes; it does not establish production backup recoverability or off-host protection.
 
 `npm run check:production-inventory` is a separate read-only inventory. It validates DigitalOcean metadata for the configured target, checks service resource counters and the latest local backup manifest, and attempts the existing doctl account's Droplet backup listing. A missing CLI/account or empty listing is not evidence of an off-host backup. Record provider backup timestamps or independent off-host transfer/restore evidence before declaring disaster recovery verified.
+
+## Cost ledger recovery and reporting
+
+The cost ledger is a separate versioned database, not a publication-schema migration.
+Old application releases can leave it intact during rollback. Restore the optional
+`costs-<timestamp>.db` beside `runs.db` as `runs.db.costs.sqlite3`; verify its integrity
+and retain ownership for `zenbot`. A legacy two-file backup remains valid.
+
+Run `npm run cost:report` inside the active release with the production environment
+loaded, or provide `--ledger` and `--configuration` explicitly. It reads only local
+usage metadata; it does not refresh provider bills or make paid calls. Unknown cost
+receipts and partial legacy coverage must remain visible. Do not add provider top-ups
+to metered costs. Fixed or shared Exa, Datalab and Customer.io allocations need separate
+billing evidence.

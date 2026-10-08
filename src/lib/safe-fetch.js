@@ -1,3 +1,4 @@
+import { costContext } from './cost-context.js';
 import dns from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
@@ -6,6 +7,7 @@ import { Readable } from 'node:stream';
 import { fetchUsesGlobalTransport, rebindFetchTransport } from './task-cancellation.js';
 import { fetchWithTimeout } from './http-timeout.js';
 import { isLinearUploadUrl } from './linear.js';
+import { reuseTaskRequest } from './task-request-cache.js';
 const DEFAULT_FETCH_LIMITS = { maxSourceBytes: 50 * 1024 * 1024, maxRedirects: 5, fetchTimeoutMs: 30000 };
 
 export async function assertSafeHttpUrl(rawUrl, { dnsLookup = dns.lookup } = {}) {
@@ -118,7 +120,19 @@ function matchesIpv6Prefix(bytes, prefix, bits) {
   return (bytes[whole] & mask) === (prefixBytes[whole] & mask);
 }
 
-export async function safeFetchResource({
+export async function safeFetchResource(options) {
+  // Completed bytes have already passed DNS, redirect, size and auth stripping
+  // checks. Include every acquisition constraint in the per-task fingerprint.
+  const { value } = await reuseTaskRequest('safe-download', {
+    url: options.url, method: options.method || 'GET', body: options.body,
+    headers: options.headers || {}, accept: options.accept,
+    limits: options.limits || DEFAULT_FETCH_LIMITS, maxBytes: options.maxBytes,
+  }, () => downloadSafeResource(options), result => result.buffer.length);
+  return costContext().requestCache && value.buffer.length <= 8 * 1024 * 1024
+    ? { ...value, buffer: Buffer.from(value.buffer) } : value;
+}
+
+async function downloadSafeResource({
   url,
   fetchFn = globalThis.fetch,
   fetchWithRetry,
@@ -278,4 +292,3 @@ function pinnedHttpFetch(addresses) {
     });
   };
 }
-

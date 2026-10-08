@@ -66,7 +66,7 @@ export function loadConfig(env = process.env) {
     maxQueueSize: positiveIntegerOrThrow(env.MAX_QUEUE_SIZE, 100, 'MAX_QUEUE_SIZE'),
     resources,
     defaultTimeoutMs: positiveNumber(env.DEFAULT_TIMEOUT_MS, 10 * 60 * 1000, 'DEFAULT_TIMEOUT_MS'),
-    runRetentionDays: positiveIntegerOrThrow(env.RUN_RETENTION_DAYS, 90, 'RUN_RETENTION_DAYS'),
+    runRetentionDays: positiveIntegerOrThrow(env.RUN_RETENTION_DAYS, 14, 'RUN_RETENTION_DAYS'),
     slackThreadRetentionDays: positiveIntegerOrThrow(env.SLACK_THREAD_RETENTION_DAYS, 30, 'SLACK_THREAD_RETENTION_DAYS'),
     cronTimezone: env.CRON_TIMEZONE || 'America/Los_Angeles',
     health: {

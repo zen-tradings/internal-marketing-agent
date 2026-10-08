@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
+import { openCostStore } from '../src/core/cost-store.js';
 import { openStore } from '../src/core/store.js';
 import { runWorkDir } from '../src/lib/run-workdir.js';
 
@@ -26,12 +27,19 @@ export function restoreUnit(manifest, destination) {
   });
   const database = entries.find(name => /\/runs-[^/]+\.db$/.test(name));
   const archive = entries.find(name => /\/artifacts-[^/]+\.tar\.gz$/.test(name));
-  if (entries.length !== 2 || !database || !archive) throw new Error('恢复单元必须同时包含数据库和资产归档');
+  const costs = entries.find(name => /\/costs-[^/]+\.db$/.test(name));
+  if (entries.length !== (costs ? 3 : 2) || !database || !archive) throw new Error('恢复单元必须同时包含数据库和资产归档');
   const names = tar(['-tzf', archive]).split('\n').filter(Boolean);
   if (names.some(name => path.isAbsolute(name) || name.split('/').includes('..'))) throw new Error('归档路径越界');
   if (tar(['-tvzf', archive]).split('\n').some(line => /^[lh]/.test(line))) throw new Error('隔离恢复不接受符号链接或硬链接资产');
   fs.mkdirSync(path.join(destination, 'work'), { recursive: true, mode: 0o700 });
   fs.copyFileSync(database, path.join(destination, 'runs.db'));
+  if (costs) {
+    const reader = new Database(costs, { readonly: true });
+    try { assert.equal(reader.pragma('integrity_check', { simple: true }), 'ok'); }
+    finally { reader.close(); }
+    fs.copyFileSync(costs, path.join(destination, 'runs.db.costs.sqlite3'));
+  }
   tar(['-xzf', archive, '-C', path.join(destination, 'work'), '--no-same-owner']);
   const db = new Database(path.join(destination, 'runs.db'), { readonly: true });
   try {
@@ -62,11 +70,15 @@ export async function rehearseBackupRestore() {
       const reader = new Database(database, { readonly: true });
       try { await reader.backup(path.join(root, 'runs-fixture.db')); } finally { reader.close(); }
     } finally { store.close(); }
+    const costs = openCostStore(path.join(root, 'costs-fixture.db'));
+    try { costs.record({ attemptId: 'fixture-usage', vendor: 'openrouter', costUsd: null }); } finally { costs.close(); }
     tar(['-czf', path.join(root, 'artifacts-fixture.tar.gz'), '-C', work, '.']);
     const manifest = path.join(root, 'backup-fixture.sha256');
-    fs.writeFileSync(manifest, ['runs-fixture.db', 'artifacts-fixture.tar.gz'].map(name => `${hash(path.join(root, name))}  ${name}`).join('\n'));
+    fs.writeFileSync(manifest, ['runs-fixture.db', 'artifacts-fixture.tar.gz', 'costs-fixture.db'].map(name => `${hash(path.join(root, name))}  ${name}`).join('\n'));
     const destination = path.join(root, 'restored');
     const result = restoreUnit(manifest, destination);
+    const costReader = new Database(path.join(destination, 'runs.db.costs.sqlite3'), { readonly: true });
+    try { assert.equal(costReader.prepare('SELECT cost_usd FROM cost_events WHERE attempt_id=?').get('fixture-usage').cost_usd, null); } finally { costReader.close(); }
     const restored = openStore(path.join(destination, 'runs.db'));
     try {
       assert.equal(restored.getRun(run.id).status, 'needs_review');
@@ -78,7 +90,7 @@ export async function rehearseBackupRestore() {
     // A tampered recovery unit is rejected before extraction.
     fs.appendFileSync(path.join(root, 'artifacts-fixture.tar.gz'), 'tamper');
     assert.throws(() => restoreUnit(manifest, path.join(root, 'tampered')), /校验和/);
-    return { ...result, checkpoint: 'preserved', pendingOutboxes: 'preserved', ambiguousWrite: 'preserved', tampering: 'rejected', scope: 'isolated synthetic backup, no production data' };
+    return { ...result, costLedger: 'preserved', checkpoint: 'preserved', pendingOutboxes: 'preserved', ambiguousWrite: 'preserved', tampering: 'rejected', scope: 'isolated synthetic backup, no production data' };
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

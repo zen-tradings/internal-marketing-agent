@@ -1,3 +1,5 @@
+import { RESPONSE_USAGE, observeResponseUsage } from './response-usage.js';
+
 // Keep deadlines and resource permits alive until the body is consumed, cancelled,
 // or fails. A zero-sized queue avoids eagerly buffering an unconsumed response.
 export function manageResponseBody(response, { signal, onDone = () => {} } = {}) {
@@ -46,5 +48,5 @@ export function manageResponseBody(response, { signal, onDone = () => {} } = {})
   for (const key of ['url', 'redirected', 'type']) {
     Object.defineProperty(wrapped, key, { value: response[key] });
   }
-  return wrapped;
+  return observeResponseUsage(wrapped, response[RESPONSE_USAGE]);
 }

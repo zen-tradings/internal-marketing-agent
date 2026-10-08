@@ -142,6 +142,37 @@ If you need to recover a failed run, use the restricted commands in the
 [deployment guide](deploy/README.md). Do not edit SQLite task states by hand or retry an uncertain
 publish operation.
 
+## Cost reporting and retention
+
+The service records content-free OpenRouter, Exa and Datalab usage in
+`<DB_PATH>.costs.sqlite3`. Each HTTP attempt is preserved across generation retries;
+provider request IDs prevent duplicate billing receipts. Missing prices remain unknown.
+Costs survive task deletion for 90 days. Legacy trace import is partial and does not
+establish a full month or current-model baseline.
+
+```bash
+npm run cost:report -- --month 2026-09
+# Optional explicit ledger, timezone, configuration hash and allocation file:
+npm run cost:report -- --ledger /path/to/runs.db.costs.sqlite3 --month 2026-09 --timezone America/Los_Angeles --billing /path/to/allocations.json
+```
+
+The report separates calendar month, rolling 30 days, current configuration, metered
+usage, subscriptions, top-ups, credits and shared charges. Allocation JSON accepts
+`fixedSubscriptions`, `topUps`, `credits`, `sharedFees` and `unallocatedVendors` arrays;
+provider-wide charges must not be treated as project costs without allocation evidence.
+Use the production environment when calculating the current configuration hash.
+Reporting reads the local ledger and makes no external calls.
+
+Tasks and their materials default to 14 days; pending notifications, deliveries,
+publication reconciliation and review tasks remain protected. Complete local backups
+retain 3 days; verified active and two rollback releases are kept after deployment.
+Identical searches and downloads are shared only within the same task, including its
+generation retries; the cache is bounded at 8 MiB and 256 entries. Quality gates,
+source policies and resource concurrency remain in force.
+
+See [the implementation review](docs/cost-optimization.md) and
+[production maintenance instructions](deploy/README.md) for validation and rollback.
+
 ## Find the code you need
 
 | To change | Start here |

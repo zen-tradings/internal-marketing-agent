@@ -1,3 +1,4 @@
+import { withCostContext } from '../lib/cost-context.js';
 import { isDryRun } from '../config/runtime.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -60,12 +61,12 @@ export async function flushOpeningDigestWechatOutbox({
       const envelope = parsePayload(row.payload_json);
       const payload = prepareOpeningDigestWechatPayload(envelope.openingPayload);
       const artifactDir = runWorkDir(path.join(config.workDir, 'opening-digest'), row.run_id);
-      const translated = await translatePayload(payload, {
+      const translated = await withCostContext({ runId: row.run_id, workflowId: 'opening-digest' }, () => translatePayload(payload, {
         writer: config.writer,
         fetchFn,
         cacheDir: artifactDir,
         timeoutMs: config.defaultTimeoutMs,
-      });
+      }));
       const prior = store.listDeliveries(row.run_id).find((item) => item.destination === DESTINATION);
       mediaId = String(prior?.media_id || '');
       const remoteOperations = {

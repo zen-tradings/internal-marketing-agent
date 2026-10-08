@@ -1,5 +1,7 @@
 import { RESOURCE_TELEMETRY } from '../resource-governor.js';
 import { fetchWithRetry } from '../../lib/fetch-retry.js';
+import { COST_STAGE } from '../../lib/cost-context.js';
+import { knownNumber } from '../../lib/cost-telemetry.js';
 
 export const DEFAULT_SYSTEM_PROMPT = `你是 Zen Trading 公众号分析师。你会基于系统提供的调研素材写中文金融分析文章。
 
@@ -91,6 +93,7 @@ export async function completeArticle({
       try {
         res = await fetchWithRetry(fetchFn, url, {
         method: 'POST',
+        [COST_STAGE]: inferenceContext?.stage || 'writing',
         signal: controller.signal,
         [RESOURCE_TELEMETRY]: (event) => {
           queueWaitMs += Number(event?.queueWaitMs) || 0;
@@ -215,7 +218,9 @@ export function buildInferenceTelemetry({
     promptTokens: Number(usage.prompt_tokens) || 0,
     completionTokens: Number(usage.completion_tokens) || 0,
     reasoningTokens: Number(usage.completion_tokens_details?.reasoning_tokens) || 0,
-    cost: Number(usage.cost) || 0,
+    cost: knownNumber(usage.cost),
+    cachedTokens: knownNumber(usage.prompt_tokens_details?.cached_tokens),
+    cacheWriteTokens: knownNumber(usage.prompt_tokens_details?.cache_write_tokens),
     outcome: outcome || (error ? 'error' : 'completed'),
     ...(error ? { error: String(error?.message || error).slice(0, 300) } : {}),
   };
@@ -241,6 +246,10 @@ export function summarizeInferenceTelemetry(requests) {
     completionTokens: sum('completionTokens'),
     reasoningTokens: sum('reasoningTokens'),
     cost: sum('cost'),
+    knownCostRequests: values.filter(item => knownNumber(item?.cost) !== null).length,
+    unknownCostRequests: values.filter(item => knownNumber(item?.cost) === null).length,
+    cachedTokens: sum('cachedTokens'),
+    cacheWriteTokens: sum('cacheWriteTokens'),
   };
 }
 

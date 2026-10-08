@@ -131,3 +131,22 @@ test('Discord unknown POST result enters review and cannot be posted again', asy
   assert.equal(posts, 1);
   assert.equal(store.listDeliveries('run').find(r => r.destination === 'discord').status, 'needs_review');
 });
+
+test('14-day cleanup deletes only expired material and protects pending deliveries and review assets', async (t) => {
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const { runWorkDir } = await import('../src/lib/run-workdir.js');
+  const { pruneHistory } = await import('../src/core/retention.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'retention-'));
+  const store = openStore(':memory:'); t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const now = Date.now(), day = 86400000;
+  for (const [id, age, status] of [['old', 15, 'done'], ['recent', 13, 'done'], ['pending', 15, 'done'], ['review', 15, 'needs_review']]) {
+    store.createRun({ id, workflowId: 'translate', source: 'slack', input: 'fixture' });
+    store.setStatus(id, status, { finishedAt: now - age * day });
+    const directory = runWorkDir(root, id); fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, 'checkpoint.json'), 'unique fixture');
+  }
+  store.queueDeliveryOutbox({ runId: 'pending', destination: 'discord', payloadJson: '{}', payloadSha256: 'hash' });
+  const result = pruneHistory({ store, workflows: { translate: { workDir: root } }, config: { runRetentionDays: 14, slackThreadRetentionDays: 30 }, now });
+  assert.equal(result.runs, 1); assert.equal(fs.existsSync(runWorkDir(root, 'old')), false);
+  for (const id of ['recent', 'pending', 'review']) { assert.ok(store.getRun(id)); assert.ok(fs.existsSync(runWorkDir(root, id))); }
+});

@@ -1,3 +1,4 @@
+import { COST_STAGE } from './cost-context.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -472,7 +473,7 @@ async function completeTranslation({ units, writer, fetchFn, round, timeoutMs })
   const prompt = `将下列 Opening Digest 文本块完整直译为简体中文，保留机构研报语气和必要的金融术语。允许自然调整中文语序、衔接和措辞，使主语明确、句子顺畅；不得摘要、解释、增删或改写事实、判断与观察条件。严格保留否定、条件、验证或失效方向、因果强度和不确定性，不得把可能性改成确定结论。输入已专门为微信净化，不含来源 URL 或引用标记，不得自行补充链接、脚注或出处。kind=headline 的标题允许在不改变判断、方向、条件和因果强度的前提下紧凑本地化；标题标点也计入长度，15 至 ${OPENING_DIGEST_ZH_HEADLINE_MAX_CHARS} 个字符之内均可，硬上限为 ${OPENING_DIGEST_ZH_HEADLINE_MAX_CHARS} 个字符，不得为缩短字数而删改语义。严格保留所有数字、百分比、Ticker、指数代码、型号、时间和机构品牌。每个形如 ⟦ZEN_KEEP_AAA⟧ 的占位符都代表一个不可变原文 token：必须逐字保留，而且每块中占位符的数量、拼写和顺序必须完全不变。公司品牌与无法可靠判断的专名保留原文；只翻译法律后缀和通用描述，例如 NVIDIA Corporation -> NVIDIA 公司。保留 Markdown 行内标记。返回与输入 ID 数量、顺序完全一致的 JSON。${round ? `这是第 ${round} 次局部修复，重点修复每块 issues。` : ''}\n\n${JSON.stringify(units)}`;
   try {
     const response = await fetchFn(`${String(writer.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')}/chat/completions`, {
-      method: 'POST', signal: controller.signal,
+      method: 'POST', [COST_STAGE]: 'opening-digest-translation', signal: controller.signal,
       headers: {
         Authorization: `Bearer ${writer.openrouterApiKey}`,
         'Content-Type': 'application/json',
