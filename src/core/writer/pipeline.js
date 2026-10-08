@@ -357,7 +357,7 @@ export async function runWriter({
       throw new Error(`生成输入超过全局上限:${prompt.length}/${maxPromptChars} 字符;请减少链接或缩短素材`);
     }
     const truncationSignal = {};
-    const content = await completeArticle({
+    let content = await completeArticle({
       prompt,
       model,
       writer: generationWriter,
@@ -372,6 +372,28 @@ export async function runWriter({
     }
     let article = renderQuarterlyCharts(normalizeArticle(content));
     if (workflow.id === 'opening-digest') article = normalizeOpeningDigestCitations(article, research);
+    if (workflow.id === 'opening-digest' && !hasTitleFrontmatter(article)) {
+      const rejectedPath = path.join(workflow.workDir, 'opening-digest-rejected-output.md');
+      fs.writeFileSync(rejectedPath, content, { mode: 0o600 });
+      trace.openingDigestFormatRecovery = { attempted: true, recovered: false, rejectedPath };
+      writeResearchTrace(researchTracePath, trace);
+      const recoveryTruncation = {};
+      content = await completeArticle({
+        prompt: `${prompt}\n\nThe previous response omitted the required YAML title frontmatter. Return the complete evidence-bound article again. Begin with --- on its own line, then title: Zen Opening Digest and every other required metadata field, close with --- on its own line, and include the full Markdown body. Do not return an explanation, JSON, or a code fence.`,
+        model,
+        writer: { ...generationWriter, temperature: 0 },
+        fetchFn,
+        timeoutMs: generationTimeoutMs,
+        systemPrompt: workflow.systemPrompt,
+        truncationSignal: recoveryTruncation,
+      });
+      throwIfTaskCancelled(signal);
+      if (recoveryTruncation.truncated) {
+        throw new Error('写作输出被 max_tokens 截断(finish_reason=length);请提高 OPENROUTER_MAX_TOKENS 后重试');
+      }
+      article = normalizeOpeningDigestCitations(renderQuarterlyCharts(normalizeArticle(content)), research);
+      trace.openingDigestFormatRecovery.recovered = hasTitleFrontmatter(article);
+    }
     if (!hasTitleFrontmatter(article)) {
       throw new Error('OpenRouter 输出缺少 title frontmatter');
     }
@@ -639,6 +661,6 @@ export function openingDigestFallbackArticle(asOf) {
 }
 
 export function isOpeningDigestEditorialModelFailure(error) {
-  return /(?:OpenRouter completion failed|OpenRouter returned empty content|OpenRouter returned malformed JSON response|OpenRouter completion timed out)/i
+  return /(?:OpenRouter completion failed|OpenRouter returned empty content|OpenRouter returned malformed JSON response|OpenRouter completion timed out|OpenRouter 输出缺少 title frontmatter|写作输出被 max_tokens 截断)/i
     .test(String(error?.message || error || ''));
 }

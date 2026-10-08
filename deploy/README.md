@@ -432,10 +432,11 @@ The command refuses any recorded publication or another sent formal edition.
 The service restores this queued task on its next maintainer-directed restart;
 verify the resulting email delivery and derived-channel records afterward.
 
-### Correcting a data-only attribution-conflict edition
+### Correcting a technical data-only edition
 
 If a formal edition was published as a data-only placeholder after an unresolved
-attribution conflict, hold any scheduled original Customer.io send and verify that
+attribution conflict or the exact `OpenRouter 输出缺少 title frontmatter` error,
+hold any scheduled original Customer.io send and verify that
 hold with its operation record before queuing a correction. The correction command
 requires the original current-day run, its trace, a completed original email
 record, a confirmed `postpone-opening-email` operation, and an idle queue:
@@ -452,8 +453,14 @@ the queued run. The resend has a distinct internal Customer.io identity but uses
 the ordinary recipient-facing subject, headline, and body. It sends immediately
 when the regular 10:15 ET window has passed, and freezes its email and
 Discord/WeChat payloads through the normal publication journal. Confirm all
-three delivery records and retire the held original email afterward. Never
+three delivery records and cancel the held original email's schedule afterward
+(Customer.io `/schedule` with `scheduled_at: 0`, journaled and read back). Never
 reuse the original newsletter ID or resend its frozen payload.
+
+Opening Digest normalizes CRLF line endings and regenerates a malformed-title
+response once before any publication, saving the rejected output in the isolated
+run directory. A second malformed response or truncated output fails generation;
+neither can be published as a technical placeholder.
 
 
 New formal cron runs recover automatically through the SQLite `delivery_outbox`: transient translation and WeChat failures retry across restarts. Each journaled create operation issues at most one `draft/add`; uncertain results and known `media_id` values use read-only reconciliation during ordinary recovery. Unresolved or mismatched historical drafts remain `needs_review`. The cover upgrade does not recreate drafts or replace existing covers. The command below is retained only for historical runs created before durable WeChat delivery was introduced.

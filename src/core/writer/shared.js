@@ -616,7 +616,7 @@ export function sourceExcerptLimitFor(workflow) {
 }
 
 export function normalizeArticle(content) {
-  const trimmed = String(content || '').trim();
+  const trimmed = String(content || '').replace(/\r\n?/g, '\n').trim();
   const fenced = trimmed.match(/^```(?:markdown|md)?\s*([\s\S]*?)\s*```$/i);
   return fenced ? fenced[1].trim() : trimmed;
 }

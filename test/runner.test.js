@@ -881,6 +881,64 @@ test('Opening Digest 正文模型失败时硬停，不发布技术占位稿', as
   assert.equal(trace.contentMode, undefined);
 });
 
+test('Opening Digest regenerates a missing-title response once before accepting a full draft', async () => {
+  const workflow = openingWorkflow({ factReview: false });
+  const draft = '---\ntitle: Zen Opening Digest\n---\nA supported observation.';
+  let calls = 0;
+  const result = await runWriter({ workflow, input: 'opening', config: baseConfig(),
+    fetchFn: async (url, options) => {
+      if (String(url).endsWith('/search')) return jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/a', text: 'Supported market fact.' }] });
+      calls++;
+      if (calls === 2) assert.match(JSON.parse(options.body).messages[1].content, /previous response omitted/);
+      return jsonResponse({ choices: [{ message: { content: calls === 1 ? 'Missing metadata.' : draft } }] });
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.contentMode, 'editorial');
+  assert.equal(calls, 2);
+  assert.equal(fs.readFileSync(result.articlePath, 'utf8'), draft);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath));
+  assert.equal(trace.openingDigestFormatRecovery.recovered, true);
+  assert.equal(fs.readFileSync(trace.openingDigestFormatRecovery.rejectedPath, 'utf8'), 'Missing metadata.');
+});
+
+test('Opening Digest stops after two malformed-title responses without publishing a placeholder', async () => {
+  const workflow = openingWorkflow({ factReview: false });
+  let calls = 0;
+  const result = await runWriter({ workflow, input: 'opening', config: baseConfig(),
+    fetchFn: async (url) => {
+      if (String(url).endsWith('/search')) return jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/a', text: 'Supported market fact.' }] });
+      calls++;
+      return jsonResponse({ choices: [{ message: { content: 'Missing metadata.' } }] });
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(calls, 2);
+  assert.match(result.stderr, /title frontmatter/);
+  assert.equal(fs.existsSync(result.articlePath), false);
+  const trace = JSON.parse(fs.readFileSync(result.researchTracePath));
+  assert.equal(trace.contentMode, undefined);
+  assert.equal(trace.openingDigestFormatRecovery.recovered, false);
+});
+
+test('Opening Digest accepts CRLF metadata without another generation and rejects truncated output', async () => {
+  for (const truncated of [false, true]) {
+    const workflow = openingWorkflow({ factReview: false });
+    let calls = 0;
+    const result = await runWriter({ workflow, input: 'opening', config: baseConfig(),
+      fetchFn: async (url) => {
+        if (String(url).endsWith('/search')) return jsonResponse({ results: [{ title: 'Source', url: 'https://example.com/a', text: 'Supported market fact.' }] });
+        calls++;
+        return jsonResponse({ choices: [{ finish_reason: truncated ? 'length' : 'stop', message: { content: '---\r\ntitle: Zen Opening Digest\r\n---\r\nA supported observation.' } }] });
+      },
+    });
+    assert.equal(calls, 1);
+    assert.equal(result.ok, !truncated);
+    if (truncated) assert.equal(fs.existsSync(result.articlePath), false);
+    else assert.match(fs.readFileSync(result.articlePath, 'utf8'), /^---\ntitle:/);
+  }
+});
+
 test('Opening Digest 普通审查问题只记录 trace，不修改或阻断稿件', async () => {
   const workflow = openingWorkflow({ model: 'openai/gpt-oss-120b' });
   const config = baseConfig();
