@@ -41,7 +41,12 @@ headline matches the draft title without the date suffix. The bottom line is fix
 `TREASURY YIELDS · SOFTWARE · MARKET SIGNALS`. Logo and fonts are bundled, with no
 additional model calls or runtime website access. The English email cover keeps its
 existing design. The WeChat template is `zen-wechat/zen-trading@11`; the dedicated email template is
-`zen-customerio/zen-research@10`.
+`zen-customerio/zen-research@11`.
+Every new formal or TEST email includes the fixed English “Open Source Spotlight | zen-coding”
+section after the body and options, before the Discord invite, brand tail image, and feedback.
+Its full GitHub URL is clickable. This template copy is excluded from the research article,
+shared payload, WeChat translation/draft, Discord posts, and ordinary newsletters.
+Already frozen emails retain their original content.
 
 Each run caches `opening-digest-wechat-cover.png` and its JSON fields/checksums in
 the same isolated artifact directory as its translation. Invalid caches regenerate;

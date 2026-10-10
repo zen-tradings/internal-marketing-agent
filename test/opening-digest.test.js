@@ -19,8 +19,11 @@ import {
   makeChannel,
   OPENING_DIGEST_DISCORD_INVITE_URL,
   publishHistoricalOpeningDigestWechat,
+  renderOpeningDigestContentHtml,
   renderOptionsHtml,
 } from '../src/channels/customerio-opening-digest.js';
+import { prepareOpeningDigestWechatPayload, translationUnits } from '../src/lib/opening-digest-translation.js';
+import { renderWechatOpeningDigestHtml } from '../src/channels/wechat-opening-digest.js';
 import { countTrendingRows, validateTrendingOptionsData } from '../src/lib/options-volume.js';
 import { collectOpeningMetrics, normalizeOpeningMetrics, validateOpeningMetrics } from '../src/lib/opening-digest-metrics.js';
 import {
@@ -626,7 +629,7 @@ test('complete digest renders template, address, options and schedules without c
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
   assert.equal(create.body.name, 'Zen Opening Digest · 2026-08-10');
   assert.equal(create.body.subject, 'Opening signals stay mixed | Zen Opening Digest');
-  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@10"/);
+  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@11"/);
   assert.match(create.body.body, /href="https:\/\/example\.com\/a"/, '英文邮件必须继续保留来源链接');
   assert.match(create.body.body, new RegExp(`href="${OPENING_DIGEST_DISCORD_INVITE_URL}"[^>]*>Join us on Discord</a>`));
   assert.equal(create.body.body.split(OPENING_DIGEST_DISCORD_INVITE_URL).length - 1, 1);
@@ -640,6 +643,49 @@ test('complete digest renders template, address, options and schedules without c
   assert.equal(requests.some((item) => item.path.endsWith('/contents')), false);
   const schedule = requests.find((item) => item.path.endsWith('/schedule'));
   assert.equal(schedule.body.scheduled_at, Date.parse('2026-08-10T14:15:00.000Z') / 1000);
+});
+
+for (const source of ['cron', 'manual', 'acceptance']) {
+  test(`${source} digest includes the exact email-only spotlight before the Discord invite`, async () => {
+    const { channel, requests } = standardChannel();
+    const enabled = config();
+    enabled.openingDigest.tailImageUrl = 'https://assets.example/zen-community-banner-email.jpg';
+    await channel.publish({ articlePath: '/tmp/article.md', config: enabled, source, acceptanceId: 'acceptance-spotlight-1234' });
+    const email = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST').body;
+    const document = new JSDOM(email.body).window.document;
+    const headings = [...document.querySelectorAll('h2')].filter((node) => node.textContent === 'Open Source Spotlight | zen-coding');
+    assert.equal(headings.length, 1);
+    let node = headings[0].nextElementSibling;
+    const paragraphs = [];
+    for (let i = 0; i < 4; i++) {
+      assert.equal(node.tagName, 'P');
+      paragraphs.push(node.textContent);
+      node = node.nextElementSibling;
+    }
+    assert.deepEqual(paragraphs, [
+      'zen-coding is an open-source AI coding agent built by Zen Research for quantitative research and development. It supports workflows including alpha research, backtest reviews, portfolio construction, and paper replication, with built-in safety guardrails, multi-model evaluation, and cost and latency tracking.',
+      "We're building toward a more efficient, reliable, and reproducible AI-powered quant research workflow.",
+      'Check it out on GitHub! If you find it useful, give us a Star to support the project. Contributions and feedback are always welcome!',
+      'https://github.com/zen-tradings/zen-coding',
+    ]);
+    const links = document.querySelectorAll('a[href="https://github.com/zen-tradings/zen-coding"]');
+    assert.equal(links.length, 1);
+    assert.equal(links[0].parentElement.textContent, links[0].textContent, 'GitHub URL occupies its own paragraph');
+    assert.equal(node.querySelector('a').getAttribute('href'), OPENING_DIGEST_DISCORD_INVITE_URL);
+    const spotlightIndex = email.body.indexOf('Open Source Spotlight | zen-coding');
+    const discordIndex = email.body.indexOf(OPENING_DIGEST_DISCORD_INVITE_URL);
+    const tailIndex = email.body.indexOf('<img src="https://assets.example/zen-community-banner-email.jpg"');
+    assert.ok(email.body.indexOf('OIC Trending Options Volume top twenty') < spotlightIndex);
+    assert.ok(spotlightIndex < discordIndex && discordIndex < tailIndex);
+    assert.ok(tailIndex < email.body.indexOf('Was this edition useful?'));
+  });
+}
+
+test('email spotlight remains present when optional options data is unavailable', () => {
+  const html = renderOpeningDigestContentHtml({ body: 'Opening signals remain mixed.' });
+  assert.equal(html.split('Open Source Spotlight | zen-coding').length - 1, 1);
+  assert.ok(html.indexOf('Opening signals remain mixed.') < html.indexOf('Open Source Spotlight | zen-coding'));
+  assert.ok(html.indexOf('Open Source Spotlight | zen-coding') < html.indexOf(OPENING_DIGEST_DISCORD_INVITE_URL));
 });
 
 test('digest tail image renders between the Discord link and the feedback block only when configured', async () => {
@@ -686,8 +732,18 @@ test('resend freezes a distinct internal identity with ordinary recipient-facing
   assert.equal(frozen.name, 'Zen Opening Digest · 2026-08-10 · resend-2026-08-10');
   assert.equal(frozen.email.subject, 'Fed decision looms over narrow equity participation | Zen Opening Digest');
   assert.doesNotMatch(frozen.email.body, /Correction|data-only placeholder/i);
+  assert.match(frozen.email.body, /Open Source Spotlight \| zen-coding/);
   assert.equal(frozen.destinations.find((item) => item.destination === 'wechat').payload.openingPayload.article.headline,
     'Fed decision looms over narrow equity participation');
+  assert.doesNotMatch(JSON.stringify(frozen.destinations), /Open Source Spotlight|zen-coding/);
+  const wechatPayload = prepareOpeningDigestWechatPayload(frozen.destinations.find((item) => item.destination === 'wechat').payload.openingPayload);
+  const units = translationUnits(wechatPayload);
+  assert.doesNotMatch(JSON.stringify(units), /Open Source Spotlight|zen-coding/);
+  const wechatHtml = renderWechatOpeningDigestHtml({
+    payload: wechatPayload,
+    translation: { translations: units.map((unit) => ({ ...unit, source: unit.text })) },
+  });
+  assert.doesNotMatch(wechatHtml, /Open Source Spotlight|zen-coding/);
   assert.doesNotMatch(frozen.destinations.find((item) => item.destination === 'discord').payload.messages[0].embeds[0].description,
     /Correction|data-only placeholder/i);
 });

@@ -2,7 +2,7 @@ export const FIXED_DRAFT_TEMPLATE_IDS = Object.freeze({
   'wechat-draft': 'zen-wechat/zen-trading@11',
   'wechat-opening-digest': 'zen-wechat/zen-trading@11',
   'customerio-draft': 'zen-customerio/zen-research@5',
-  'customerio-opening-digest': 'zen-customerio/zen-research@10',
+  'customerio-opening-digest': 'zen-customerio/zen-research@11',
 });
 
 // Fixed community invite shown at the bottom of every Opening Digest draft.

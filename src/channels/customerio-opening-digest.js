@@ -417,6 +417,7 @@ export function renderOpeningDigestContentHtml({ body, metrics = [], options = n
     renderMetricsHtml(metrics),
     renderOpeningNarrativeSections(body),
     options ? renderOptionsHtml(options) : '',
+    renderOpenSourceSpotlightHtml(),
     renderDiscordInviteHtml(),
   ].filter(Boolean).join('\n');
 }
@@ -438,6 +439,19 @@ function openingChangeSummary(body) {
 
 function renderDiscordInviteHtml() {
   return `<p style="margin:24px 0 0;padding-top:18px;border-top:1px solid #dcd8d5;font-size:14px"><a href="${OPENING_DIGEST_DISCORD_INVITE_URL}" style="color:#0b6d75;font-weight:500">Join us on Discord</a></p>`;
+}
+
+// Email-only template copy: keep it out of the shared payload and translation input.
+function renderOpenSourceSpotlightHtml() {
+  return renderMarkdown(`## Open Source Spotlight | zen-coding
+
+zen-coding is an open-source AI coding agent built by Zen Research for quantitative research and development. It supports workflows including alpha research, backtest reviews, portfolio construction, and paper replication, with built-in safety guardrails, multi-model evaluation, and cost and latency tracking.
+
+We're building toward a more efficient, reliable, and reproducible AI-powered quant research workflow.
+
+Check it out on GitHub! If you find it useful, give us a Star to support the project. Contributions and feedback are always welcome!
+
+[https://github.com/zen-tradings/zen-coding](https://github.com/zen-tradings/zen-coding)`);
 }
 
 export async function publishHistoricalOpeningDigestWechat({

@@ -77,6 +77,7 @@ test('newsletter article:规范化 Vol. 版号并渲染品牌/退订/反馈结�
   const parsed = parseNewsletterArticle(ARTICLE);
   assert.equal(parsed.edition, 'Vol. 1');
   const html = renderNewsletterEmail(parsed, config().customerio);
+  assert.doesNotMatch(html, /Open Source Spotlight|zen-coding/);
   assert.match(html, new RegExp(`data-zen-draft-template="${NEWSLETTER_TEMPLATE_ID}"`));
   assert.match(html, /ZEN RESEARCH FROM ZEN TRADING/);
   assert.equal(NEWSLETTER_COMPANY_ADDRESS, '700 Leahy St, Redwood City, CA 94061');
