@@ -285,6 +285,30 @@ test('英文金额的数字与量级作为一个不可变 token 保护', () => {
   assert.match(restored, /\$104 billion/);
 });
 
+test('中文模型紧贴金额与品牌占位符时，还原保留量级边界并一次通过数字门禁', async () => {
+  const source = { article: {
+    preheader: "A $70 billion OpenAI year-end outlook counters Thursday's $50 billion scare; the 10-year at 5.27 keeps the rebound constrained.",
+    body: '',
+  }, metrics: [] };
+  let calls = 0;
+  const result = await translateOpeningDigestPayload(source, {
+    writer: { model: 'test' },
+    complete: async ({ units }) => {
+      calls += 1;
+      return { translations: [{ id: units[0].id,
+        text: '一份⟦ZEN_KEEP_AAA⟧⟦ZEN_KEEP_AAB⟧年末展望缓解了周四的⟦ZEN_KEEP_AAC⟧恐慌；⟦ZEN_KEEP_AAD⟧年期位于⟦ZEN_KEEP_AAE⟧，令反弹受限。',
+      }] };
+    },
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(result.repairs, []);
+  assert.match(result.translations[0].text, /\$70 billion OpenAI/);
+  assert.match(result.translations[0].text, /\$50 billion/);
+  const unit = protectTranslationUnit({ id: 'body-1', kind: 'paragraph', text: 'SPY 776.00, QQQ 749.41.' });
+  assert.equal(restoreTranslationUnit(unit.tokens.map(({ marker }) => marker).join(''), unit.tokens), 'SPY 776.00 QQQ 749.41');
+  assert.equal(restoreTranslationUnit(unit.unit.text, unit.tokens), 'SPY 776.00, QQQ 749.41.');
+});
+
 test('英文引语边界在严格 JSON 翻译前被占位符保护并无损还原', () => {
   const unit = {
     id: 'body-6', kind: 'paragraph',

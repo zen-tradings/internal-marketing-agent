@@ -461,7 +461,15 @@ function alphaMarker(index) {
 }
 
 export function restoreTranslationUnit(value, tokens) {
-  let text = String(value || '');
+  const originals = new Map(tokens.map(({ marker, value: original }) => [marker, original]));
+  // Chinese prose often removes spaces between placeholders. Keep separate
+  // Latin/numeric tokens separate: "$70 billion" + "OpenAI" must not become
+  // "$70 billionOpenAI", which loses the magnitude's word boundary.
+  let text = String(value || '').replace(
+    /(⟦ZEN_KEEP_[A-Z]+⟧)(?=(⟦ZEN_KEEP_[A-Z]+⟧))/g,
+    (marker, left, right) => /[A-Za-z0-9]$/.test(originals.get(left) || '')
+      && /^(?:[A-Za-z0-9]|[$€£¥])/.test(originals.get(right) || '') ? `${marker} ` : marker,
+  );
   for (const { marker, value: original } of tokens) text = text.replaceAll(marker, original);
   return text;
 }
