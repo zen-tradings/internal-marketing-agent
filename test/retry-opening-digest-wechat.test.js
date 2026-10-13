@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { openStore } from '../src/core/store.js';
+import { acquireInstanceLock } from '../src/core/instance-lock.js';
 import { runWorkDir } from '../src/lib/run-workdir.js';
 import { OPENING_DIGEST_TRANSLATION_VERSION } from '../src/lib/opening-digest-translation.js';
 import {
@@ -11,6 +12,7 @@ import {
   repairOpeningDigestWechat,
   repairOpeningDigestWechatReferences,
   retryOpeningDigestWechat,
+  requeueOpeningDigestWechatOutbox,
 } from '../scripts/retry-opening-digest-wechat.mjs';
 
 function fixture({ wechatError = 'Opening Digest 中文直译硬校验失败:body-3(URL 不一致)' } = {}) {
@@ -53,6 +55,28 @@ function fixture({ wechatError = 'Opening Digest 中文直译硬校验失败:bod
     config: { openingDigest: { wechatEnabled: true }, discord: { openingDigestEnabled: true } },
   };
 }
+
+test('持久微信恢复只重新入队同一冻结 payload，拒绝运行中的服务和重复恢复', (t) => {
+  const value = fixture();
+  t.after(() => { value.store.close(); fs.rmSync(value.root, { recursive: true, force: true }); });
+  const payloadJson = JSON.stringify({ schemaVersion: 1, openingPayload: { dateKey: '2026-09-08', article: { body: 'SPY 10:00 ET.' } } });
+  const row = value.store.queueDeliveryOutbox({ runId: value.runId, destination: 'wechat', title: '微信日报', payloadJson, payloadSha256: 'frozen-hash' });
+  value.store.failDeliveryOutbox(row.id, { error: 'Opening Digest 中文直译硬校验失败:body-1(数字缺失)' });
+  const lock = acquireInstanceLock(value.dbPath);
+  try { assert.throws(() => requeueOpeningDigestWechatOutbox(value), /无法取得数据库独占运行权/); }
+  finally { lock.release(); }
+  value.store.upsertDelivery(value.runId, { destination: 'customerio', status: 'failed', mediaId: 'customerio-newsletter:66' });
+  assert.throws(() => requeueOpeningDigestWechatOutbox(value), /没有匹配的成功记录/);
+  value.store.upsertDelivery(value.runId, { destination: 'customerio', status: 'delivered', mediaId: 'customerio-newsletter:66' });
+  const result = requeueOpeningDigestWechatOutbox(value);
+  assert.equal(result.status, 'pending');
+  assert.equal(value.store.getRun(value.runId).status, 'done');
+  assert.equal(value.store.getRun(value.runId).remote_id, '66');
+  const recovered = value.store.getDeliveryOutbox(row.id);
+  assert.equal(recovered.payload_json, payloadJson);
+  assert.equal(recovered.payload_sha256, 'frozen-hash');
+  assert.throws(() => requeueOpeningDigestWechatOutbox(value), /安全恢复条件/);
+});
 
 test('受限命令只复用成功邮件和同源产物补建正式微信稿', async (t) => {
   const value = fixture();

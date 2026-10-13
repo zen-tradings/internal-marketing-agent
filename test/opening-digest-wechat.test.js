@@ -309,6 +309,26 @@ test('中文模型紧贴金额与品牌占位符时，还原保留量级边界�
   assert.equal(restoreTranslationUnit(unit.unit.text, unit.tokens), 'SPY 776.00, QQQ 749.41.');
 });
 
+test('Opening Digest 时间占位符漏译时局部修复明确指出原占位符', async () => {
+  const source = { article: { body: 'SPY at 778.11 and QQQ down 0.33% at the 10:00 a.m. ET snapshot.' }, metrics: [] };
+  let calls = 0;
+  const result = await translateOpeningDigestPayload(source, {
+    writer: { model: 'test' },
+    complete: async ({ units, round }) => {
+      calls += 1;
+      const unit = units[0];
+      assert.deepEqual(unit.requiredPlaceholders, [
+        '⟦ZEN_KEEP_AAA⟧', '⟦ZEN_KEEP_AAB⟧', '⟦ZEN_KEEP_AAC⟧', '⟦ZEN_KEEP_AAD⟧', '⟦ZEN_KEEP_AAE⟧',
+      ]);
+      if (round) assert.match(unit.issues.join(' '), /遗漏不可变占位符.*⟦ZEN_KEEP_AAE⟧/);
+      return { translations: [{ id: unit.id, text: `⟦ZEN_KEEP_AAA⟧ 报 ⟦ZEN_KEEP_AAB⟧，⟦ZEN_KEEP_AAC⟧ 下跌 ⟦ZEN_KEEP_AAD⟧${round ? '，采集时点为 ⟦ZEN_KEEP_AAE⟧' : ''}。` }] };
+    },
+  });
+  assert.equal(calls, 2);
+  assert.match(result.translations[0].text, /10:00 a\.m\. ET/);
+  assert.match(result.repairs[0].issues.join(' '), /NUM:0.*NUM:10/);
+});
+
 test('英文引语边界在严格 JSON 翻译前被占位符保护并无损还原', () => {
   const unit = {
     id: 'body-6', kind: 'paragraph',

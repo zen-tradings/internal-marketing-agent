@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../src/config/index.js';
 import { runWriter } from '../src/core/runner.js';
 import { openStore } from '../src/core/store.js';
+import { acquireInstanceLock } from '../src/core/instance-lock.js';
 import { runWorkDir } from '../src/lib/run-workdir.js';
 import { makeChannel } from '../src/channels/customerio-opening-digest.js';
 import { createWechatApi } from '../src/channels/wechat-opening-digest.js';
@@ -22,6 +23,34 @@ const REQUIRED_ARTIFACTS = [
   'opening-digest-universe.json',
   'research-trace.json',
 ];
+
+export function requeueOpeningDigestWechatOutbox({ runId, dbPath, config } = {}) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]{5,100}$/.test(String(runId || ''))) throw new Error('run-id 格式无效');
+  if (!dbPath || !fs.existsSync(dbPath)) throw new Error('任务数据库不存在');
+  if (!config?.openingDigest?.wechatEnabled) throw new Error('OPENING_DIGEST_WECHAT_ENABLED=true 才能恢复微信投递');
+  const lock = acquireInstanceLock(dbPath);
+  let store;
+  try {
+    store = openStore(dbPath);
+    if (store.listByStatus('running').length || store.listByStatus('queued').length) {
+      throw new Error('队列非空，拒绝恢复微信投递');
+    }
+    const run = store.getRun(runId);
+    const newsletterId = Number(run?.remote_id);
+    const customerio = store.listDeliveries(runId).find((item) => item.destination === 'customerio');
+    if (!run || run.error || !Number.isInteger(newsletterId) || newsletterId <= 0
+      || run.media_id !== `customerio-newsletter:${newsletterId}`
+      || !customerio || !['delivered', 'existing'].includes(customerio.status)
+      || customerio.media_id !== run.media_id) {
+      throw new Error('Customer.io 邮件没有匹配的成功记录，拒绝恢复微信投递');
+    }
+    const row = store.requeueFailedOpeningDigestWechatTranslation(runId);
+    return { runId, newsletterId, outboxId: row.id, status: row.state };
+  } finally {
+    store?.close();
+    lock.release();
+  }
+}
 
 export async function retryOpeningDigestWechat({
   runId,
@@ -514,11 +543,12 @@ if (isMain) {
     const repairVerified = process.argv[2] === '--repair-verified';
     const repairReferences = process.argv[2] === '--repair-references';
     const recreateMissing = process.argv[2] === '--recreate-missing';
-    const operation = repairVerified ? repairOpeningDigestWechat
+    const requeueOutbox = process.argv[2] === '--requeue-outbox';
+    const operation = requeueOutbox ? requeueOpeningDigestWechatOutbox : repairVerified ? repairOpeningDigestWechat
       : repairReferences ? repairOpeningDigestWechatReferences
         : recreateMissing ? recreateMissingOpeningDigestWechat : retryOpeningDigestWechat;
     const result = await operation({
-      runId: repairVerified || repairReferences || recreateMissing ? process.argv[3] : process.argv[2],
+      runId: requeueOutbox || repairVerified || repairReferences || recreateMissing ? process.argv[3] : process.argv[2],
       dbPath: config.dbPath,
       workDir: config.workDir,
       config,

@@ -463,7 +463,34 @@ run directory. A second malformed response or truncated output fails generation;
 neither can be published as a technical placeholder.
 
 
-New formal cron runs recover automatically through the SQLite `delivery_outbox`: transient translation and WeChat failures retry across restarts. Each journaled create operation issues at most one `draft/add`; uncertain results and known `media_id` values use read-only reconciliation during ordinary recovery. Unresolved or mismatched historical drafts remain `needs_review`. The cover upgrade does not recreate drafts or replace existing covers. The command below is retained only for historical runs created before durable WeChat delivery was introduced.
+New formal cron runs recover automatically through the SQLite `delivery_outbox`: transient translation and WeChat failures retry across restarts. Each journaled create operation issues at most one `draft/add`; uncertain results and known `media_id` values use read-only reconciliation during ordinary recovery. Unresolved or mismatched historical drafts remain `needs_review`. The cover upgrade does not recreate drafts or replace existing covers.
+
+For a terminal immutable-token translation failure in a durable WeChat outbox,
+deploy and verify the fix, confirm the queue is idle, then stop the single
+service and requeue only that derivative:
+
+```bash
+run_id=replace-with-database-run-id
+sudo systemctl stop zen-content-hub
+sudo systemd-run --wait --pipe --collect \
+  --unit=zen-content-hub-opening-wechat-requeue \
+  --uid=zenbot \
+  --property=WorkingDirectory=/opt/zen-content-hub \
+  --property=EnvironmentFile=/etc/zen-content-hub/zen-content-hub.env \
+  /usr/bin/npm run retry:opening-digest-wechat -- --requeue-outbox "$run_id"
+sudo systemctl start zen-content-hub
+```
+
+Always restart the service even if the recovery command refuses the run. The
+command acquires the database instance lock, verifies the successful email, and
+refuses any existing WeChat create operation or `media_id`. It preserves the
+frozen payload and completed email task. The single service translates, creates,
+reads back and reports the recovered WeChat draft; email and Discord are not
+resent. Translation repair prompts enumerate the required placeholders and
+identify a missing placeholder precisely, including protected capture times.
+
+The command below is retained only for historical runs created before durable
+WeChat delivery was introduced.
 
 When a formal cron email succeeded but its Chinese WeChat derivative failed at the immutable-token translation gate before receiving any WeChat `media_id`, deploy and verify the fix first. Confirm `/ready` reports `active=0` and `pending=0`, then run the restricted recovery against the SQLite `runs.id`:
 

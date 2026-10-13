@@ -126,8 +126,13 @@ export async function translateOpeningDigestPayload(payload, {
           const assessment = assessUnit(unit, text, round > 0);
           if (!assessment.hardErrors.length) translations.set(unit.id, text);
           else {
-            next.push({ ...unit, issues: assessment.hardErrors });
-            repairs.push({ round: round + 1, id: unit.id, issues: assessment.hardErrors });
+            const missingMarkers = (protectionById.get(unit.id)?.tokens || [])
+              .filter(({ marker }) => !returned.get(unit.id).includes(marker))
+              .map(({ marker }) => marker);
+            const issues = [...assessment.hardErrors, ...(missingMarkers.length
+              ? [`遗漏不可变占位符，必须在对应原文位置补回:${missingMarkers.join('、')}`] : [])];
+            next.push({ ...unit, issues });
+            repairs.push({ round: round + 1, id: unit.id, issues });
           }
         }
         pending = next;
@@ -431,7 +436,7 @@ export function protectTranslationUnit(unit) {
   });
   text += source.slice(cursor);
   const { markdown: _unprotectedMarkdown, ...safeUnit } = unit;
-  return { unit: { ...safeUnit, text }, tokens };
+  return { unit: { ...safeUnit, text, requiredPlaceholders: tokens.map(({ marker }) => marker) }, tokens };
 }
 
 function evidenceCitations(source) {
