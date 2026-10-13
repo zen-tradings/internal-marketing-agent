@@ -15,12 +15,15 @@ import {
   OPENING_COVER_HEIGHT,
   OPENING_COVER_WIDTH,
 } from '../src/lib/opening-digest-cover.js';
+import { OPENING_DIGEST_DISCORD_INVITE_URL } from '../src/lib/draft-template.js';
 import {
   makeChannel,
-  OPENING_DIGEST_DISCORD_INVITE_URL,
   publishHistoricalOpeningDigestWechat,
+  renderOpeningDigestContentHtml,
   renderOptionsHtml,
 } from '../src/channels/customerio-opening-digest.js';
+import { prepareOpeningDigestWechatPayload, translationUnits } from '../src/lib/opening-digest-translation.js';
+import { renderWechatOpeningDigestHtml } from '../src/channels/wechat-opening-digest.js';
 import { countTrendingRows, validateTrendingOptionsData } from '../src/lib/options-volume.js';
 import { collectOpeningMetrics, normalizeOpeningMetrics, validateOpeningMetrics } from '../src/lib/opening-digest-metrics.js';
 import {
@@ -626,12 +629,13 @@ test('complete digest renders template, address, options and schedules without c
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
   assert.equal(create.body.name, 'Zen Opening Digest · 2026-08-10');
   assert.equal(create.body.subject, 'Opening signals stay mixed | Zen Opening Digest');
-  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@10"/);
+  assert.match(create.body.body, /data-zen-draft-template="zen-customerio\/zen-research@12"/);
   assert.match(create.body.body, /href="https:\/\/example\.com\/a"/, '英文邮件必须继续保留来源链接');
   assert.match(create.body.body, new RegExp(`href="${OPENING_DIGEST_DISCORD_INVITE_URL}"[^>]*>Join us on Discord</a>`));
   assert.equal(create.body.body.split(OPENING_DIGEST_DISCORD_INVITE_URL).length - 1, 1);
   assert.ok(create.body.body.indexOf(OPENING_DIGEST_DISCORD_INVITE_URL) > create.body.body.indexOf('OIC Trending Options Volume top twenty'));
-  assert.ok(create.body.body.indexOf(OPENING_DIGEST_DISCORD_INVITE_URL) < create.body.body.indexOf('Was this edition useful?'));
+  assert.ok(create.body.body.indexOf(OPENING_DIGEST_DISCORD_INVITE_URL) > create.body.body.indexOf('>LinkedIn</a>'), 'Discord 链接必须在页脚 LinkedIn 之下');
+  assert.ok(create.body.body.indexOf(OPENING_DIGEST_DISCORD_INVITE_URL) > create.body.body.indexOf('Was this edition useful?'));
   assert.match(create.body.body, /href="https:\/\/www\.linkedin\.com\/company\/110921483"[^>]*>LinkedIn<\/a>/);
   assert.match(create.body.body, /\.zen-email-content \{ padding:20px 8px !important; \}/);
   assert.match(create.body.body, /Zen Trading · 700 Leahy St, Redwood City, CA 94061/);
@@ -640,6 +644,38 @@ test('complete digest renders template, address, options and schedules without c
   assert.equal(requests.some((item) => item.path.endsWith('/contents')), false);
   const schedule = requests.find((item) => item.path.endsWith('/schedule'));
   assert.equal(schedule.body.scheduled_at, Date.parse('2026-08-10T14:15:00.000Z') / 1000);
+});
+
+for (const source of ['cron', 'manual', 'acceptance']) {
+  test(`${source} digest includes the exact email-only spotlight before the tail image`, async () => {
+    const { channel, requests } = standardChannel();
+    const enabled = config();
+    enabled.openingDigest.tailImageUrl = 'https://assets.example/zen-community-banner-email.jpg';
+    await channel.publish({ articlePath: '/tmp/article.md', config: enabled, source, acceptanceId: 'acceptance-spotlight-1234' });
+    const email = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST').body;
+    const document = new JSDOM(email.body).window.document;
+    const headings = [...document.querySelectorAll('h2')].filter((node) => node.textContent === 'Open Source Project | zen-coding');
+    assert.equal(headings.length, 1);
+    const paragraph = headings[0].nextElementSibling;
+    assert.equal(paragraph.tagName, 'P');
+    assert.equal(paragraph.textContent, 'zen-coding is an open-source AI coding agent built by Zen Research for quantitative research and development. With built-in safety guardrails, multi-model evaluation, and cost and latency tracking, it aims to make AI-powered quant research more efficient, reliable, and reproducible. Check it out on GitHub, give us a Star if you find it useful, and feel free to contribute or share feedback! https://github.com/zen-tradings/zen-coding');
+    const links = document.querySelectorAll('a[href="https://github.com/zen-tradings/zen-coding"]');
+    assert.equal(links.length, 1);
+    assert.equal(links[0].textContent, 'https://github.com/zen-tradings/zen-coding', 'GitHub URL renders as a clickable link inside the merged paragraph');
+    const spotlightIndex = email.body.indexOf('Open Source Project | zen-coding');
+    const tailIndex = email.body.indexOf('<img src="https://assets.example/zen-community-banner-email.jpg"');
+    assert.ok(email.body.indexOf('OIC Trending Options Volume top twenty') < spotlightIndex);
+    assert.ok(spotlightIndex < tailIndex);
+    assert.ok(tailIndex < email.body.indexOf('Was this edition useful?'));
+    assert.ok(email.body.indexOf(OPENING_DIGEST_DISCORD_INVITE_URL) > email.body.indexOf('>LinkedIn</a>'), 'Discord invite lives in the footer below the LinkedIn link');
+  });
+}
+
+test('email spotlight remains present when optional options data is unavailable', () => {
+  const html = renderOpeningDigestContentHtml({ body: 'Opening signals remain mixed.' });
+  assert.equal(html.split('Open Source Project | zen-coding').length - 1, 1);
+  assert.ok(html.indexOf('Opening signals remain mixed.') < html.indexOf('Open Source Project | zen-coding'));
+  assert.doesNotMatch(html, new RegExp(OPENING_DIGEST_DISCORD_INVITE_URL.replaceAll('.', '\\.')), 'Discord invite no longer belongs to the content HTML');
 });
 
 test('digest tail image renders between the Discord link and the feedback block only when configured', async () => {
@@ -651,7 +687,7 @@ test('digest tail image renders between the Discord link and the feedback block 
   const configuredBody = configured.find((item) => item.path === '/v1/newsletters' && item.method === 'POST').body.body;
   const tailIndex = configuredBody.indexOf('<img src="https://assets.example/zen-community-banner-email.jpg" alt="Zen Trading"');
   assert.ok(tailIndex > 0, '配置 tailImageUrl 时邮件必须包含固定尾图');
-  assert.ok(configuredBody.indexOf(OPENING_DIGEST_DISCORD_INVITE_URL) < tailIndex, '尾图必须在 Discord 链接之后');
+  assert.ok(configuredBody.indexOf(OPENING_DIGEST_DISCORD_INVITE_URL) > tailIndex, '页脚 Discord 链接必须在尾图之后');
   assert.ok(tailIndex < configuredBody.indexOf('Was this edition useful?'), '尾图必须在反馈块之前');
 
   const plain = [];
@@ -686,8 +722,18 @@ test('resend freezes a distinct internal identity with ordinary recipient-facing
   assert.equal(frozen.name, 'Zen Opening Digest · 2026-08-10 · resend-2026-08-10');
   assert.equal(frozen.email.subject, 'Fed decision looms over narrow equity participation | Zen Opening Digest');
   assert.doesNotMatch(frozen.email.body, /Correction|data-only placeholder/i);
+  assert.match(frozen.email.body, /Open Source Project \| zen-coding/);
   assert.equal(frozen.destinations.find((item) => item.destination === 'wechat').payload.openingPayload.article.headline,
     'Fed decision looms over narrow equity participation');
+  assert.doesNotMatch(JSON.stringify(frozen.destinations), /Open Source Project|zen-coding/);
+  const wechatPayload = prepareOpeningDigestWechatPayload(frozen.destinations.find((item) => item.destination === 'wechat').payload.openingPayload);
+  const units = translationUnits(wechatPayload);
+  assert.doesNotMatch(JSON.stringify(units), /Open Source Project|zen-coding/);
+  const wechatHtml = renderWechatOpeningDigestHtml({
+    payload: wechatPayload,
+    translation: { translations: units.map((unit) => ({ ...unit, source: unit.text })) },
+  });
+  assert.doesNotMatch(wechatHtml, /Open Source Project|zen-coding/);
   assert.doesNotMatch(frozen.destinations.find((item) => item.destination === 'discord').payload.messages[0].embeds[0].description,
     /Correction|data-only placeholder/i);
 });

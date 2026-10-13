@@ -6,7 +6,7 @@ import path from 'node:path';
 import {
   NEWSLETTER_COMPANY_ADDRESS, parseNewsletterArticle, renderMarkdown, renderNewsletterEmail,
 } from '../lib/newsletter-email.js';
-import { assertRenderedTemplateMarker, FIXED_DRAFT_TEMPLATE_IDS, OPENING_DIGEST_DISCORD_INVITE_URL } from '../lib/draft-template.js';
+import { assertRenderedTemplateMarker, FIXED_DRAFT_TEMPLATE_IDS } from '../lib/draft-template.js';
 import { uploadCustomerIoAsset } from '../lib/customerio-assets.js';
 import { renderOpeningDigestCover } from '../lib/opening-digest-cover.js';
 import { captureTrendingOptionsTable, validateTrendingOptionsData } from '../lib/options-volume.js';
@@ -23,7 +23,6 @@ const SENDER = 'support@zentradings.com';
 const CUSTOMERIO_MIN_SCHEDULE_LEAD_MS = 5 * 60 * 1000;
 export const CUSTOMERIO_OPENING_DIGEST_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['customerio-opening-digest'];
 export const OPENING_DIGEST_NEWSLETTER_TITLE = 'Zen Opening Digest';
-export { OPENING_DIGEST_DISCORD_INVITE_URL };
 
 export function makeChannel({
   readArticle = (file) => fs.readFile(file, 'utf8'),
@@ -417,7 +416,7 @@ export function renderOpeningDigestContentHtml({ body, metrics = [], options = n
     renderMetricsHtml(metrics),
     renderOpeningNarrativeSections(body),
     options ? renderOptionsHtml(options) : '',
-    renderDiscordInviteHtml(),
+    renderOpenSourceSpotlightHtml(),
   ].filter(Boolean).join('\n');
 }
 
@@ -436,8 +435,11 @@ function openingChangeSummary(body) {
   return lead.split(/(?<=[.!?])\s+/).find((sentence) => /(?:prior|previous|last edition|initial baseline|material change)/i.test(sentence)) || '';
 }
 
-function renderDiscordInviteHtml() {
-  return `<p style="margin:24px 0 0;padding-top:18px;border-top:1px solid #dcd8d5;font-size:14px"><a href="${OPENING_DIGEST_DISCORD_INVITE_URL}" style="color:#0b6d75;font-weight:500">Join us on Discord</a></p>`;
+// Email-only template copy: keep it out of the shared payload and translation input.
+function renderOpenSourceSpotlightHtml() {
+  return renderMarkdown(`## Open Source Project | zen-coding
+
+zen-coding is an open-source AI coding agent built by Zen Research for quantitative research and development. With built-in safety guardrails, multi-model evaluation, and cost and latency tracking, it aims to make AI-powered quant research more efficient, reliable, and reproducible. Check it out on GitHub, give us a Star if you find it useful, and feel free to contribute or share feedback! [https://github.com/zen-tradings/zen-coding](https://github.com/zen-tradings/zen-coding)`);
 }
 
 export async function publishHistoricalOpeningDigestWechat({

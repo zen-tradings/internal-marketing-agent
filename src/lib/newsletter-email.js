@@ -1,4 +1,4 @@
-import { FIXED_DRAFT_TEMPLATE_IDS } from './draft-template.js';
+import { FIXED_DRAFT_TEMPLATE_IDS, OPENING_DIGEST_DISCORD_INVITE_URL } from './draft-template.js';
 
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?/;
 export const NEWSLETTER_TEMPLATE_ID = FIXED_DRAFT_TEMPLATE_IDS['customerio-draft'];
@@ -93,6 +93,7 @@ export function renderNewsletterEmail(article, options = {}) {
       <tr><td class="zen-email-footer" style="padding:18px 16px;border-top:1px solid #dcd8d5;font-size:11px;line-height:1.6;font-weight:300;color:#66787a">
         ${contact}
         <p style="margin:0 0 8px"><a href="${NEWSLETTER_COMPANY_LINKEDIN_URL}" style="color:#173f43">LinkedIn</a></p>
+        <p style="margin:0 0 8px"><a href="${OPENING_DIGEST_DISCORD_INVITE_URL}" style="color:#173f43">Join us on Discord</a></p>
         ${unsubscribe}
         <p style="margin:0">Zen Trading · ${address}</p>
       </td></tr>
