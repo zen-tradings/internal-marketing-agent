@@ -8,7 +8,8 @@ import {
 } from '../lib/newsletter-email.js';
 import { assertRenderedTemplateMarker, FIXED_DRAFT_TEMPLATE_IDS } from '../lib/draft-template.js';
 import { uploadCustomerIoAsset } from '../lib/customerio-assets.js';
-import { renderOpeningDigestCover } from '../lib/opening-digest-cover.js';
+import { renderOpeningDigestEmailCover } from '../lib/opening-digest-email-cover.js';
+import { runWorkDir } from '../lib/run-workdir.js';
 import { captureTrendingOptionsTable, validateTrendingOptionsData } from '../lib/options-volume.js';
 import { collectOpeningMetrics, normalizeOpeningMetrics, renderMetricsHtml } from '../lib/opening-digest-metrics.js';
 import { easternDateKey } from '../lib/us-equity-calendar.js';
@@ -28,7 +29,7 @@ export function makeChannel({
   readArticle = (file) => fs.readFile(file, 'utf8'),
   fetchFn = (...args) => runtimeFetch(globalThis.fetch)(...args),
   now = () => new Date(), captureOptions = captureTrendingOptionsTable,
-  renderCover = renderOpeningDigestCover, uploadAsset = uploadCustomerIoAsset,
+  renderCover = renderOpeningDigestEmailCover, uploadAsset = uploadCustomerIoAsset,
   collectMetrics = collectOpeningMetrics,
   translatePayload = translateOpeningDigestPayload,
   wechatChannel = makeWechatOpeningDigestChannel(),
@@ -120,9 +121,11 @@ export function makeChannel({
           if (emailAlreadySent) throw new Error('skip-existing-email-cover');
           const coverKey = acceptance ? `${dateKey}-${acceptanceId}` : dateKey;
           const cover = await renderCover({
-            dateLabel: displayDate(dateKey),
+            dateKey,
+            headline,
             executablePath: digest.browserExecutablePath,
             timeoutMs: digest.captureTimeoutMs,
+            cacheDir: runId && config.workDir ? runWorkDir(path.join(config.workDir, 'opening-digest'), runId) : undefined,
           });
           const asset = await uploadAsset({
             baseUrl: cio.baseUrl,
@@ -131,8 +134,8 @@ export function makeChannel({
             timeoutMs: cio.timeoutMs,
             parentFolderId: digest.assetFolderId,
             buffer: cover,
-            filename: `opening-digest-cover-${coverKey}.png`,
-            name: `Zen Opening Digest cover ${coverKey}`,
+            filename: `zen-opening-digest-email-${coverKey}.png`,
+            name: `Zen Opening Digest email cover ${coverKey}`,
           });
           const candidate = String(asset?.path || '').trim();
           if (/^https:\/\//i.test(candidate)) headerImageUrl = candidate;

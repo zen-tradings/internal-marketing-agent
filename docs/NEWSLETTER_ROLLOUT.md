@@ -44,9 +44,9 @@ Opening Digest 保留每个检索来源及链接，但把普通来源摘录限�
 
 生产环境在 DigitalOcean 的 Chrome 会从 OIC/iVolatility iframe 提取 20 行、8 个字段，截图仅用于同会话前后数据一致性校验并立即丢弃。开盘研究阶段同时抓取 72 个 ticker 的当日最新价和昨收，绝对涨跌幅达 5% 时生成结构化候选；单标的失败不影响其他标的。OIC 同次结果会被 run 内 artifact 复用于正文表格，并仅对进入 OIC Top 20 的池内标的判断 `IVX30 >= 60%` 或反推单日增加至少 5 个波动率点。这是受限的 Top 20 覆盖，不得表述为全池 IV 扫描。SQLite 保留最近 60 个成功交易日的池内入榜历史。OIC 授权、会话、浏览器、页面、报价或历史写入失败均只记录 trace；无预采集 artifact 时发布阶段仍会尝试原有 OIC 抓取。市场快照始终渲染固定 9 格，不可用项显示 `—`；2Y UST 使用美国财政部最新可用的 daily par yield。受众名称成功读取且标准化后不是 `test1` 时仍硬停；预检失败或人数为 0 只记 trace，最终以 Customer.io 请求结果为准。
 
-英文邮件封面固定以 `assets/zen-opening-digest-background.png` 为唯一底图；源图尺寸、SHA-256 和输出 1240×620 尺寸在渲染器内仍严格校验。Chrome 只在底图中部留白区叠加 `OPENING DIGEST` 和当日美东日期。底图、浏览器渲染或 Customer.io 上传失败时，渠道改为发送无封面版并把原因写入 trace。
+英文邮件封面与微信封面共用同一套 900×383 Canvas 设计、素材与渲染器（`render.js` 支持整数 scale），以 `scale: 2` 输出 1800×766 高清 PNG 供邮件头图与 Discord 头图复用：栏目为 `DAILY BRIEF`，日期显示 `YYYY.MM.DD`，主标题渲染当期英文 `article.headline`（硬上限 90 字符）；标题在最小字号下仍超出安全宽度时，自动改用固定英文兑底标题 `Opening signals stay mixed` 重渲一次并按兑底标题写缓存。Customer.io 上传文件名为 `zen-opening-digest-email-<日期或验收 ID>.png`。渲染或上传失败时，渠道改为发送无封面版并把原因写入 trace。
 
-中文微信封面独立使用 900×383 Canvas 横版，日期取冻结日报的 `dateKey` 并显示为 `YYYY.MM.DD`，完整居中的主标题与草稿标题共用归一化结果（不含测试前缀和日期后缀）。底部固定为 `TREASURY YIELDS · SOFTWARE · MARKET SIGNALS`。本地 Logo、Montserrat、Noto Sans SC 及来源/校验值见[素材说明](../assets/opening-digest-wechat-cover/README.md)；运行时不访问网页，也不新增模型调用。PNG 与 JSON 缓存保存在该任务隔离目录，按日期、标题、模板及素材版本校验后复用。封面失败由微信派生投递重试处理，终态使用现有精确 Slack warning，邮件仍为 `done`。本地预览命令为 `npm run preview:opening-digest`。
+中文微信封面独立使用 900×383 Canvas 横版，日期取冻结日报的 `dateKey` 并显示为 `YYYY.MM.DD`，完整居中的主标题与草稿标题共用归一化结果（不含测试前缀和日期后缀）。底部固定为 `TREASURY YIELDS · SOFTWARE · MARKET SIGNALS`。本地 Logo、Montserrat、Noto Sans SC 及来源/校验值见[素材说明](../assets/opening-digest-wechat-cover/README.md)；运行时不访问网页，也不新增模型调用。PNG 与 JSON 缓存保存在该任务隔离目录，按日期、标题、模板及素材版本校验后复用；英文邮件封面使用独立缓存文件名，互不干扰。封面失败由微信派生投递重试处理，终态使用现有精确 Slack warning，邮件仍为 `done`。本地预览命令为 `npm run preview:opening-digest`。
 
 API 创建的邮件会被 Customer.io workspace layout 包裹。Opening Digest 正文不自行加入退订链接，渲染前会本地删除模型意外输出的 `{% unsubscribe_url %}`。发送链路不再调用 Customer.io `/contents` 读回接口，workspace layout 唯一负责法定退订链接。
 

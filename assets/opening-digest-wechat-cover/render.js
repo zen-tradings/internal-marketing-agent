@@ -1,9 +1,15 @@
 // Adapted from zentradings-cover/index.html at 61cda322a248c28c5a9dc9d9e97bd2120d399b68.
 // The original wide Canvas artwork is retained; the Chinese headline is one centered phrase.
+// An optional integer scale (default 1) multiplies the canvas backing store and applies
+// ctx.scale so every draw call keeps the same logical 900×383 layout at higher resolution.
 async function renderZenOpeningCover(data) {
   const canvas = document.querySelector('canvas');
+  const scale = Number(data.scale) > 0 ? Math.min(4, Math.floor(Number(data.scale))) : 1;
+  canvas.width = 900 * scale;
+  canvas.height = 383 * scale;
   const ctx = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height, pad = 52;
+  ctx.scale(scale, scale);
+  const w = 900, h = 383, pad = 52;
   const brandFont = "'Zen Montserrat'";
   const textFont = "'Zen Montserrat', 'Zen Noto Sans SC'";
   await Promise.all([
@@ -14,12 +20,12 @@ async function renderZenOpeningCover(data) {
   await document.fonts.ready;
   if (!document.fonts.check(`300 62px ${brandFont}`, data.dateLabel)
       || !document.fonts.check(`500 28px 'Zen Noto Sans SC'`, data.headline + data.section)) {
-    throw new Error('微信日报封面字体加载失败');
+    throw new Error('封面字体加载失败');
   }
   const logo = new Image();
   logo.src = data.logoDataUrl;
   await logo.decode();
-  if (logo.naturalWidth !== 512 || logo.naturalHeight !== 512) throw new Error('微信日报封面 Logo 尺寸无效');
+  if (logo.naturalWidth !== 512 || logo.naturalHeight !== 512) throw new Error('封面 Logo 尺寸无效');
 
   const gradient = ctx.createLinearGradient(0, 0, w, h);
   gradient.addColorStop(0, '#0E1932'); gradient.addColorStop(.55, '#0a1732'); gradient.addColorStop(1, '#121D39');
@@ -56,11 +62,11 @@ async function renderZenOpeningCover(data) {
     headlineSize--; ctx.font = `500 ${headlineSize}px ${textFont}`;
   }
   const headlineWidth = ctx.measureText(data.headline).width;
-  if (headlineWidth > maxWidth) throw new Error('微信日报封面标题超出安全宽度');
+  if (headlineWidth > maxWidth) throw new Error('封面标题超出安全宽度');
   ctx.fillStyle = '#f1f5fc'; ctx.fillText(data.headline, w / 2, 287);
   ctx.fillStyle = '#7f95b7'; ctx.font = `500 11px ${brandFont}`;
   const tagsWidth = ctx.measureText(data.englishTags).width;
-  if (tagsWidth > maxWidth) throw new Error('微信日报封面英文标签超出安全宽度');
+  if (tagsWidth > maxWidth) throw new Error('封面英文标签超出安全宽度');
   ctx.fillText(data.englishTags, w / 2, h - 37);
-  return { headline: data.headline, headlineSize, headlineWidth, tagsWidth, maxWidth };
+  return { headline: data.headline, headlineSize, headlineWidth, tagsWidth, maxWidth, scale };
 }

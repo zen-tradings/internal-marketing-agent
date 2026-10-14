@@ -8,10 +8,12 @@ import { chromium } from 'playwright-core';
 import { browserExecutable } from '../src/lib/translation/assets.js';
 import { installResourceGovernor } from '../src/config/runtime.js';
 import {
-  loadOpeningDigestWechatCoverAssets,
+  loadOpeningDigestCoverAssets as loadOpeningDigestWechatCoverAssets,
+  openingDigestCoverHtml as openingDigestWechatCoverHtml,
+} from '../src/lib/opening-digest-canvas-cover.js';
+import {
   normalizeOpeningDigestWechatHeadline,
   openingDigestWechatCoverData,
-  openingDigestWechatCoverHtml,
   renderOpeningDigestWechatCover,
 } from '../src/lib/opening-digest-wechat-cover.js';
 

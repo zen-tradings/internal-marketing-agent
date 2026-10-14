@@ -6,15 +6,6 @@ import path from 'node:path';
 import { JSDOM } from 'jsdom';
 import { refineOpeningDigestDraft } from '../src/core/writer/opening-editor.js';
 import { isUsEquitySession, easternDateKey } from '../src/lib/us-equity-calendar.js';
-import {
-  coverHtml,
-  loadOpeningCoverBackground,
-  OPENING_COVER_BACKGROUND_HEIGHT,
-  OPENING_COVER_BACKGROUND_SHA256,
-  OPENING_COVER_BACKGROUND_WIDTH,
-  OPENING_COVER_HEIGHT,
-  OPENING_COVER_WIDTH,
-} from '../src/lib/opening-digest-cover.js';
 import { OPENING_DIGEST_DISCORD_INVITE_URL } from '../src/lib/draft-template.js';
 import {
   makeChannel,
@@ -586,20 +577,6 @@ test('structured options validation remains strict inside the optional section',
   assert.equal(countTrendingRows(text), 20);
 });
 
-test('opening cover locks the supplied artwork and overlays only digest name and date', async () => {
-  const background = await loadOpeningCoverBackground();
-  assert.ok(background.length > 1_000_000);
-  assert.equal(OPENING_COVER_BACKGROUND_WIDTH, 1774);
-  assert.equal(OPENING_COVER_BACKGROUND_HEIGHT, 887);
-  assert.equal(OPENING_COVER_BACKGROUND_SHA256, '44436cfdf3e7b9dc17aba36fe61c5c8a891cf08885c8887722a907225866e300');
-  assert.equal(OPENING_COVER_WIDTH, 1240);
-  assert.equal(OPENING_COVER_HEIGHT, 620);
-  const html = coverHtml('August 10, 2026', { backgroundDataUrl: 'data:image/png;base64,iVBORw0KGgo=' });
-  assert.match(html, /Opening Digest/);
-  assert.match(html, /August 10, 2026/);
-  assert.doesNotMatch(html, /radial-gradient|class="brand"|SUPPLY CHAINS/);
-});
-
 test('dynamic headline becomes recipient subject and H1 while fixed publication title is the subtitle', async () => {
   const requests = [];
   const { channel } = standardChannel({ requests, channel: { readArticle: async () => INSIGHT_ARTICLE } });
@@ -625,7 +602,7 @@ test('complete digest renders template, address, options and schedules without c
   });
   const result = await channel.publish({ articlePath: '/tmp/article.md', config: config(), source: 'cron' });
   assert.equal(result.mediaId, 'customerio-newsletter:99');
-  assert.deepEqual(uploads, ['opening-digest-cover-2026-08-10.png']);
+  assert.deepEqual(uploads, ['zen-opening-digest-email-2026-08-10.png']);
   const create = requests.find((item) => item.path === '/v1/newsletters' && item.method === 'POST');
   assert.equal(create.body.name, 'Zen Opening Digest · 2026-08-10');
   assert.equal(create.body.subject, 'Opening signals stay mixed | Zen Opening Digest');
@@ -1100,8 +1077,8 @@ test('production acceptance uses an explicit TEST identity and sends immediately
   assert.equal(create.body.subject, '[TEST] Opening signals stay mixed | Zen Opening Digest');
   assert.doesNotMatch(create.body.subject, /cc3fc06bb76a-1045et/);
   assert.deepEqual(uploads, [{
-    filename: 'opening-digest-cover-2026-08-10-cc3fc06bb76a-1045et.png',
-    name: 'Zen Opening Digest cover 2026-08-10-cc3fc06bb76a-1045et',
+    filename: 'zen-opening-digest-email-2026-08-10-cc3fc06bb76a-1045et.png',
+    name: 'Zen Opening Digest email cover 2026-08-10-cc3fc06bb76a-1045et',
   }]);
   assert.ok(requests.some((item) => item.path.endsWith('/send')));
   assert.equal(requests.some((item) => item.path.endsWith('/schedule')), false);

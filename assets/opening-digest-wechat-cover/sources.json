@@ -25,8 +25,8 @@
     },
     "render.js": {
       "source": "https://github.com/jfojellyfish-glitch/zentradings-cover/blob/61cda322a248c28c5a9dc9d9e97bd2120d399b68/index.html",
-      "sha256": "e09723ea9baa002156fc5909e49ded25a5511489f4c670a9644ef62d214a0f0b",
-      "adaptation": "Wide Canvas artwork; local fonts; one centered headline; fixed tags; explicit readiness and overflow validation."
+      "sha256": "8f44e907028a0e3278a073f4e39df953be1dbcee4b85b6377441fca5a331f928",
+      "adaptation": "Wide Canvas artwork; local fonts; one centered headline; fixed tags; explicit readiness and overflow validation; optional integer scale multiplies the backing store under ctx.scale for the English email cover at 2x."
     }
   }
 }
