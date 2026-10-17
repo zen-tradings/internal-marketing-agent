@@ -20,6 +20,7 @@ export async function localizeFigureAssets(blocks, {
   config,
   dnsLookup,
   assetMap,
+  assetFallback,
 }) {
   const figures = blocks.filter((block) => block.type === 'figure');
   const images = figures.flatMap((block) => block.images || []);
@@ -52,7 +53,7 @@ export async function localizeFigureAssets(blocks, {
       buffer = decoded.buffer;
       contentType = decoded.contentType;
     } else {
-      const fetched = await safeFetchResource({
+      const fetchOptions = {
         url: image.src,
         fetchFn,
         fetchWithRetry,
@@ -61,7 +62,18 @@ export async function localizeFigureAssets(blocks, {
         headers: linearUploadAuthHeaders(image.src, config.linearApiKey),
         accept: 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml;q=0.9,*/*;q=0.1',
         maxBytes: limits.maxSingleAssetBytes,
-      });
+      };
+      let fetched;
+      try {
+        fetched = await safeFetchResource(fetchOptions);
+      } catch (error) {
+        if (!/^原文获取失败:403(?:\s|$)/.test(String(error?.message || ''))) throw error;
+        const fallbackUrl = assetFallback?.(image.src);
+        if (!fallbackUrl) throw error;
+        fetched = await safeFetchResource({ ...fetchOptions, url: fallbackUrl, headers: {} });
+        if (fetched.finalUrl !== fallbackUrl) throw new Error('原文图片镜像重定向到非登记资源');
+        image.recovery = { originalUrl: image.src, mirrorUrl: fetched.finalUrl };
+      }
       buffer = fetched.buffer;
       contentType = fetched.contentType;
     }

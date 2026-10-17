@@ -22,6 +22,7 @@ export async function sourceDocumentFromHtml({
   config = {},
   dnsLookup = dns.lookup,
   assetMap = {},
+  assetFallback,
   scope = { kind: 'all' },
   signal,
 }) {
@@ -77,6 +78,7 @@ export async function sourceDocumentFromHtml({
       config,
       dnsLookup,
       assetMap,
+      assetFallback,
     });
     await localizeTableAssets(blocks, {
       workDir,

@@ -58,7 +58,8 @@ export async function renderWithBrowser({
       }
       await route.continue();
     });
-    await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: limits.browserTimeoutMs });
+    const response = await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: limits.browserTimeoutMs });
+    assertBrowserNavigationResponse(response);
     throwIfTaskCancelled(signal);
     try { await page.waitForLoadState('networkidle', { timeout: Math.min(15000, limits.browserTimeoutMs) }); } catch {}
     throwIfTaskCancelled(signal);
@@ -100,6 +101,13 @@ export async function renderWithBrowser({
     signal?.removeEventListener('abort', abortBrowser);
     try { await browser.close(); }
     finally { releaseBrowser(); }
+  }
+}
+
+export function assertBrowserNavigationResponse(response) {
+  if (!response) throw new Error('浏览器未收到原站文档响应');
+  if (!response.ok()) {
+    throw new Error(`浏览器原文获取失败:${response.status()} ${response.statusText()}`);
   }
 }
 

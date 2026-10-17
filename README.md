@@ -28,6 +28,18 @@ task in natural language. The bot uses the full Slack request and accepts suppor
 text attachments. It writes WeChat articles and translations in Simplified Chinese by default. It
 writes newsletters and QDII replies in English unless you request another language.
 
+If an HRT Beat article cannot be read directly, translation can recover its full
+body from HRT's registered WordPress API. The API must return exactly one public
+article with the same canonical URL and slug; excerpts and other articles are
+rejected. If HRT's public upload images are also blocked, only this verified API
+path may recover the exact image URLs through WordPress.com's image CDN, without
+resize or crop parameters, recording each recovery in the acquisition trace.
+Original images, code and requested section boundaries still pass the
+ordinary translation checks. Browser HTTP errors are reported as source access
+failures before extraction. A task that fails before creating a translation
+checkpoint must be submitted again after the fix is deployed; the restricted
+checkpoint recovery command intentionally refuses it.
+
 Ordinary WeChat and Customer.io workflows create drafts only. The Opening Digest is a controlled
 exception. A formal cron run sends or schedules email to its protected audience. After email
 succeeds, enabled WeChat delivery creates a Chinese draft. Enabled Discord delivery uses the same

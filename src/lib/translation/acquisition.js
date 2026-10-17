@@ -9,6 +9,7 @@ import { translationUnits, limitsFor, cleanText, safeError } from './shared.js';
 import { assertPdfResponse, hasPdfSignature } from './pdf.js';
 import { sourceDocumentFromHtml, sourceDocumentFromMarkdown, sourceDocumentFromPdf } from './structure.js';
 import { renderWithBrowser, inspectEmbeddedChartFrames } from './browser.js';
+import { officialArticleApi, fetchOfficialArticleHtml, officialArticleImageMirror } from './official-source.js';
 
 export async function acquireSourceDocument({
   sourceUrl,
@@ -37,6 +38,34 @@ export async function acquireSourceDocument({
   }
   fs.mkdirSync(workDir, { recursive: true });
   const acquisition = { attempts: [], fallbacks: [] };
+  let officialAttempted = false;
+  const recoverOfficialSource = async (error) => {
+    const descriptor = officialArticleApi(sourceUrl);
+    if (!descriptor || officialAttempted) return;
+    officialAttempted = true;
+    acquisition.fallbacks.push(`official-api:${safeError(error)}`);
+    acquisition.attempts.push('hrt-wordpress-api');
+    try {
+      const original = await fetchOfficialArticleHtml({
+        sourceUrl, descriptor, fetchFn, fetchWithRetry, limits, dnsLookup,
+      });
+      throwIfTaskCancelled(signal);
+      const document = await sourceDocumentFromHtml({
+        ...original, sourceUrl, workDir, fetchFn, fetchWithRetry, config, dnsLookup, scope, signal,
+        assetFallback: (url) => officialArticleImageMirror(sourceUrl, url),
+      });
+      if (inspectEmbeddedChartFrames(original.html).detected) {
+        throw new Error('官方原文 API 含无法静态保留的嵌入图表');
+      }
+      acquisition.assetFallbacks = document.blocks.flatMap((block) => block.images || [])
+        .filter((image) => image.recovery).map((image) => image.recovery);
+      document.acquisition = acquisition;
+      return document;
+    } catch (recoveryError) {
+      throwIfTaskCancelled(signal);
+      acquisition.fallbacks.push(`official-api-failed:${safeError(recoveryError)}`);
+    }
+  };
   const googleDocs = isGoogleDocUrl(sourceUrl)
     ? await resolveGoogleDocsSource({
         sourceUrl,
@@ -169,6 +198,8 @@ export async function acquireSourceDocument({
       if (scope.kind === 'pages' && !/\.pdf(?:$|[?#])/i.test(acquisitionUrl)) {
         throw new Error('该网页没有可验证的 PDF 分页；请提供 PDF 链接或改用章节范围');
       }
+      const recovered = await recoverOfficialSource(error);
+      if (recovered) return recovered;
       if (config.browserEnabled === false || /\.pdf(?:$|[?#])/i.test(acquisitionUrl)) throw error;
       acquisition.fallbacks.push(`browser:静态请求失败:${safeError(error)}`);
       return acquireWithBrowser({
@@ -226,7 +257,13 @@ export async function acquireSourceDocument({
   if (googleDocs) {
     assertGoogleDocsExportResponse(html, fetched.finalUrl, googleDocs.authenticated);
   }
-  assertUsableArticleResponse(html, fetched.finalUrl);
+  try {
+    assertUsableArticleResponse(html, fetched.finalUrl);
+  } catch (error) {
+    const recovered = await recoverOfficialSource(error);
+    if (recovered) return recovered;
+    throw error;
+  }
   try {
     const document = await sourceDocumentFromHtml({
       html,
@@ -270,6 +307,8 @@ export async function acquireSourceDocument({
     return document;
   } catch (error) {
     throwIfTaskCancelled(signal);
+    const recovered = await recoverOfficialSource(error);
+    if (recovered) return recovered;
     if (config.browserEnabled === false) throw error;
     acquisition.fallbacks.push(`browser:${safeError(error)}`);
     return acquireWithBrowser({
@@ -407,6 +446,11 @@ export function shouldUseBrowser(document, html) {
 export function assertUsableArticleResponse(html, url) {
   const text = cleanText(html).slice(0, 12000);
   if (!text) throw new Error('网页响应为空');
+  const errorTitle = cleanText(/<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(String(html || ''))?.[1]);
+  if (/^(?:error\s+)?(?:HTTP\s+)?(?:401\s+Unauthorized|403\s+Forbidden|404\s+Not Found|429\s+Too Many Requests|5\d\d\b.*)$/i.test(errorTitle)
+    && text.length < 1500) {
+    throw new Error(`原站返回 HTTP 错误页:${errorTitle}`);
+  }
   if (looksLikeAntiBotPage(html)) {
     throw new Error('网页需要验证码或反机器人验证');
   }
